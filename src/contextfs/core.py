@@ -3,9 +3,11 @@ Core ContextFS class - main interface for memory operations.
 """
 
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from contextfs.config import get_config
 from contextfs.rag import RAGBackend
@@ -17,6 +19,8 @@ from contextfs.schemas import (
     Session,
     SessionMessage,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ContextFS:
@@ -35,6 +39,7 @@ class ContextFS:
         data_dir: Path | None = None,
         namespace_id: str | None = None,
         auto_load: bool = True,
+        auto_index: bool = True,
     ):
         """
         Initialize ContextFS.
@@ -43,14 +48,16 @@ class ContextFS:
             data_dir: Data directory (default: ~/.contextfs)
             namespace_id: Default namespace (default: global or auto-detect from repo)
             auto_load: Load memories on startup
+            auto_index: Auto-index repository on first memory save
         """
         self.config = get_config()
         self.data_dir = data_dir or self.config.data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         # Auto-detect namespace from current repo
+        self._repo_path: Path | None = None
         if namespace_id is None:
-            namespace_id = self._detect_namespace()
+            namespace_id, self._repo_path = self._detect_namespace_and_repo()
         self.namespace_id = namespace_id
 
         # Initialize storage
@@ -63,6 +70,11 @@ class ContextFS:
             embedding_model=self.config.embedding_model,
         )
 
+        # Auto-indexing
+        self._auto_index = auto_index
+        self._auto_indexer = None
+        self._indexing_triggered = False
+
         # Current session
         self._current_session: Session | None = None
 
@@ -72,17 +84,50 @@ class ContextFS:
 
     def _detect_namespace(self) -> str:
         """Detect namespace from current git repo or use global."""
+        namespace_id, _ = self._detect_namespace_and_repo()
+        return namespace_id
+
+    def _detect_namespace_and_repo(self) -> tuple[str, Path | None]:
+        """Detect namespace and repo path from current git repo."""
         cwd = Path.cwd()
 
         # Walk up to find .git
         for parent in [cwd] + list(cwd.parents):
             if (parent / ".git").exists():
-                return Namespace.for_repo(str(parent)).id
+                return Namespace.for_repo(str(parent)).id, parent
 
-        return "global"
+        return "global", None
 
     def _init_db(self) -> None:
-        """Initialize SQLite database."""
+        """Initialize SQLite database with Alembic migrations."""
+        from contextfs.migrations.runner import run_migrations, stamp_database
+
+        db_exists = self._db_path.exists()
+
+        if db_exists:
+            # Check if database has alembic_version table
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'"
+            )
+            has_alembic = cursor.fetchone() is not None
+            conn.close()
+
+            if not has_alembic:
+                # Existing database without migrations - stamp it first
+                logger.info("Stamping existing database with migration baseline")
+                stamp_database(self._db_path, "001")
+
+        # Run any pending migrations
+        try:
+            run_migrations(self._db_path)
+        except Exception as e:
+            logger.warning(f"Migration failed, falling back to legacy init: {e}")
+            self._init_db_legacy()
+
+    def _init_db_legacy(self) -> None:
+        """Legacy database initialization (fallback)."""
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
@@ -97,6 +142,8 @@ class ContextFS:
                 namespace_id TEXT NOT NULL,
                 source_file TEXT,
                 source_repo TEXT,
+                source_tool TEXT,
+                project TEXT,
                 session_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -172,6 +219,102 @@ class ContextFS:
         # This could load recent memories, active session, etc.
         pass
 
+    # ==================== Auto-Indexing ====================
+
+    def _get_auto_indexer(self):
+        """Lazy-load the auto-indexer."""
+        if self._auto_indexer is None:
+            from contextfs.autoindex import AutoIndexer
+            self._auto_indexer = AutoIndexer(
+                config=self.config,
+                db_path=self._db_path,
+            )
+        return self._auto_indexer
+
+    def _maybe_auto_index(self) -> dict | None:
+        """
+        Trigger auto-indexing on first memory save if applicable.
+
+        Returns indexing stats if indexing occurred, None otherwise.
+        """
+        if not self._auto_index or self._indexing_triggered:
+            return None
+
+        if not self._repo_path or not self._repo_path.exists():
+            return None
+
+        self._indexing_triggered = True
+
+        indexer = self._get_auto_indexer()
+
+        # Check if already indexed
+        if indexer.is_indexed(self.namespace_id):
+            logger.debug(f"Namespace {self.namespace_id} already indexed")
+            return None
+
+        # Index repository
+        logger.info(f"Auto-indexing repository: {self._repo_path}")
+
+        def on_progress(current: int, total: int, file: str) -> None:
+            if current % 10 == 0 or current == total:
+                logger.info(f"Indexing: {current}/{total} - {file}")
+
+        try:
+            stats = indexer.index_repository(
+                repo_path=self._repo_path,
+                namespace_id=self.namespace_id,
+                rag_backend=self.rag,
+                on_progress=on_progress,
+                incremental=True,
+            )
+            logger.info(
+                f"Auto-indexing complete: {stats['files_indexed']} files, "
+                f"{stats['memories_created']} memories"
+            )
+            return stats
+        except Exception as e:
+            logger.warning(f"Auto-indexing failed: {e}")
+            return None
+
+    def index_repository(
+        self,
+        repo_path: Path | None = None,
+        on_progress: Callable[[int, int, str], None] | None = None,
+        incremental: bool = True,
+    ) -> dict:
+        """
+        Manually index a repository to ChromaDB.
+
+        Args:
+            repo_path: Repository path (default: current repo)
+            on_progress: Progress callback (current, total, file)
+            incremental: Only index new/changed files
+
+        Returns:
+            Indexing statistics
+        """
+        path = repo_path or self._repo_path
+        if not path:
+            raise ValueError("No repository path available")
+
+        indexer = self._get_auto_indexer()
+        return indexer.index_repository(
+            repo_path=path,
+            namespace_id=self.namespace_id,
+            rag_backend=self.rag,
+            on_progress=on_progress,
+            incremental=incremental,
+        )
+
+    def get_index_status(self):
+        """Get indexing status for current namespace."""
+        return self._get_auto_indexer().get_status(self.namespace_id)
+
+    def clear_index(self) -> None:
+        """Clear indexing status for current namespace."""
+        self._get_auto_indexer().clear_index(self.namespace_id)
+        self._indexing_triggered = False
+
     # ==================== Memory Operations ====================
 
     def save(
@@ -181,6 +324,9 @@ class ContextFS:
         tags: list[str] | None = None,
         summary: str | None = None,
         namespace_id: str | None = None,
+        source_tool: str | None = None,
+        source_repo: str | None = None,
+        project: str | None = None,
         metadata: dict | None = None,
     ) -> Memory:
         """
@@ -192,17 +338,30 @@ class ContextFS:
             tags: Tags for categorization
             summary: Brief summary
             namespace_id: Namespace (default: current)
+            source_tool: Tool that created memory (claude-code, claude-desktop, gemini, etc.)
+            source_repo: Repository name/path
+            project: Project name for grouping memories across repos
             metadata: Additional metadata
 
         Returns:
             Saved Memory object
         """
+        # Trigger auto-indexing on first save (indexes codebase to ChromaDB)
+        self._maybe_auto_index()
+
+        # Auto-detect source_repo from repo_path
+        if source_repo is None and self._repo_path:
+            source_repo = self._repo_path.name
+
         memory = Memory(
             content=content,
             type=type,
             tags=tags or [],
             summary=summary,
             namespace_id=namespace_id or self.namespace_id,
+            source_tool=source_tool,
+            source_repo=source_repo,
+            project=project,
             session_id=self._current_session.id if self._current_session else None,
             metadata=metadata or {},
         )
@@ -214,8 +373,8 @@ class ContextFS:
         cursor.execute(
             """
             INSERT INTO memories (id, content, type, tags, summary, namespace_id,
-                                  source_file, source_repo, session_id, created_at, updated_at, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 memory.id,
@@ -226,6 +385,8 @@ class ContextFS:
                 memory.namespace_id,
                 memory.source_file,
                 memory.source_repo,
+                memory.source_tool,
+                memory.project,
                 memory.session_id,
                 memory.created_at.isoformat(),
                 memory.updated_at.isoformat(),
@@ -257,6 +418,10 @@ class ContextFS:
         type: MemoryType | None = None,
         tags: list[str] | None = None,
         namespace_id: str | None = None,
+        source_tool: str | None = None,
+        source_repo: str | None = None,
+        project: str | None = None,
+        cross_repo: bool = False,
         use_semantic: bool = True,
     ) -> list[SearchResult]:
         """
@@ -267,22 +432,210 @@ class ContextFS:
             limit: Maximum results
             type: Filter by type
             tags: Filter by tags
-            namespace_id: Filter by namespace
+            namespace_id: Filter by namespace (None with cross_repo=True searches all)
+            source_tool: Filter by source tool (claude-code, claude-desktop, gemini, etc.)
+            source_repo: Filter by source repository name
+            project: Filter by project name (groups memories across repos)
+            cross_repo: If True, search across all namespaces/repos
             use_semantic: Use semantic search (vs FTS only)
 
         Returns:
             List of SearchResult objects
         """
+        # For cross-repo or project search, don't filter by namespace
+        effective_namespace = None if (cross_repo or project) else (namespace_id or self.namespace_id)
+
         if use_semantic:
-            return self.rag.search(
+            results = self.rag.search(
+                query=query,
+                limit=limit * 2 if (source_tool or source_repo or project) else limit,  # Over-fetch for filtering
+                type=type,
+                tags=tags,
+                namespace_id=effective_namespace,
+            )
+        else:
+            results = self._fts_search(query, limit * 2 if (source_tool or source_repo or project) else limit, type, tags, effective_namespace)
+
+        # Post-filter by source_tool, source_repo, and project if specified
+        if source_tool or source_repo or project:
+            filtered = []
+            for r in results:
+                if source_tool and r.memory.source_tool != source_tool:
+                    continue
+                if source_repo and r.memory.source_repo != source_repo:
+                    continue
+                if project and r.memory.project != project:
+                    continue
+                filtered.append(r)
+            results = filtered[:limit]
+
+        return results
+
+    def search_global(
+        self,
+        query: str,
+        limit: int = 10,
+        type: MemoryType | None = None,
+        source_tool: str | None = None,
+        source_repo: str | None = None,
+    ) -> list[SearchResult]:
+        """
+        Search memories across all repos and namespaces.
+
+        Args:
+            query: Search query
+            limit: Maximum results
+            type: Filter by type
+            source_tool: Filter by source tool
+            source_repo: Filter by source repository
+
+        Returns:
+            List of SearchResult objects from all repos
+        """
+        return self.search(
+            query=query,
+            limit=limit,
+            type=type,
+            source_tool=source_tool,
+            source_repo=source_repo,
+            cross_repo=True,
+        )
+
+    def list_repos(self) -> list[dict]:
+        """
+        List all repositories with memories.
+
+        Returns:
+            List of dicts with repo info (name, namespace_id, memory_count)
+        """
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT DISTINCT source_repo, namespace_id, COUNT(*) as count
+            FROM memories
+            WHERE source_repo IS NOT NULL
+            GROUP BY source_repo, namespace_id
+            ORDER BY count DESC
+        """)
+
+        repos = []
+        for row in cursor.fetchall():
+            repos.append({
+                "source_repo": row[0],
+                "namespace_id": row[1],
+                "memory_count": row[2],
+            })
+
+        conn.close()
+        return repos
+
+    def list_tools(self) -> list[dict]:
+        """
+        List all source tools with memories.
+
+        Returns:
+            List of dicts with tool info (name, memory_count)
+        """
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT DISTINCT source_tool, COUNT(*) as count
+            FROM memories
+            WHERE source_tool IS NOT NULL
+            GROUP BY source_tool
+            ORDER BY count DESC
+        """)
+
+        tools = []
+        for row in cursor.fetchall():
+            tools.append({
+                "source_tool": row[0],
+                "memory_count": row[1],
+            })
+
+        conn.close()
+        return tools
+
+    def list_projects(self) -> list[dict]:
+        """
+        List all projects with memories.
+
+        Returns:
+            List of dicts with project info (name, repos, memory_count)
+        """
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT project, GROUP_CONCAT(DISTINCT source_repo) as repos, COUNT(*) as count
+            FROM memories
+            WHERE project IS NOT NULL
+            GROUP BY project
+            ORDER BY count DESC
+        """)
+
+        projects = []
+        for row in cursor.fetchall():
+            projects.append({
+                "project": row[0],
+                "repos": row[1].split(",") if row[1] else [],
+                "memory_count": row[2],
+            })
+
+        conn.close()
+        return projects
+
+    def search_project(
+        self,
+        project: str,
+        query: str | None = None,
+        limit: int = 10,
+        type: MemoryType | None = None,
+    ) -> list[SearchResult]:
+        """
+        Search memories within a project (across all repos in the project).
+
+        Args:
+            project: Project name
+            query: Optional search query (if None, returns recent memories)
+            limit: Maximum results
+            type: Filter by type
+
+        Returns:
+            List of SearchResult objects
+        """
+        if query:
+            return self.search(
                 query=query,
                 limit=limit,
                 type=type,
-                tags=tags,
-                namespace_id=namespace_id or self.namespace_id,
+                project=project,
+                cross_repo=True,
             )
         else:
-            return self._fts_search(query, limit, type, tags, namespace_id)
+            # Return recent memories for project
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+
+            sql = "SELECT * FROM memories WHERE project = ?"
+            params = [project]
+
+            if type:
+                sql += " AND type = ?"
+                params.append(type.value)
+
+            sql += f" ORDER BY created_at DESC LIMIT {limit}"
+
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            conn.close()
+
+            return [
+                SearchResult(memory=self._row_to_memory(row), score=1.0)
+                for row in rows
+            ]
 
     def _fts_search(
         self,
@@ -350,13 +703,15 @@ class ContextFS:
         limit: int = 10,
         type: MemoryType | None = None,
         namespace_id: str | None = None,
+        source_tool: str | None = None,
+        project: str | None = None,
     ) -> list[Memory]:
         """List recent memories."""
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
         sql = "SELECT * FROM memories WHERE 1=1"
-        params = []
+        params: list = []
 
         if namespace_id:
             sql += " AND namespace_id = ?"
@@ -365,6 +720,14 @@ class ContextFS:
         if type:
             sql += " AND type = ?"
             params.append(type.value)
+
+        if source_tool:
+            sql += " AND source_tool = ?"
+            params.append(source_tool)
+
+        if project:
+            sql += " AND project = ?"
+            params.append(project)
 
         sql += f" ORDER BY created_at DESC LIMIT {limit}"
 
@@ -393,6 +756,10 @@ class ContextFS:
 
     def _row_to_memory(self, row) -> Memory:
         """Convert database row to Memory object."""
+        # DB schema (after migration 002):
+        # id, content, type, tags, summary, namespace_id, source_file,
+        # source_repo, source_tool, project, session_id, created_at,
+        # updated_at, metadata
         return Memory(
             id=row[0],
             content=row[1],
@@ -402,10 +769,12 @@ class ContextFS:
             namespace_id=row[5],
             source_file=row[6],
             source_repo=row[7],
-            session_id=row[8],
-            created_at=datetime.fromisoformat(row[9]),
-            updated_at=datetime.fromisoformat(row[10]),
-            metadata=json.loads(row[11]) if row[11] else {},
+            source_tool=row[8],
+            project=row[9],
+            session_id=row[10],
+            created_at=datetime.fromisoformat(row[11]),
+            updated_at=datetime.fromisoformat(row[12]),
+            metadata=json.loads(row[13]) if row[13] else {},
         )
 
     # ==================== Session Operations ====================
@@ -586,13 +955,18 @@ class ContextFS:
         limit: int = 10,
         tool: str | None = None,
         label: str | None = None,
+        all_namespaces: bool = False,
     ) -> list[Session]:
         """List recent sessions."""
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
-        sql = "SELECT * FROM sessions WHERE namespace_id = ?"
-        params = [self.namespace_id]
+        if all_namespaces:
+            sql = "SELECT * FROM sessions WHERE 1=1"
+            params: list = []
+        else:
+            sql = "SELECT * FROM sessions WHERE namespace_id = ?"
+            params = [self.namespace_id]
 
         if tool:
             sql += " AND tool = ?"

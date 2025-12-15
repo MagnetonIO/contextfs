@@ -52,6 +52,9 @@ dependencies = [
 
     # Utilities
     "python-dotenv>=1.0.0",
+
+    # Database migrations
+    "alembic>=1.13.0",
 ]
 
 [project.optional-dependencies]
@@ -78,6 +81,7 @@ dev = [
 [project.scripts]
 contextfs = "contextfs.cli:app"
 ctx = "contextfs.cli:app"
+contextfs-mcp = "contextfs.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/MagnetonIO/contextfs"

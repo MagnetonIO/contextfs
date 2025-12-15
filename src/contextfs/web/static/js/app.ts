@@ -9,6 +9,8 @@ import type {
     Memory,
     MemoryType,
     SearchResult,
+    SearchMode,
+    DualSearchResult,
     Session,
     Stats,
     APIResponse,
@@ -27,8 +29,11 @@ class ContextFSBrowser {
     private searchBtn!: HTMLButtonElement;
     private typeFilter!: HTMLSelectElement;
     private namespaceFilter!: HTMLSelectElement;
-    private semanticToggle!: HTMLInputElement;
+    private searchModeSelect!: HTMLSelectElement;
     private resultsContainer!: HTMLElement;
+    private dualResultsContainer!: HTMLElement;
+    private ftsResultsContainer!: HTMLElement;
+    private ragResultsContainer!: HTMLElement;
     private recentContainer!: HTMLElement;
     private sessionsContainer!: HTMLElement;
     private statsContainer!: HTMLElement;
@@ -48,8 +53,11 @@ class ContextFSBrowser {
         this.searchBtn = document.getElementById('search-btn') as HTMLButtonElement;
         this.typeFilter = document.getElementById('type-filter') as HTMLSelectElement;
         this.namespaceFilter = document.getElementById('namespace-filter') as HTMLSelectElement;
-        this.semanticToggle = document.getElementById('semantic-toggle') as HTMLInputElement;
+        this.searchModeSelect = document.getElementById('search-mode') as HTMLSelectElement;
         this.resultsContainer = document.getElementById('results') as HTMLElement;
+        this.dualResultsContainer = document.getElementById('dual-results') as HTMLElement;
+        this.ftsResultsContainer = document.getElementById('fts-results') as HTMLElement;
+        this.ragResultsContainer = document.getElementById('rag-results') as HTMLElement;
         this.recentContainer = document.getElementById('recent-memories') as HTMLElement;
         this.sessionsContainer = document.getElementById('sessions-list') as HTMLElement;
         this.statsContainer = document.getElementById('stats-content') as HTMLElement;
@@ -69,6 +77,7 @@ class ContextFSBrowser {
         // Filters
         this.typeFilter.addEventListener('change', () => this.search());
         this.namespaceFilter.addEventListener('change', () => this.search());
+        this.searchModeSelect.addEventListener('change', () => this.search());
 
         // Tabs
         document.querySelectorAll('.tab').forEach((tab) => {
@@ -137,28 +146,51 @@ class ContextFSBrowser {
         const query = this.searchInput.value.trim();
         if (!query) {
             this.resultsContainer.innerHTML = '<p class="placeholder">Enter a search query to find memories</p>';
+            this.showSingleView();
             return;
         }
 
-        this.resultsContainer.innerHTML = '<div class="loading"></div>';
-
         const type = this.typeFilter.value as MemoryType | '';
         const namespace = this.namespaceFilter.value;
-        const semantic = this.semanticToggle.checked;
+        const searchMode = this.searchModeSelect.value as SearchMode;
 
         try {
-            let results: SearchResult[];
+            if (searchMode === 'dual') {
+                // Show dual view
+                this.showDualView();
+                this.ftsResultsContainer.innerHTML = '<div class="loading"></div>';
+                this.ragResultsContainer.innerHTML = '<div class="loading"></div>';
 
-            if (this.useSqlJs && this.db && !semantic) {
-                results = this.searchLocal(query, type || undefined, namespace || undefined);
+                const dualResults = await this.searchDualAPI(query, type || undefined, namespace || undefined);
+                this.renderDualResults(dualResults);
             } else {
-                results = await this.searchAPI(query, type || undefined, namespace || undefined, semantic);
-            }
+                // Show single view
+                this.showSingleView();
+                this.resultsContainer.innerHTML = '<div class="loading"></div>';
 
-            this.renderResults(results);
+                let results: SearchResult[];
+
+                if (this.useSqlJs && this.db && searchMode === 'fts') {
+                    results = this.searchLocal(query, type || undefined, namespace || undefined);
+                } else {
+                    results = await this.searchAPI(query, type || undefined, namespace || undefined, searchMode);
+                }
+
+                this.renderResults(results);
+            }
         } catch (error) {
             this.resultsContainer.innerHTML = `<p class="placeholder">Error: ${(error as Error).message}</p>`;
         }
+    }
+
+    private showSingleView(): void {
+        this.resultsContainer.style.display = 'block';
+        this.dualResultsContainer.style.display = 'none';
+    }
+
+    private showDualView(): void {
+        this.resultsContainer.style.display = 'none';
+        this.dualResultsContainer.style.display = 'grid';
     }
 
     private searchLocal(
@@ -250,13 +282,21 @@ class ContextFSBrowser {
         query: string,
         type?: MemoryType,
         namespace?: string,
-        semantic: boolean = true
+        searchMode: SearchMode = 'hybrid'
     ): Promise<SearchResult[]> {
         const params = new URLSearchParams({
             q: query,
             limit: '20',
-            semantic: String(semantic),
         });
+
+        // Map search mode to API parameters
+        if (searchMode === 'smart') {
+            params.set('smart', 'true');
+        } else if (searchMode === 'fts') {
+            params.set('semantic', 'false');
+        } else {
+            params.set('semantic', 'true');
+        }
 
         if (type) params.set('type', type);
         if (namespace) params.set('namespace', namespace);
@@ -269,6 +309,56 @@ class ContextFSBrowser {
         }
 
         return data.data;
+    }
+
+    private async searchDualAPI(
+        query: string,
+        type?: MemoryType,
+        namespace?: string,
+    ): Promise<DualSearchResult> {
+        const params = new URLSearchParams({
+            q: query,
+            limit: '20',
+        });
+
+        if (type) params.set('type', type);
+        if (namespace) params.set('namespace', namespace);
+
+        const response = await fetch(`${this.apiBase}/search/dual?${params}`);
+        const data: APIResponse<DualSearchResult> = await response.json();
+
+        if (!data.success || !data.data) {
+            throw new Error(data.error || 'Dual search failed');
+        }
+
+        return data.data;
+    }
+
+    private renderDualResults(results: DualSearchResult): void {
+        // Render FTS results
+        if (!results.fts.length) {
+            this.ftsResultsContainer.innerHTML = '<p class="placeholder">No FTS results</p>';
+        } else {
+            this.ftsResultsContainer.innerHTML = results.fts.map((r) => this.renderMemoryCard(r)).join('');
+            this.addCardClickHandlers(this.ftsResultsContainer, results.fts);
+        }
+
+        // Render RAG results
+        if (!results.rag.length) {
+            this.ragResultsContainer.innerHTML = '<p class="placeholder">No RAG results</p>';
+        } else {
+            this.ragResultsContainer.innerHTML = results.rag.map((r) => this.renderMemoryCard(r)).join('');
+            this.addCardClickHandlers(this.ragResultsContainer, results.rag);
+        }
+    }
+
+    private addCardClickHandlers(container: HTMLElement, results: SearchResult[]): void {
+        container.querySelectorAll('.memory-card').forEach((card) => {
+            card.addEventListener('click', () => {
+                const id = card.getAttribute('data-id');
+                if (id) this.showMemoryDetail(id, results);
+            });
+        });
     }
 
     private renderResults(results: SearchResult[]): void {
@@ -289,7 +379,7 @@ class ContextFSBrowser {
     }
 
     private renderMemoryCard(result: SearchResult): string {
-        const { memory, score, highlights } = result;
+        const { memory, score, highlights, source } = result;
         let displayContent = memory.content;
 
         // Apply highlights
@@ -301,10 +391,16 @@ class ContextFSBrowser {
             ? `<div class="memory-tags">${memory.tags.map((t) => `<span class="tag">${this.escapeHtml(t)}</span>`).join('')}</div>`
             : '';
 
+        // Source badge
+        const sourceBadge = source
+            ? `<span class="source-badge source-${source}">${source.toUpperCase()}</span>`
+            : '';
+
         return `
             <div class="memory-card" data-id="${memory.id}">
                 <div class="memory-header">
                     <span class="memory-type ${memory.type}">${memory.type}</span>
+                    ${sourceBadge}
                     <span class="memory-score">${(score * 100).toFixed(0)}% match</span>
                 </div>
                 <div class="memory-content">${this.escapeHtml(displayContent)}</div>

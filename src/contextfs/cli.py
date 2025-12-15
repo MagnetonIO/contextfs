@@ -276,5 +276,119 @@ def serve():
     mcp_main()
 
 
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to bind to"),
+):
+    """Start the web UI server."""
+    import uvicorn
+
+    from contextfs.web.server import create_app
+
+    console.print(f"[green]Starting ContextFS Web UI at http://{host}:{port}[/green]")
+    app = create_app()
+    uvicorn.run(app, host=host, port=port)
+
+
+@app.command("install-claude-desktop")
+def install_claude_desktop(
+    uninstall: bool = typer.Option(False, "--uninstall", help="Remove from Claude Desktop"),
+):
+    """Install ContextFS MCP server for Claude Desktop."""
+    import json
+    import os
+    import platform
+    import shutil
+    import sys
+
+    def get_claude_desktop_config_path() -> Path:
+        system = platform.system()
+        if system == "Darwin":
+            return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        elif system == "Windows":
+            return Path(os.environ.get("APPDATA", "")) / "Claude" / "claude_desktop_config.json"
+        else:
+            return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
+
+    def find_contextfs_mcp_path() -> str | None:
+        path = shutil.which("contextfs-mcp")
+        if path:
+            if platform.system() != "Windows":
+                path = os.path.realpath(path)
+            return path
+        return None
+
+    config_path = get_claude_desktop_config_path()
+
+    if uninstall:
+        if not config_path.exists():
+            console.print("[yellow]Claude Desktop config not found.[/yellow]")
+            return
+        with open(config_path) as f:
+            config = json.load(f)
+        if "mcpServers" in config and "contextfs" in config["mcpServers"]:
+            del config["mcpServers"]["contextfs"]
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+            console.print("[green]✅ ContextFS removed from Claude Desktop config.[/green]")
+        else:
+            console.print("[yellow]ContextFS not found in config.[/yellow]")
+        return
+
+    # Install
+    console.print("[bold]Installing ContextFS MCP for Claude Desktop...[/bold]\n")
+
+    contextfs_path = find_contextfs_mcp_path()
+    if contextfs_path:
+        console.print(f"Found contextfs-mcp: [cyan]{contextfs_path}[/cyan]")
+    else:
+        contextfs_path = sys.executable
+        console.print(f"Using Python fallback: [cyan]{contextfs_path}[/cyan]")
+
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
+    else:
+        config = {}
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if "mcpServers" not in config:
+        config["mcpServers"] = {}
+
+    # Set up MCP config
+    if find_contextfs_mcp_path():
+        config["mcpServers"]["contextfs"] = {
+            "command": contextfs_path,
+            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"}
+        }
+    else:
+        config["mcpServers"]["contextfs"] = {
+            "command": sys.executable,
+            "args": ["-m", "contextfs.mcp_server"],
+            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"}
+        }
+
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+    console.print("\n[green]✅ ContextFS MCP server installed![/green]")
+    console.print(f"\nConfig: [dim]{config_path}[/dim]")
+    console.print("\n[yellow]⚠️  Restart Claude Desktop to activate.[/yellow]")
+
+    console.print("\n[bold]Available MCP tools:[/bold]")
+    tools = [
+        ("contextfs_save", "Save memories (with project grouping)"),
+        ("contextfs_search", "Search (cross-repo, by project/tool)"),
+        ("contextfs_list", "List recent memories"),
+        ("contextfs_list_repos", "List repositories"),
+        ("contextfs_list_projects", "List projects"),
+        ("contextfs_list_tools", "List source tools"),
+        ("contextfs_recall", "Recall by ID"),
+    ]
+    for name, desc in tools:
+        console.print(f"  • [cyan]{name}[/cyan] - {desc}")
+
+
 if __name__ == "__main__":
     app()

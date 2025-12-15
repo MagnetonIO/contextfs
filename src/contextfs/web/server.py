@@ -62,6 +62,7 @@ class SearchResultResponse(BaseModel):
     memory: MemoryResponse
     score: float
     highlights: list[str] = Field(default_factory=list)
+    source: str | None = None  # "fts", "rag", or "hybrid"
 
 
 class SessionResponse(BaseModel):
@@ -214,6 +215,7 @@ def create_app(
         namespace: str | None = Query(None, description="Namespace filter"),
         limit: int = Query(20, ge=1, le=100, description="Max results"),
         semantic: bool = Query(True, description="Use semantic search"),
+        smart: bool = Query(False, description="Use smart routing based on memory type"),
     ):
         """Search memories using semantic or keyword search."""
         get_ctx()
@@ -223,7 +225,16 @@ def create_app(
         try:
             memory_type = MemoryType(type) if type else None
 
-            if semantic:
+            if smart:
+                # Smart search routes to optimal backend based on memory type
+                results = await asyncio.to_thread(
+                    hybrid.smart_search,
+                    query=q,
+                    limit=limit,
+                    type=memory_type,
+                    namespace_id=namespace,
+                )
+            elif semantic:
                 results = await asyncio.to_thread(
                     hybrid.search,
                     query=q,
@@ -247,6 +258,40 @@ def create_app(
 
         except Exception as e:
             logger.exception("Search error")
+            return APIResponse(success=False, error=str(e))
+
+    @app.get("/api/search/dual", response_model=APIResponse)
+    async def search_dual(
+        q: str = Query(..., description="Search query"),
+        type: str | None = Query(None, description="Memory type filter"),
+        namespace: str | None = Query(None, description="Namespace filter"),
+        limit: int = Query(20, ge=1, le=100, description="Max results"),
+    ):
+        """Search both FTS and RAG backends separately and return results from each."""
+        get_ctx()
+        hybrid = get_hybrid()
+
+        try:
+            memory_type = MemoryType(type) if type else None
+
+            results = await asyncio.to_thread(
+                hybrid.search_both,
+                query=q,
+                limit=limit,
+                type=memory_type,
+                namespace_id=namespace,
+            )
+
+            return APIResponse(
+                success=True,
+                data={
+                    "fts": [serialize_search_result(r) for r in results["fts"]],
+                    "rag": [serialize_search_result(r) for r in results["rag"]],
+                },
+            )
+
+        except Exception as e:
+            logger.exception("Dual search error")
             return APIResponse(success=False, error=str(e))
 
     # ==================== Memory API ====================
@@ -642,6 +687,7 @@ def serialize_search_result(result: SearchResult) -> dict:
         "memory": serialize_memory(result.memory),
         "score": result.score,
         "highlights": result.highlights,
+        "source": result.source,
     }
 
 

@@ -294,6 +294,42 @@ class FTSBackend:
             "tokenizer": "porter unicode61",
         }
 
+    def add_memory(self, memory: Memory) -> None:
+        """Add a memory to the FTS index (for testing without triggers)."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Insert into memories table (triggers will update FTS)
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO memories
+            (id, content, type, tags, summary, namespace_id, source_file,
+             source_repo, session_id, created_at, updated_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                memory.id,
+                memory.content,
+                memory.type.value,
+                json.dumps(memory.tags),
+                memory.summary,
+                memory.namespace_id,
+                memory.source_file,
+                memory.source_repo,
+                memory.session_id,
+                memory.created_at.isoformat(),
+                memory.updated_at.isoformat(),
+                json.dumps(memory.metadata),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def close(self) -> None:
+        """Close the backend (no-op for SQLite)."""
+        pass
+
 
 class HybridSearch:
     """
@@ -313,6 +349,138 @@ class HybridSearch:
         """
         self.fts = fts_backend
         self.rag = rag_backend
+
+    def search_fts_only(
+        self,
+        query: str,
+        limit: int = 10,
+        type: MemoryType | None = None,
+        tags: list[str] | None = None,
+        namespace_id: str | None = None,
+    ) -> list[SearchResult]:
+        """Search using FTS only, marking results with source."""
+        results = self.fts.search(
+            query=query,
+            limit=limit,
+            type=type,
+            tags=tags,
+            namespace_id=namespace_id,
+        )
+        for r in results:
+            r.source = "fts"
+        return results
+
+    def search_rag_only(
+        self,
+        query: str,
+        limit: int = 10,
+        type: MemoryType | None = None,
+        tags: list[str] | None = None,
+        namespace_id: str | None = None,
+    ) -> list[SearchResult]:
+        """Search using RAG only, marking results with source."""
+        if self.rag is None:
+            return []
+        results = self.rag.search(
+            query=query,
+            limit=limit,
+            type=type,
+            tags=tags,
+            namespace_id=namespace_id,
+        )
+        for r in results:
+            r.source = "rag"
+        return results
+
+    def smart_search(
+        self,
+        query: str,
+        limit: int = 10,
+        type: MemoryType | None = None,
+        tags: list[str] | None = None,
+        namespace_id: str | None = None,
+    ) -> list[SearchResult]:
+        """
+        Smart search that routes to optimal backend based on memory type.
+
+        Routing strategy:
+        - EPISODIC, USER: FTS (keyword-heavy session/conversation data)
+        - CODE, ERROR: RAG (semantic code similarity)
+        - FACT, DECISION, PROCEDURAL: Hybrid (both keyword + semantic)
+        """
+        # Types best served by FTS (keyword search)
+        fts_types = {MemoryType.EPISODIC, MemoryType.USER}
+
+        # Types best served by RAG (semantic search)
+        rag_types = {MemoryType.CODE, MemoryType.ERROR}
+
+        # If type is specified, use optimal backend
+        if type is not None:
+            if type in fts_types:
+                return self.search_fts_only(
+                    query=query,
+                    limit=limit,
+                    type=type,
+                    tags=tags,
+                    namespace_id=namespace_id,
+                )
+            elif type in rag_types:
+                results = self.search_rag_only(
+                    query=query,
+                    limit=limit,
+                    type=type,
+                    tags=tags,
+                    namespace_id=namespace_id,
+                )
+                # Fallback to FTS if RAG returns nothing
+                if not results:
+                    return self.search_fts_only(
+                        query=query,
+                        limit=limit,
+                        type=type,
+                        tags=tags,
+                        namespace_id=namespace_id,
+                    )
+                return results
+
+        # Default: hybrid search with source tracking
+        return self.search(
+            query=query,
+            limit=limit,
+            type=type,
+            tags=tags,
+            namespace_id=namespace_id,
+        )
+
+    def search_both(
+        self,
+        query: str,
+        limit: int = 10,
+        type: MemoryType | None = None,
+        tags: list[str] | None = None,
+        namespace_id: str | None = None,
+    ) -> dict[str, list[SearchResult]]:
+        """
+        Search both backends and return results separately.
+
+        Returns dict with 'fts' and 'rag' keys.
+        """
+        return {
+            "fts": self.search_fts_only(
+                query=query,
+                limit=limit,
+                type=type,
+                tags=tags,
+                namespace_id=namespace_id,
+            ),
+            "rag": self.search_rag_only(
+                query=query,
+                limit=limit,
+                type=type,
+                tags=tags,
+                namespace_id=namespace_id,
+            ),
+        }
 
     def search(
         self,
@@ -381,6 +549,7 @@ class HybridSearch:
         scores: dict[str, float] = {}
         memories: dict[str, Memory] = {}
         highlights: dict[str, list[str]] = {}
+        sources: dict[str, set[str]] = {}  # Track which backends found each result
 
         # Score FTS results
         for rank, result in enumerate(fts_results):
@@ -388,6 +557,9 @@ class HybridSearch:
             scores[memory_id] = scores.get(memory_id, 0) + fts_weight / (k + rank + 1)
             memories[memory_id] = result.memory
             highlights[memory_id] = result.highlights
+            if memory_id not in sources:
+                sources[memory_id] = set()
+            sources[memory_id].add("fts")
 
         # Score RAG results
         for rank, result in enumerate(rag_results):
@@ -396,6 +568,9 @@ class HybridSearch:
             if memory_id not in memories:
                 memories[memory_id] = result.memory
                 highlights[memory_id] = result.highlights
+            if memory_id not in sources:
+                sources[memory_id] = set()
+            sources[memory_id].add("rag")
 
         # Sort by combined score
         sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
@@ -407,11 +582,21 @@ class HybridSearch:
             max_score = (fts_weight + rag_weight) / (k + 1)
             normalized_score = min(1.0, scores[memory_id] / max_score)
 
+            # Determine source label
+            mem_sources = sources.get(memory_id, set())
+            if len(mem_sources) == 2:
+                source = "hybrid"
+            elif "fts" in mem_sources:
+                source = "fts"
+            else:
+                source = "rag"
+
             results.append(
                 SearchResult(
                     memory=memories[memory_id],
                     score=normalized_score,
                     highlights=highlights.get(memory_id, []),
+                    source=source,
                 )
             )
 

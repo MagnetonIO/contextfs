@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ContextFS - Developer Memory Workflows</title>
+    <meta name="description" content="Universal AI Memory Layer for developers. Cross-client, cross-repo context management with RAG.">
+    <style>
+        :root {
+            --bg: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-purple: #a371f7;
+            --accent-orange: #d29922;
+            --border: #30363d;
+            --radius: 8px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Header */
+        header {
+            border-bottom: 1px solid var(--border);
+            padding: 24px 0;
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        .logo span {
+            color: var(--accent);
+        }
+
+        nav a {
+            color: var(--text-muted);
+            text-decoration: none;
+            margin-left: 24px;
+            transition: color 0.2s;
+        }
+
+        nav a:hover {
+            color: var(--accent);
+        }
+
+        /* Hero */
+        .hero {
+            padding: 80px 0;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 48px;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero .subtitle {
+            font-size: 20px;
+            color: var(--text-muted);
+            margin-bottom: 32px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border-radius: var(--radius);
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg);
+        }
+
+        .btn-primary:hover {
+            background: #79b8ff;
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--accent);
+        }
+
+        /* Features */
+        .features {
+            padding: 80px 0;
+        }
+
+        .section-title {
+            font-size: 32px;
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+
+        .feature-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+        }
+
+        .feature-card h3 {
+            color: var(--accent);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .feature-card p {
+            color: var(--text-muted);
+        }
+
+        /* Workflows Section */
+        .workflows {
+            padding: 80px 0;
+            background: var(--bg-secondary);
+        }
+
+        .workflow-tabs {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 48px;
+        }
+
+        .workflow-tab {
+            padding: 12px 32px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+
+        .workflow-tab:hover, .workflow-tab.active {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .workflow-content {
+            display: none;
+        }
+
+        .workflow-content.active {
+            display: block;
+        }
+
+        .workflow-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 48px;
+            align-items: start;
+        }
+
+        .workflow-steps {
+            counter-reset: step;
+        }
+
+        .workflow-step {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .step-number {
+            width: 32px;
+            height: 32px;
+            background: var(--accent);
+            color: var(--bg);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        .step-content h4 {
+            margin-bottom: 4px;
+        }
+
+        .step-content p {
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .code-block {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            overflow-x: auto;
+        }
+
+        .code-block pre {
+            font-family: 'Fira Code', 'SF Mono', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .code-block .comment {
+            color: var(--text-muted);
+        }
+
+        .code-block .keyword {
+            color: var(--accent-purple);
+        }
+
+        .code-block .string {
+            color: var(--accent-green);
+        }
+
+        .code-block .function {
+            color: var(--accent);
+        }
+
+        /* Memory Types */
+        .memory-types {
+            padding: 80px 0;
+        }
+
+        .types-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .type-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            text-align: center;
+        }
+
+        .type-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
+
+        .type-fact { background: rgba(88, 166, 255, 0.2); color: #58a6ff; }
+        .type-decision { background: rgba(163, 113, 247, 0.2); color: #a371f7; }
+        .type-code { background: rgba(63, 185, 80, 0.2); color: #3fb950; }
+        .type-error { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+        .type-procedural { background: rgba(210, 153, 34, 0.2); color: #d29922; }
+        .type-episodic { background: rgba(121, 192, 255, 0.2); color: #79c0ff; }
+
+        .type-card p {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        /* Architecture */
+        .architecture {
+            padding: 80px 0;
+            background: var(--bg-secondary);
+        }
+
+        .arch-diagram {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 32px;
+            text-align: center;
+        }
+
+        .arch-diagram pre {
+            font-family: 'Fira Code', 'SF Mono', monospace;
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        /* Footer */
+        footer {
+            padding: 48px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+        }
+
+        footer p {
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 32px;
+            }
+
+            .workflow-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header-content {
+                flex-direction: column;
+                gap: 16px;
+            }
+
+            nav a {
+                margin-left: 16px;
+            }
+
+            nav a:first-child {
+                margin-left: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container header-content">
+            <a href="#" class="logo">Context<span>FS</span></a>
+            <nav>
+                <a href="#features">Features</a>
+                <a href="#workflows">Workflows</a>
+                <a href="#memory-types">Memory Types</a>
+                <a href="https://github.com/MagnetonIO/contextfs">GitHub</a>
+            </nav>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="container">
+            <h1>Developer Memory Workflows</h1>
+            <p class="subtitle">
+                Universal AI Memory Layer for developers. Persistent, searchable context
+                that follows you across sessions, repos, and AI tools.
+            </p>
+            <div class="cta-buttons">
+                <a href="https://github.com/MagnetonIO/contextfs" class="btn btn-primary">Get Started</a>
+                <a href="#workflows" class="btn btn-secondary">View Workflows</a>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="features">
+        <div class="container">
+            <h2 class="section-title">Why ContextFS?</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <h3>Persistent Memory</h3>
+                    <p>Your coding decisions, bug fixes, and architectural knowledge persist across sessions. Never re-explain context to your AI assistant.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Semantic Search</h3>
+                    <p>ChromaDB + sentence-transformers for intelligent retrieval. Find relevant context by meaning, not just keywords.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Cross-Repo Namespaces</h3>
+                    <p>Memory isolation per repository with optional sharing. Team knowledge stays organized and accessible.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Dual Storage</h3>
+                    <p>Smart routing: FTS for session/keyword search, RAG for semantic code search. Best of both worlds.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Universal Clients</h3>
+                    <p>Works with Claude Code, Claude Desktop, Gemini CLI, Codex CLI, and any MCP-compatible client.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>MCP Protocol</h3>
+                    <p>Standard Model Context Protocol server for seamless integration with AI coding assistants.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="workflows" class="workflows">
+        <div class="container">
+            <h2 class="section-title">Developer Memory Workflows</h2>
+
+            <div class="workflow-tabs">
+                <button class="workflow-tab active" onclick="showWorkflow('solo')">Solo Developer</button>
+                <button class="workflow-tab" onclick="showWorkflow('team')">Team Workflow</button>
+            </div>
+
+            <div id="workflow-solo" class="workflow-content active">
+                <div class="workflow-grid">
+                    <div class="workflow-steps">
+                        <div class="workflow-step">
+                            <div class="step-number">1</div>
+                            <div class="step-content">
+                                <h4>Save Decisions</h4>
+                                <p>Capture architectural decisions, library choices, and design patterns as you work.</p>
+                            </div>
+                        </div>
+                        <div class="workflow-step">
+                            <div class="step-number">2</div>
+                            <div class="step-content">
+                                <h4>Document Bugs</h4>
+                                <p>Record error patterns and their solutions. Never debug the same issue twice.</p>
+                            </div>
+                        </div>
+                        <div class="workflow-step">
+                            <div class="step-number">3</div>
+                            <div class="step-content">
+                                <h4>Store Procedures</h4>
+                                <p>Save deployment steps, setup guides, and common workflows for instant recall.</p>
+                            </div>
+                        </div>
+                        <div class="workflow-step">
+                            <div class="step-number">4</div>
+                            <div class="step-content">
+                                <h4>Search & Recall</h4>
+                                <p>Semantic search finds relevant context. Your AI assistant gets full project history.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="code-block">
+<pre><span class="comment"># Save a decision</span>
+ctx.<span class="function">save</span>(
+    <span class="string">"Use PostgreSQL for the database"</span>,
+    type=MemoryType.DECISION,
+    tags=[<span class="string">"database"</span>, <span class="string">"architecture"</span>]
+)
+
+<span class="comment"># Record a bug fix</span>
+ctx.<span class="function">save</span>(
+    <span class="string">"CORS fix: allow_methods=['*']"</span>,
+    type=MemoryType.ERROR,
+    tags=[<span class="string">"cors"</span>, <span class="string">"api"</span>, <span class="string">"bug-fix"</span>]
+)
+
+<span class="comment"># Search for context</span>
+results = ctx.<span class="function">search</span>(<span class="string">"database decisions"</span>)
+
+<span class="comment"># Smart routing automatically uses:</span>
+<span class="comment"># - FTS for sessions/keywords</span>
+<span class="comment"># - RAG for code/semantic</span></pre>
+                    </div>
+                </div>
+            </div>
+
+            <div id="workflow-team" class="workflow-content">
+                <div class="workflow-grid">
+                    <div class="workflow-steps">
+                        <div class="workflow-step">
+                            <div class="step-number">1</div>
+                            <div class="step-content">
+                                <h4>Shared Namespace</h4>
+                                <p>Team members share a common namespace for project-wide knowledge.</p>
+                            </div>
+                        </div>
+                        <div class="workflow-step">
+                            <div class="step-number">2</div>
+                            <div class="step-content">
+                                <h4>Onboarding Context</h4>
+                                <p>New team members instantly access all architectural decisions and conventions.</p>
+                            </div>
+                        </div>
+                        <div class="workflow-step">
+                            <div class="step-number">3</div>
+                            <div class="step-content">
+                                <h4>Cross-Repo Memory</h4>
+                                <p>Link related repos (frontend/backend) with shared context about integrations.</p>
+                            </div>
+                        </div>
+                        <div class="workflow-step">
+                            <div class="step-number">4</div>
+                            <div class="step-content">
+                                <h4>Sync & Share</h4>
+                                <p>PostgreSQL sync for team-wide memory sharing. Local SQLite for speed.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="code-block">
+<pre><span class="comment"># Team namespace</span>
+ctx = ContextFS(namespace_id=<span class="string">"team-acme"</span>)
+
+<span class="comment"># Save team conventions</span>
+ctx.<span class="function">save</span>(
+    <span class="string">"API uses camelCase for JSON keys"</span>,
+    type=MemoryType.FACT,
+    tags=[<span class="string">"api"</span>, <span class="string">"convention"</span>, <span class="string">"team"</span>]
+)
+
+<span class="comment"># Cross-repo context</span>
+ctx.<span class="function">save</span>(
+    <span class="string">"Frontend calls /api/v2/analyze"</span>,
+    type=MemoryType.FACT,
+    tags=[<span class="string">"integration"</span>, <span class="string">"api"</span>]
+)
+
+<span class="comment"># New team member searches</span>
+results = ctx.<span class="function">search</span>(<span class="string">"API conventions"</span>)
+<span class="comment"># Gets all team knowledge instantly</span></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="memory-types" class="memory-types">
+        <div class="container">
+            <h2 class="section-title">Memory Types</h2>
+            <div class="types-grid">
+                <div class="type-card">
+                    <span class="type-badge type-fact">Fact</span>
+                    <p>Project facts, configurations, conventions</p>
+                </div>
+                <div class="type-card">
+                    <span class="type-badge type-decision">Decision</span>
+                    <p>Architectural decisions with rationale</p>
+                </div>
+                <div class="type-card">
+                    <span class="type-badge type-code">Code</span>
+                    <p>Important algorithms, patterns, snippets</p>
+                </div>
+                <div class="type-card">
+                    <span class="type-badge type-error">Error</span>
+                    <p>Bug fixes, error patterns, solutions</p>
+                </div>
+                <div class="type-card">
+                    <span class="type-badge type-procedural">Procedural</span>
+                    <p>How-to guides, deployment steps</p>
+                </div>
+                <div class="type-card">
+                    <span class="type-badge type-episodic">Episodic</span>
+                    <p>Session transcripts, conversations</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="architecture">
+        <div class="container">
+            <h2 class="section-title">Architecture</h2>
+            <div class="arch-diagram">
+<pre>
+                    +------------------+
+                    |   AI Assistants  |
+                    | Claude, Gemini,  |
+                    |  Codex, Custom   |
+                    +--------+---------+
+                             |
+                         MCP Protocol
+                             |
+                    +--------v---------+
+                    |    ContextFS     |
+                    |   MCP Server     |
+                    +--------+---------+
+                             |
+          +------------------+------------------+
+          |                  |                  |
+  +-------v-------+  +-------v-------+  +------v-------+
+  |   SQLite +    |  |   ChromaDB    |  |   Session    |
+  |     FTS5      |  |   (Vector)    |  |   Manager    |
+  +---------------+  +---------------+  +--------------+
+  | Keyword Search|  |Semantic Search|  |  Capture &   |
+  | Fast Queries  |  | Code Similar. |  |   Replay     |
+  +---------------+  +---------------+  +--------------+
+          |                  |                  |
+          +------------------+------------------+
+                             |
+                    +--------v---------+
+                    |    Namespace     |
+                    |    Isolation     |
+                    | (per-repo/team)  |
+                    +------------------+
+</pre>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>
+                ContextFS is open source.
+                <a href="https://github.com/MagnetonIO/contextfs">View on GitHub</a> |
+                <a href="https://github.com/MagnetonIO/contextfs/blob/main/DMW.md">DMW Documentation</a>
+            </p>
+            <p style="margin-top: 12px;">
+                Created by Matthew Long and The YonedaAI Collaboration
+            </p>
+        </div>
+    </footer>
+
+    <script>
+        function showWorkflow(type) {
+            // Update tabs
+            document.querySelectorAll('.workflow-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update content
+            document.querySelectorAll('.workflow-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById('workflow-' + type).classList.add('active');
+        }
+    </script>
+</body>
+</html>

@@ -9,7 +9,7 @@ import asyncio
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import GetPromptResult, Prompt, PromptArgument, PromptMessage, TextContent, Tool
 
 from contextfs.core import ContextFS
 from contextfs.schemas import MemoryType
@@ -17,17 +17,220 @@ from contextfs.schemas import MemoryType
 # Global ContextFS instance
 _ctx: ContextFS | None = None
 
+# Source tool name (detected from environment or set by client)
+_source_tool: str = "claude-desktop"  # Default for Claude Desktop MCP
+
+# Session auto-started flag
+_session_started: bool = False
+
 
 def get_ctx() -> ContextFS:
     """Get or create ContextFS instance."""
-    global _ctx
+    global _ctx, _session_started
     if _ctx is None:
         _ctx = ContextFS(auto_load=True)
+
+    # Auto-start session for Claude Desktop
+    if not _session_started and get_source_tool() == "claude-desktop":
+        _ctx.start_session(tool="claude-desktop")
+        _session_started = True
+
     return _ctx
+
+
+def get_source_tool() -> str:
+    """Get source tool name."""
+    import os
+    # Allow override via environment
+    return os.environ.get("CONTEXTFS_SOURCE_TOOL", _source_tool)
+
+
+def detect_current_repo() -> str | None:
+    """Detect repo name from current working directory at runtime."""
+    from pathlib import Path
+    cwd = Path.cwd()
+    # Walk up to find .git
+    for parent in [cwd] + list(cwd.parents):
+        if (parent / ".git").exists():
+            return parent.name
+    return None
 
 
 # Create MCP server
 server = Server("contextfs")
+
+
+@server.list_prompts()
+async def list_prompts() -> list[Prompt]:
+    """List available prompts for Claude Desktop."""
+    return [
+        Prompt(
+            name="contextfs-session-guide",
+            description="Instructions for capturing conversation context to ContextFS",
+            arguments=[],
+        ),
+        Prompt(
+            name="contextfs-save-session",
+            description="Save the current conversation session with a summary",
+            arguments=[
+                PromptArgument(
+                    name="summary",
+                    description="Brief summary of what was discussed/accomplished",
+                    required=True,
+                ),
+                PromptArgument(
+                    name="label",
+                    description="Optional label for the session (e.g., 'bug-fix', 'feature-planning')",
+                    required=False,
+                ),
+            ],
+        ),
+        Prompt(
+            name="contextfs-save-memory",
+            description="Save important information to memory with guided categorization",
+            arguments=[
+                PromptArgument(
+                    name="content",
+                    description="The information to save",
+                    required=True,
+                ),
+                PromptArgument(
+                    name="type",
+                    description="Memory type: fact, decision, procedural, code, error",
+                    required=False,
+                ),
+            ],
+        ),
+        Prompt(
+            name="contextfs-index",
+            description="Index the current repository for semantic code search",
+            arguments=[],
+        ),
+    ]
+
+
+@server.get_prompt()
+async def get_prompt(name: str, arguments: dict | None = None) -> GetPromptResult:
+    """Get prompt content."""
+    if name == "contextfs-session-guide":
+        return GetPromptResult(
+            description="ContextFS Session Capture Guide",
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text="""# ContextFS Session Capture
+
+Throughout this conversation, please use the ContextFS tools to capture important context:
+
+1. **During conversation**: Use `contextfs_message` to log key exchanges:
+   - User questions or requirements
+   - Important decisions made
+   - Code explanations or solutions provided
+
+2. **Save important facts**: Use `contextfs_save` with appropriate types:
+   - `fact` - Technical facts, configurations, dependencies
+   - `decision` - Decisions made and their rationale
+   - `procedural` - How-to procedures, workflows
+   - `code` - Important code snippets or patterns
+   - `error` - Error resolutions and fixes
+
+3. **End of session**: Use `contextfs_save` with `save_session: "current"` to save the full session.
+
+This ensures your insights and decisions are preserved for future conversations.""",
+                    ),
+                )
+            ],
+        )
+    elif name == "contextfs-save-session":
+        summary = (arguments or {}).get("summary", "")
+        label = (arguments or {}).get("label", "")
+
+        return GetPromptResult(
+            description="Save Current Session",
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text=f"""Please save this conversation session to ContextFS:
+
+Summary: {summary}
+Label: {label or '(auto-generated)'}
+
+Use the `contextfs_save` tool with:
+- `save_session`: "current"
+- `label`: "{label}" (if provided)
+
+Then confirm the session was saved.""",
+                    ),
+                )
+            ],
+        )
+
+    elif name == "contextfs-save-memory":
+        content = (arguments or {}).get("content", "")
+        mem_type = (arguments or {}).get("type", "")
+
+        type_guidance = ""
+        if not mem_type:
+            type_guidance = """
+First, determine the appropriate memory type:
+- `fact` - Technical facts, configurations, dependencies, architecture
+- `decision` - Decisions made and their rationale
+- `procedural` - How-to procedures, workflows, deployment steps
+- `code` - Important code snippets, patterns, algorithms
+- `error` - Error resolutions, debugging solutions, fixes
+
+"""
+
+        return GetPromptResult(
+            description="Save Memory to ContextFS",
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text=f"""Please save this information to ContextFS memory:
+
+Content: {content}
+{f'Type: {mem_type}' if mem_type else ''}
+{type_guidance}
+Use the `contextfs_save` tool with:
+- `content`: A clear, searchable description of the information
+- `type`: The appropriate memory type
+- `summary`: A brief one-line summary
+- `tags`: Relevant tags for categorization
+
+Then confirm what was saved.""",
+                    ),
+                )
+            ],
+        )
+
+    elif name == "contextfs-index":
+        return GetPromptResult(
+            description="Index Repository",
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text="""Please index the current repository for semantic code search.
+
+Use the `contextfs_index` tool to index all code files in this repository. This enables:
+- Semantic search across the codebase
+- Finding related code and patterns
+- Better context for future conversations
+
+After indexing, confirm how many files were processed.""",
+                    ),
+                )
+            ],
+        )
+
+    return GetPromptResult(description="Unknown prompt", messages=[])
 
 
 @server.list_tools()
@@ -67,6 +270,10 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Brief summary",
                     },
+                    "project": {
+                        "type": "string",
+                        "description": "Project name for grouping memories across repos (e.g., 'haven', 'my-app')",
+                    },
                     "save_session": {
                         "type": "string",
                         "enum": ["current", "previous"],
@@ -82,7 +289,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="contextfs_search",
-            description="Search memories using semantic similarity",
+            description="Search memories using semantic similarity. Supports cross-repo search.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -108,8 +315,49 @@ async def list_tools() -> list[Tool]:
                         ],
                         "description": "Filter by type",
                     },
+                    "cross_repo": {
+                        "type": "boolean",
+                        "description": "Search across all repos (default: current repo only)",
+                        "default": False,
+                    },
+                    "source_tool": {
+                        "type": "string",
+                        "description": "Filter by source tool (claude-code, claude-desktop, gemini, etc.)",
+                    },
+                    "source_repo": {
+                        "type": "string",
+                        "description": "Filter by source repository name",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Filter by project name (searches across all repos in project)",
+                    },
                 },
                 "required": ["query"],
+            },
+        ),
+        Tool(
+            name="contextfs_list_repos",
+            description="List all repositories with saved memories",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="contextfs_list_tools",
+            description="List all source tools (Claude, Gemini, etc.) with saved memories",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="contextfs_list_projects",
+            description="List all projects with saved memories (projects group memories across repos)",
+            inputSchema={
+                "type": "object",
+                "properties": {},
             },
         ),
         Tool(
@@ -148,7 +396,15 @@ async def list_tools() -> list[Tool]:
                             "code",
                             "error",
                         ],
-                        "description": "Filter by type",
+                        "description": "Filter by memory type",
+                    },
+                    "source_tool": {
+                        "type": "string",
+                        "description": "Filter by source tool (claude-desktop, claude-code, gemini, chatgpt, ollama, etc.)",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Filter by project name",
                     },
                 },
             },
@@ -216,6 +472,25 @@ async def list_tools() -> list[Tool]:
                 "required": ["role", "content"],
             },
         ),
+        Tool(
+            name="contextfs_index",
+            description="Index the current repository's codebase into memory for semantic search",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "incremental": {
+                        "type": "boolean",
+                        "description": "Only index new/changed files (default: true)",
+                        "default": True,
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force re-index even if already indexed",
+                        "default": False,
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -251,39 +526,126 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             tags = arguments.get("tags", [])
             summary = arguments.get("summary")
 
+            project = arguments.get("project")
+
+            # Detect repo at save time (not just at init) for accurate tracking
+            source_repo = detect_current_repo()
+
+            # Trigger incremental indexing (auto-indexes if not done yet)
+            index_result = None
+            try:
+                from pathlib import Path
+
+                cwd = Path.cwd()
+                if source_repo:
+                    index_result = ctx.index_repository(repo_path=cwd, incremental=True)
+            except Exception:
+                pass  # Indexing is best-effort, don't fail the save
+
             memory = ctx.save(
                 content=content,
                 type=memory_type,
                 tags=tags,
                 summary=summary,
+                source_tool=get_source_tool(),
+                source_repo=source_repo,
+                project=project,
             )
 
-            return [
-                TextContent(
-                    type="text",
-                    text=f"Memory saved successfully.\nID: {memory.id}\nType: {memory.type.value}",
+            # Also log to current session (best-effort, don't fail the save)
+            try:
+                ctx.add_message(
+                    role="assistant",
+                    content=f"[Memory saved] {memory_type.value}: {summary or content[:100]}",
                 )
-            ]
+            except Exception:
+                pass
+
+            # Build response with repo info
+            response = f"Memory saved successfully.\nID: {memory.id}\nType: {memory.type.value}"
+            if source_repo:
+                response += f"\nRepo: {source_repo}"
+            if index_result and index_result.get("files_indexed", 0) > 0:
+                response += f"\nIndexed: {index_result['files_indexed']} files"
+
+            return [TextContent(type="text", text=response)]
 
         elif name == "contextfs_search":
             query = arguments.get("query", "")
             limit = arguments.get("limit", 5)
             type_filter = MemoryType(arguments["type"]) if arguments.get("type") else None
+            cross_repo = arguments.get("cross_repo", False)
+            source_tool = arguments.get("source_tool")
+            source_repo = arguments.get("source_repo")
+            project = arguments.get("project")
 
-            results = ctx.search(query, limit=limit, type=type_filter)
+            results = ctx.search(
+                query,
+                limit=limit,
+                type=type_filter,
+                cross_repo=cross_repo,
+                source_tool=source_tool,
+                source_repo=source_repo,
+                project=project,
+            )
 
             if not results:
                 return [TextContent(type="text", text="No memories found.")]
 
             output = []
             for r in results:
-                output.append(f"[{r.memory.id}] ({r.score:.2f}) [{r.memory.type.value}]")
+                line = f"[{r.memory.id}] ({r.score:.2f}) [{r.memory.type.value}]"
+                if r.memory.project:
+                    line += f" [{r.memory.project}]"
+                if r.memory.source_repo:
+                    line += f" @{r.memory.source_repo}"
+                if r.memory.source_tool:
+                    line += f" via {r.memory.source_tool}"
+                output.append(line)
                 if r.memory.summary:
                     output.append(f"  Summary: {r.memory.summary}")
                 output.append(f"  {r.memory.content[:200]}...")
                 if r.memory.tags:
                     output.append(f"  Tags: {', '.join(r.memory.tags)}")
                 output.append("")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_list_repos":
+            repos = ctx.list_repos()
+
+            if not repos:
+                return [TextContent(type="text", text="No repositories found.")]
+
+            output = ["Repositories with memories:"]
+            for r in repos:
+                output.append(f"  • {r['source_repo']} ({r['memory_count']} memories)")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_list_tools":
+            tools = ctx.list_tools()
+
+            if not tools:
+                return [TextContent(type="text", text="No source tools found.")]
+
+            output = ["Source tools with memories:"]
+            for t in tools:
+                output.append(f"  • {t['source_tool']} ({t['memory_count']} memories)")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_list_projects":
+            projects = ctx.list_projects()
+
+            if not projects:
+                return [TextContent(type="text", text="No projects found.")]
+
+            output = ["Projects with memories:"]
+            for p in projects:
+                repos_str = ", ".join(p["repos"]) if p["repos"] else "no repos"
+                output.append(f"  • {p['project']} ({p['memory_count']} memories)")
+                output.append(f"    Repos: {repos_str}")
 
             return [TextContent(type="text", text="\n".join(output))]
 
@@ -310,20 +672,44 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         elif name == "contextfs_list":
             limit = arguments.get("limit", 10)
             type_filter = MemoryType(arguments["type"]) if arguments.get("type") else None
+            source_tool = arguments.get("source_tool")
+            project = arguments.get("project")
 
-            memories = ctx.list_recent(limit=limit, type=type_filter)
+            memories = ctx.list_recent(
+                limit=limit,
+                type=type_filter,
+                source_tool=source_tool,
+                project=project,
+            )
 
             if not memories:
-                return [TextContent(type="text", text="No memories found.")]
+                filters = []
+                if source_tool:
+                    filters.append(f"source_tool={source_tool}")
+                if project:
+                    filters.append(f"project={project}")
+                if type_filter:
+                    filters.append(f"type={type_filter.value}")
+                filter_str = f" (filters: {', '.join(filters)})" if filters else ""
+                return [TextContent(type="text", text=f"No memories found{filter_str}.")]
 
             output = []
             for m in memories:
-                line = f"[{m.id}] [{m.type.value}]"
-                if m.summary:
-                    line += f" {m.summary}"
-                else:
-                    line += f" {m.content[:50]}..."
+                # Format: [id] [type] [project?] @repo? via tool?
+                line = f"[{m.id[:8]}] [{m.type.value}]"
+                if m.project:
+                    line += f" [{m.project}]"
+                if m.source_repo:
+                    line += f" @{m.source_repo}"
+                if m.source_tool:
+                    line += f" via {m.source_tool}"
                 output.append(line)
+                # Summary or content preview on next line
+                if m.summary:
+                    output.append(f"  {m.summary}")
+                else:
+                    output.append(f"  {m.content[:60]}...")
+                output.append("")
 
             return [TextContent(type="text", text="\n".join(output))]
 
@@ -332,7 +718,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             label = arguments.get("label")
             tool = arguments.get("tool")
 
-            sessions = ctx.list_sessions(limit=limit, label=label, tool=tool)
+            # Search all namespaces by default to find all sessions
+            sessions = ctx.list_sessions(limit=limit, label=label, tool=tool, all_namespaces=True)
 
             if not sessions:
                 return [TextContent(type="text", text="No sessions found.")]
@@ -343,6 +730,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 if s.label:
                     line += f" ({s.label})"
                 line += f" - {s.started_at.strftime('%Y-%m-%d %H:%M')}"
+                line += f" ({len(s.messages)} msgs)"
                 output.append(line)
 
             return [TextContent(type="text", text="\n".join(output))]
@@ -385,6 +773,48 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=f"Message added to session.\nMessage ID: {msg.id}",
+                )
+            ]
+
+        elif name == "contextfs_index":
+            from pathlib import Path
+
+            incremental = arguments.get("incremental", True)
+            force = arguments.get("force", False)
+
+            # Get current working directory
+            cwd = Path.cwd()
+            repo_name = detect_current_repo()
+
+            if not repo_name:
+                return [TextContent(type="text", text="Error: Not in a git repository")]
+
+            # Check if already indexed (unless force)
+            status = ctx.get_index_status()
+            if status and status.get("indexed") and not force:
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Repository '{repo_name}' already indexed.\n"
+                        f"Files: {status.get('total_files', 0)}\n"
+                        f"Use force=true to re-index.",
+                    )
+                ]
+
+            # Clear index if forcing
+            if force:
+                ctx.clear_index()
+
+            # Index the repository
+            result = ctx.index_repository(repo_path=cwd, incremental=incremental)
+
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Repository '{repo_name}' indexed successfully.\n"
+                    f"Files indexed: {result.get('files_indexed', 0)}\n"
+                    f"Chunks created: {result.get('chunks_created', 0)}\n"
+                    f"Skipped: {result.get('files_skipped', 0)}",
                 )
             ]
 

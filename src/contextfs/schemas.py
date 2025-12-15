@@ -74,6 +74,8 @@ class Memory(BaseModel):
     # Source tracking
     source_file: str | None = None
     source_repo: str | None = None
+    source_tool: str | None = None  # claude-code, claude-desktop, gemini, chatgpt, etc.
+    project: str | None = None  # Project name for grouping memories across repos
     session_id: str | None = None
 
     # Metadata
@@ -141,3 +143,4 @@ class SearchResult(BaseModel):
     memory: Memory
     score: float = Field(ge=0.0, le=1.0)
     highlights: list[str] = Field(default_factory=list)
+    source: str | None = None  # "fts", "rag", or "hybrid"

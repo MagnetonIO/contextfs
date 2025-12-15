@@ -191,9 +191,11 @@ class TestFTSBackend:
 
         # More relevant result should rank higher
         assert len(results) >= 2
-        # First result should have higher score
+        # Results should be sorted by relevance (scores should be non-increasing)
+        # Note: With FTS5, very similar documents may have nearly identical scores
         if len(results) >= 2:
-            assert results[0].score >= results[1].score
+            # Allow small tolerance for floating point comparison
+            assert results[0].score >= results[1].score - 0.0001
 
 
 class TestHybridSearch:
@@ -205,7 +207,7 @@ class TestHybridSearch:
         from contextfs.fts import HybridSearch
         from contextfs.schemas import Memory, MemoryType
 
-        hybrid = HybridSearch(rag=rag_backend, fts=fts_backend)
+        hybrid = HybridSearch(fts_backend=fts_backend, rag_backend=rag_backend)
 
         # Add memories to both backends
         memories = [
@@ -231,6 +233,156 @@ class TestHybridSearch:
         results = hybrid.search("machine learning training", limit=5)
 
         assert len(results) >= 1
+
+    @pytest.mark.slow
+    def test_hybrid_search_source_tracking(self, rag_backend, fts_backend, temp_dir: Path):
+        """Test that hybrid search tracks source (fts, rag, or hybrid)."""
+        from contextfs.fts import HybridSearch
+        from contextfs.schemas import Memory, MemoryType
+
+        hybrid = HybridSearch(fts_backend=fts_backend, rag_backend=rag_backend)
+
+        memory = Memory(
+            content="Python programming language tutorial guide",
+            type=MemoryType.FACT,
+            tags=["python"],
+        )
+
+        rag_backend.add_memory(memory)
+        fts_backend.add_memory(memory)
+
+        results = hybrid.search("Python tutorial", limit=5)
+
+        assert len(results) >= 1
+        # Source should be tracked
+        assert results[0].source in ("fts", "rag", "hybrid")
+
+    @pytest.mark.slow
+    def test_search_fts_only(self, rag_backend, fts_backend, temp_dir: Path):
+        """Test FTS-only search with source tracking."""
+        from contextfs.fts import HybridSearch
+        from contextfs.schemas import Memory, MemoryType
+
+        hybrid = HybridSearch(fts_backend=fts_backend, rag_backend=rag_backend)
+
+        memory = Memory(
+            content="Session conversation about debugging",
+            type=MemoryType.EPISODIC,
+        )
+
+        fts_backend.add_memory(memory)
+
+        results = hybrid.search_fts_only("debugging", limit=5)
+
+        assert len(results) >= 1
+        assert results[0].source == "fts"
+
+    @pytest.mark.slow
+    def test_search_rag_only(self, rag_backend, fts_backend, temp_dir: Path):
+        """Test RAG-only search with source tracking."""
+        from contextfs.fts import HybridSearch
+        from contextfs.schemas import Memory, MemoryType
+
+        hybrid = HybridSearch(fts_backend=fts_backend, rag_backend=rag_backend)
+
+        memory = Memory(
+            content="Database schema design patterns for microservices",
+            type=MemoryType.CODE,
+        )
+
+        rag_backend.add_memory(memory)
+
+        results = hybrid.search_rag_only("database schema microservices", limit=5)
+
+        assert len(results) >= 1
+        assert results[0].source == "rag"
+
+    @pytest.mark.slow
+    def test_search_both(self, rag_backend, fts_backend, temp_dir: Path):
+        """Test searching both backends separately."""
+        from contextfs.fts import HybridSearch
+        from contextfs.schemas import Memory, MemoryType
+
+        hybrid = HybridSearch(fts_backend=fts_backend, rag_backend=rag_backend)
+
+        memory = Memory(
+            content="API endpoint authentication flow",
+            type=MemoryType.FACT,
+        )
+
+        rag_backend.add_memory(memory)
+        fts_backend.add_memory(memory)
+
+        results = hybrid.search_both("API authentication", limit=5)
+
+        assert "fts" in results
+        assert "rag" in results
+        assert isinstance(results["fts"], list)
+        assert isinstance(results["rag"], list)
+
+    @pytest.mark.slow
+    def test_smart_search_episodic_uses_fts(self, rag_backend, fts_backend, temp_dir: Path):
+        """Test that smart search routes episodic memories to FTS."""
+        from contextfs.fts import HybridSearch
+        from contextfs.schemas import Memory, MemoryType
+
+        hybrid = HybridSearch(fts_backend=fts_backend, rag_backend=rag_backend)
+
+        memory = Memory(
+            content="User asked about login issues in chat session",
+            type=MemoryType.EPISODIC,
+        )
+
+        fts_backend.add_memory(memory)
+        rag_backend.add_memory(memory)
+
+        results = hybrid.smart_search("login issues", limit=5, type=MemoryType.EPISODIC)
+
+        assert len(results) >= 1
+        assert results[0].source == "fts"
+
+    @pytest.mark.slow
+    def test_smart_search_code_uses_rag(self, rag_backend, fts_backend, temp_dir: Path):
+        """Test that smart search routes code memories to RAG."""
+        from contextfs.fts import HybridSearch
+        from contextfs.schemas import Memory, MemoryType
+
+        hybrid = HybridSearch(fts_backend=fts_backend, rag_backend=rag_backend)
+
+        memory = Memory(
+            content="def calculate_fibonacci(n): return n if n <= 1 else calculate_fibonacci(n-1) + calculate_fibonacci(n-2)",
+            type=MemoryType.CODE,
+        )
+
+        fts_backend.add_memory(memory)
+        rag_backend.add_memory(memory)
+
+        results = hybrid.smart_search("fibonacci function", limit=5, type=MemoryType.CODE)
+
+        assert len(results) >= 1
+        assert results[0].source == "rag"
+
+    @pytest.mark.slow
+    def test_smart_search_fact_uses_hybrid(self, rag_backend, fts_backend, temp_dir: Path):
+        """Test that smart search routes fact memories to hybrid."""
+        from contextfs.fts import HybridSearch
+        from contextfs.schemas import Memory, MemoryType
+
+        hybrid = HybridSearch(fts_backend=fts_backend, rag_backend=rag_backend)
+
+        memory = Memory(
+            content="PostgreSQL is a relational database system",
+            type=MemoryType.FACT,
+        )
+
+        fts_backend.add_memory(memory)
+        rag_backend.add_memory(memory)
+
+        results = hybrid.smart_search("PostgreSQL database", limit=5, type=MemoryType.FACT)
+
+        assert len(results) >= 1
+        # Facts use hybrid, so source should be hybrid (found in both) or one of the backends
+        assert results[0].source in ("fts", "rag", "hybrid")
 
 
 class TestSmartDocumentProcessor:

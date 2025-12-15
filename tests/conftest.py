@@ -308,8 +308,34 @@ def rag_backend(temp_dir: Path):
 @pytest.fixture
 def fts_backend(temp_dir: Path):
     """Create an FTS backend for testing."""
+    import sqlite3
+
     from contextfs.fts import FTSBackend
 
-    backend = FTSBackend(db_path=temp_dir / "test.db")
+    # FTS triggers require the memories table to exist
+    # Schema must match what _row_to_memory expects: id, content, type, ...
+    db_path = temp_dir / "test.db"
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id TEXT PRIMARY KEY NOT NULL,
+            content TEXT NOT NULL,
+            type TEXT NOT NULL,
+            tags TEXT,
+            summary TEXT,
+            namespace_id TEXT NOT NULL,
+            source_file TEXT,
+            source_repo TEXT,
+            session_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+    backend = FTSBackend(db_path=db_path)
     yield backend
     backend.close()

@@ -30,6 +30,14 @@ export interface SearchResult {
     memory: Memory;
     score: number;
     highlights: string[];
+    source?: 'fts' | 'rag' | 'hybrid' | null;
+}
+
+export type SearchMode = 'hybrid' | 'smart' | 'fts' | 'dual';
+
+export interface DualSearchResult {
+    fts: SearchResult[];
+    rag: SearchResult[];
 }
 
 export interface Session {

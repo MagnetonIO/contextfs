@@ -32,10 +32,12 @@
                 <select id="namespace-filter">
                     <option value="">All Namespaces</option>
                 </select>
-                <label class="toggle">
-                    <input type="checkbox" id="semantic-toggle" checked>
-                    <span>Semantic Search</span>
-                </label>
+                <select id="search-mode">
+                    <option value="hybrid">Hybrid (FTS + RAG)</option>
+                    <option value="smart">Smart Routing</option>
+                    <option value="fts">FTS Only</option>
+                    <option value="dual">Side-by-Side</option>
+                </select>
             </div>
         </div>
 
@@ -50,6 +52,16 @@
             <div id="search-tab" class="tab-content active">
                 <div id="results" class="memory-list">
                     <p class="placeholder">Enter a search query to find memories</p>
+                </div>
+                <div id="dual-results" class="dual-view" style="display: none;">
+                    <div class="dual-column">
+                        <h3>FTS Results <span class="badge">Keyword</span></h3>
+                        <div id="fts-results" class="memory-list"></div>
+                    </div>
+                    <div class="dual-column">
+                        <h3>RAG Results <span class="badge">Semantic</span></h3>
+                        <div id="rag-results" class="memory-list"></div>
+                    </div>
                 </div>
             </div>
             <div id="recent-tab" class="tab-content">
