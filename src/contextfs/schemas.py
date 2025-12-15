@@ -2,16 +2,18 @@
 Schemas for ContextFS memory and session management.
 """
 
+import hashlib
+import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Any
+from typing import Any
+
 from pydantic import BaseModel, Field
-import uuid
-import hashlib
 
 
 class MemoryType(str, Enum):
     """Types of memories."""
+
     FACT = "fact"
     DECISION = "decision"
     PROCEDURAL = "procedural"
@@ -31,10 +33,11 @@ class Namespace(BaseModel):
     - repo: Specific to repository
     - session: Specific to session
     """
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
     name: str
-    parent_id: Optional[str] = None
-    repo_path: Optional[str] = None
+    parent_id: str | None = None
+    repo_path: str | None = None
     created_at: datetime = Field(default_factory=datetime.now)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -54,11 +57,12 @@ class Namespace(BaseModel):
 
 class Memory(BaseModel):
     """A single memory item."""
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
     content: str
     type: MemoryType = MemoryType.FACT
     tags: list[str] = Field(default_factory=list)
-    summary: Optional[str] = None
+    summary: str | None = None
 
     # Namespace for cross-repo support
     namespace_id: str = "global"
@@ -68,15 +72,15 @@ class Memory(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.now)
 
     # Source tracking
-    source_file: Optional[str] = None
-    source_repo: Optional[str] = None
-    session_id: Optional[str] = None
+    source_file: str | None = None
+    source_repo: str | None = None
+    session_id: str | None = None
 
     # Metadata
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     # Embedding (populated by RAG backend)
-    embedding: Optional[list[float]] = None
+    embedding: list[float] | None = None
 
     def to_context_string(self) -> str:
         """Format for context injection."""
@@ -88,6 +92,7 @@ class Memory(BaseModel):
 
 class SessionMessage(BaseModel):
     """A message in a session."""
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
     role: str  # user, assistant, system
     content: str
@@ -97,26 +102,27 @@ class SessionMessage(BaseModel):
 
 class Session(BaseModel):
     """A conversation session."""
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    label: Optional[str] = None
+    label: str | None = None
     namespace_id: str = "global"
 
     # Tool that created session
     tool: str = "contextfs"  # claude-code, gemini, codex, etc.
 
     # Git context
-    repo_path: Optional[str] = None
-    branch: Optional[str] = None
+    repo_path: str | None = None
+    branch: str | None = None
 
     # Messages
     messages: list[SessionMessage] = Field(default_factory=list)
 
     # Timestamps
     started_at: datetime = Field(default_factory=datetime.now)
-    ended_at: Optional[datetime] = None
+    ended_at: datetime | None = None
 
     # Generated summary
-    summary: Optional[str] = None
+    summary: str | None = None
 
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -131,6 +137,7 @@ class Session(BaseModel):
 
 class SearchResult(BaseModel):
     """Search result with relevance score."""
+
     memory: Memory
     score: float = Field(ge=0.0, le=1.0)
     highlights: list[str] = Field(default_factory=list)

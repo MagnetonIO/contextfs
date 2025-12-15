@@ -6,19 +6,16 @@ Works with Claude Desktop, Claude Code, and any MCP client.
 """
 
 import asyncio
-import json
-from typing import Optional
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
 
 from contextfs.core import ContextFS
 from contextfs.schemas import MemoryType
 
-
 # Global ContextFS instance
-_ctx: Optional[ContextFS] = None
+_ctx: ContextFS | None = None
 
 
 def get_ctx() -> ContextFS:
@@ -49,7 +46,15 @@ async def list_tools() -> list[Tool]:
                     },
                     "type": {
                         "type": "string",
-                        "enum": ["fact", "decision", "procedural", "episodic", "user", "code", "error"],
+                        "enum": [
+                            "fact",
+                            "decision",
+                            "procedural",
+                            "episodic",
+                            "user",
+                            "code",
+                            "error",
+                        ],
                         "description": "Memory type",
                         "default": "fact",
                     },
@@ -92,7 +97,15 @@ async def list_tools() -> list[Tool]:
                     },
                     "type": {
                         "type": "string",
-                        "enum": ["fact", "decision", "procedural", "episodic", "user", "code", "error"],
+                        "enum": [
+                            "fact",
+                            "decision",
+                            "procedural",
+                            "episodic",
+                            "user",
+                            "code",
+                            "error",
+                        ],
                         "description": "Filter by type",
                     },
                 },
@@ -126,7 +139,15 @@ async def list_tools() -> list[Tool]:
                     },
                     "type": {
                         "type": "string",
-                        "enum": ["fact", "decision", "procedural", "episodic", "user", "code", "error"],
+                        "enum": [
+                            "fact",
+                            "decision",
+                            "procedural",
+                            "episodic",
+                            "user",
+                            "code",
+                            "error",
+                        ],
                         "description": "Filter by type",
                     },
                 },
@@ -212,10 +233,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     if arguments.get("label"):
                         session.label = arguments["label"]
                     ctx.end_session(generate_summary=True)
-                    return [TextContent(
-                        type="text",
-                        text=f"Session saved.\nSession ID: {session.id}\nLabel: {session.label or 'none'}",
-                    )]
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"Session saved.\nSession ID: {session.id}\nLabel: {session.label or 'none'}",
+                        )
+                    ]
                 else:
                     return [TextContent(type="text", text="No active session to save.")]
 
@@ -235,10 +258,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 summary=summary,
             )
 
-            return [TextContent(
-                type="text",
-                text=f"Memory saved successfully.\nID: {memory.id}\nType: {memory.type.value}",
-            )]
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Memory saved successfully.\nID: {memory.id}\nType: {memory.type.value}",
+                )
+            ]
 
         elif name == "contextfs_search":
             query = arguments.get("query", "")
@@ -356,10 +381,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
             msg = ctx.add_message(role, content)
 
-            return [TextContent(
-                type="text",
-                text=f"Message added to session.\nMessage ID: {msg.id}",
-            )]
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Message added to session.\nMessage ID: {msg.id}",
+                )
+            ]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

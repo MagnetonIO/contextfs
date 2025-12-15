@@ -9,21 +9,21 @@ Extracts:
 - Lists and blockquotes
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,11 +38,11 @@ class MarkdownHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    HEADER_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
-    CODE_BLOCK_PATTERN = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
-    LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-    IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
-    FRONTMATTER_PATTERN = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
+    HEADER_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+    CODE_BLOCK_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+    LINK_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+    IMAGE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+    FRONTMATTER_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
         """Parse Markdown file."""
@@ -101,12 +101,12 @@ class MarkdownHandler(FileTypeHandler):
         doc.chunks = self.chunk(doc)
         return doc
 
-    def _extract_frontmatter(self, content: str) -> Optional[str]:
+    def _extract_frontmatter(self, content: str) -> str | None:
         """Extract YAML frontmatter."""
         match = self.FRONTMATTER_PATTERN.match(content)
         return match.group(1) if match else None
 
-    def _extract_title(self, content: str) -> Optional[str]:
+    def _extract_title(self, content: str) -> str | None:
         """Extract document title from first H1."""
         for match in self.HEADER_PATTERN.finditer(content):
             if len(match.group(1)) == 1:  # H1
@@ -123,7 +123,7 @@ class MarkdownHandler(FileTypeHandler):
         lines = content.split("\n")
         header_stack: list[DocumentNode] = []
         current_content: list[tuple[int, str]] = []
-        last_header: Optional[DocumentNode] = None
+        last_header: DocumentNode | None = None
 
         for line_num, line in enumerate(lines, 1):
             header_match = self.HEADER_PATTERN.match(line)
@@ -131,7 +131,7 @@ class MarkdownHandler(FileTypeHandler):
             if header_match:
                 # Save content to previous header
                 if last_header and current_content:
-                    last_header.content = "\n".join(l for _, l in current_content)
+                    last_header.content = "\n".join(text for _, text in current_content)
                     last_header.location.end_line = current_content[-1][0]
 
                 level = len(header_match.group(1))
@@ -169,7 +169,7 @@ class MarkdownHandler(FileTypeHandler):
 
         # Finalize last header
         if last_header and current_content:
-            last_header.content = "\n".join(l for _, l in current_content)
+            last_header.content = "\n".join(text for _, text in current_content)
             last_header.location.end_line = current_content[-1][0]
 
     def _create_slug(self, title: str) -> str:
@@ -238,8 +238,8 @@ class MarkdownHandler(FileTypeHandler):
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk Markdown by headers."""
         chunks: list[DocumentChunk] = []

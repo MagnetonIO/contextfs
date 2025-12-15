@@ -5,9 +5,8 @@ Provides semantic search using ChromaDB and sentence-transformers.
 Integrated from local_rag_pipeline.
 """
 
-from pathlib import Path
-from typing import Optional
 import json
+from pathlib import Path
 
 from contextfs.schemas import Memory, MemoryType, SearchResult
 
@@ -68,9 +67,7 @@ class RAGBackend:
             )
 
         except ImportError:
-            raise ImportError(
-                "ChromaDB not installed. Install with: pip install chromadb"
-            )
+            raise ImportError("ChromaDB not installed. Install with: pip install chromadb")
 
         try:
             from sentence_transformers import SentenceTransformer
@@ -109,13 +106,15 @@ class RAGBackend:
             ids=[memory.id],
             embeddings=[embedding],
             documents=[memory.content],
-            metadatas=[{
-                "type": memory.type.value,
-                "tags": json.dumps(memory.tags),
-                "namespace_id": memory.namespace_id,
-                "summary": memory.summary or "",
-                "created_at": memory.created_at.isoformat(),
-            }],
+            metadatas=[
+                {
+                    "type": memory.type.value,
+                    "tags": json.dumps(memory.tags),
+                    "namespace_id": memory.namespace_id,
+                    "summary": memory.summary or "",
+                    "created_at": memory.created_at.isoformat(),
+                }
+            ],
         )
 
     def remove_memory(self, memory_id: str) -> None:
@@ -131,9 +130,9 @@ class RAGBackend:
         self,
         query: str,
         limit: int = 10,
-        type: Optional[MemoryType] = None,
-        tags: Optional[list[str]] = None,
-        namespace_id: Optional[str] = None,
+        type: MemoryType | None = None,
+        tags: list[str] | None = None,
+        namespace_id: str | None = None,
         min_score: float = 0.3,
     ) -> list[SearchResult]:
         """
@@ -170,7 +169,7 @@ class RAGBackend:
                 where=where if where else None,
                 include=["documents", "metadatas", "distances"],
             )
-        except Exception as e:
+        except Exception:
             # Return empty on error
             return []
 
@@ -201,6 +200,7 @@ class RAGBackend:
 
                 # Build Memory object
                 from datetime import datetime
+
                 memory = Memory(
                     id=memory_id,
                     content=documents[i] if i < len(documents) else "",
@@ -208,13 +208,17 @@ class RAGBackend:
                     tags=json.loads(metadata.get("tags", "[]")),
                     summary=metadata.get("summary") or None,
                     namespace_id=metadata.get("namespace_id", "global"),
-                    created_at=datetime.fromisoformat(metadata.get("created_at", datetime.now().isoformat())),
+                    created_at=datetime.fromisoformat(
+                        metadata.get("created_at", datetime.now().isoformat())
+                    ),
                 )
 
-                search_results.append(SearchResult(
-                    memory=memory,
-                    score=score,
-                ))
+                search_results.append(
+                    SearchResult(
+                        memory=memory,
+                        score=score,
+                    )
+                )
 
                 if len(search_results) >= limit:
                     break
@@ -274,6 +278,7 @@ class DocumentProcessor:
 
         try:
             import tiktoken
+
             self._tokenizer = tiktoken.get_encoding("cl100k_base")
         except ImportError:
             # Fallback to simple word-based counting
@@ -366,13 +371,15 @@ class DocumentProcessor:
 
         results = []
         for i, chunk in enumerate(chunks):
-            results.append({
-                "content": chunk,
-                "metadata": {
-                    "source_file": str(file_path),
-                    "chunk_index": i,
-                    "total_chunks": len(chunks),
-                },
-            })
+            results.append(
+                {
+                    "content": chunk,
+                    "metadata": {
+                        "source_file": str(file_path),
+                        "chunk_index": i,
+                        "total_chunks": len(chunks),
+                    },
+                }
+            )
 
         return results

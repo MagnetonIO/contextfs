@@ -10,21 +10,21 @@ Extracts:
 - Header includes
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,42 +34,47 @@ class CppHandler(FileTypeHandler):
     """Handler for C/C++ files."""
 
     name: str = "cpp"
-    extensions: list[str] = [".cpp", ".cc", ".cxx", ".c++", ".c", ".h", ".hpp", ".hxx", ".h++", ".hh"]
+    extensions: list[str] = [
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".c++",
+        ".c",
+        ".h",
+        ".hpp",
+        ".hxx",
+        ".h++",
+        ".hh",
+    ]
     mime_types: list[str] = ["text/x-c", "text/x-c++", "text/x-c-header"]
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    INCLUDE_PATTERN = re.compile(
-        r'#include\s+[<"]([^>"]+)[>"]',
-        re.MULTILINE
+    INCLUDE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r'#include\s+[<"]([^>"]+)[>"]', re.MULTILINE
     )
-    DEFINE_PATTERN = re.compile(
-        r"#define\s+(\w+)(?:\([^)]*\))?\s*(.*?)(?=\n(?!\\)|\Z)",
-        re.MULTILINE | re.DOTALL
+    DEFINE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"#define\s+(\w+)(?:\([^)]*\))?\s*(.*?)(?=\n(?!\\)|\Z)", re.MULTILINE | re.DOTALL
     )
-    NAMESPACE_PATTERN = re.compile(
-        r"namespace\s+(\w+)\s*\{",
-        re.MULTILINE
+    NAMESPACE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"namespace\s+(\w+)\s*\{", re.MULTILINE
     )
-    CLASS_PATTERN = re.compile(
+    CLASS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:template\s*<([^>]+)>\s*)?(class|struct)\s+(?:__declspec\([^)]+\)\s+)?(\w+)(?:\s*:\s*(public|private|protected)\s+(\w+)(?:<[^>]+>)?(?:\s*,\s*(?:public|private|protected)\s+\w+(?:<[^>]+>)?)*)?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    FUNCTION_PATTERN = re.compile(
+    FUNCTION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:template\s*<([^>]+)>\s*)?(?:(virtual|static|inline|explicit|constexpr)\s+)*(?:(\w+(?:<[^>]+>)?(?:\s*[*&]+)?)\s+)?(\w+)\s*\(([^)]*)\)\s*(?:const)?\s*(?:override)?\s*(?:final)?\s*(?:noexcept(?:\([^)]*\))?)?\s*(?:->([^{;]+))?\s*[{;]",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    TYPEDEF_PATTERN = re.compile(
-        r"typedef\s+(.+?)\s+(\w+)\s*;",
-        re.MULTILINE
+    TYPEDEF_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"typedef\s+(.+?)\s+(\w+)\s*;", re.MULTILINE
     )
-    USING_PATTERN = re.compile(
-        r"using\s+(\w+)\s*=\s*([^;]+);",
-        re.MULTILINE
+    USING_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"using\s+(\w+)\s*=\s*([^;]+);", re.MULTILINE
     )
-    ENUM_PATTERN = re.compile(
-        r"enum\s+(?:class\s+)?(\w+)(?:\s*:\s*\w+)?\s*\{",
-        re.MULTILINE
+    ENUM_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"enum\s+(?:class\s+)?(\w+)(?:\s*:\s*\w+)?\s*\{", re.MULTILINE
     )
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
@@ -179,7 +184,9 @@ class CppHandler(FileTypeHandler):
                 parent_id=root.id,
                 attributes={
                     "is_macro": True,
-                    "is_function_macro": "(" in match.group(0).split()[1] if len(match.group(0).split()) > 1 else False,
+                    "is_function_macro": "(" in match.group(0).split()[1]
+                    if len(match.group(0).split()) > 1
+                    else False,
                 },
             )
             root.children.append(macro_node)
@@ -201,7 +208,7 @@ class CppHandler(FileTypeHandler):
             ns_node = DocumentNode(
                 type=NodeType.MODULE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={"is_namespace": True},
@@ -230,7 +237,7 @@ class CppHandler(FileTypeHandler):
             class_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"{'template<' + template + '> ' if template else ''}{kind} {name}",
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
@@ -276,7 +283,9 @@ class CppHandler(FileTypeHandler):
             func_node = DocumentNode(
                 type=NodeType.FUNCTION,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)] if is_definition else match.group(0),
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)]
+                if is_definition
+                else match.group(0),
                 signature=f"{return_type or ''} {name}({params})",
                 return_type=trailing_return.strip() if trailing_return else return_type,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -313,7 +322,7 @@ class CppHandler(FileTypeHandler):
             enum_node = DocumentNode(
                 type=NodeType.VARIABLE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
@@ -391,20 +400,19 @@ class CppHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk C/C++ by definitions."""
         chunks: list[DocumentChunk] = []
@@ -506,9 +514,8 @@ class CppHandler(FileTypeHandler):
         if node.name:
             keywords.append(node.name)
 
-        if node.type == NodeType.CLASS:
-            if node.attributes.get("base_class"):
-                keywords.append(node.attributes["base_class"])
+        if node.type == NodeType.CLASS and node.attributes.get("base_class"):
+            keywords.append(node.attributes["base_class"])
 
         return keywords
 

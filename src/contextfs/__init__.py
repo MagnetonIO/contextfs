@@ -24,7 +24,7 @@ Example:
 __version__ = "0.1.0"
 
 from contextfs.core import ContextFS
-from contextfs.schemas import Memory, MemoryType, Session, Namespace
+from contextfs.schemas import Memory, MemoryType, Namespace, Session
 
 __all__ = [
     "ContextFS",

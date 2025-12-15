@@ -5,19 +5,18 @@ Fallback handler for unrecognized file types.
 Uses simple line-based chunking.
 """
 
-from pathlib import Path
-from typing import Optional
 import logging
+from pathlib import Path
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,8 +58,8 @@ class GenericTextHandler(FileTypeHandler):
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk text by paragraphs or fixed size."""
         chunk_size = chunk_size or self.default_chunk_size

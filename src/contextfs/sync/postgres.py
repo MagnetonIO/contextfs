@@ -9,14 +9,14 @@ Provides:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 from datetime import datetime
-from typing import Optional, AsyncGenerator
 from pathlib import Path
 
-from contextfs.schemas import Memory, MemoryType, Session, SearchResult
+from contextfs.schemas import Memory, MemoryType, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class PostgresSync:
 
     def __init__(
         self,
-        connection_string: Optional[str] = None,
+        connection_string: str | None = None,
         conflict_resolution: str = "last-write-wins",
     ):
         """
@@ -51,8 +51,7 @@ class PostgresSync:
                 - "remote-wins": Remote changes always win
         """
         self.connection_string = connection_string or os.environ.get(
-            "CONTEXTFS_POSTGRES_URL",
-            "postgresql://contextfs:contextfs@localhost:5432/contextfs"
+            "CONTEXTFS_POSTGRES_URL", "postgresql://contextfs:contextfs@localhost:5432/contextfs"
         )
         self.conflict_resolution = conflict_resolution
         self._pool = None
@@ -64,6 +63,7 @@ class PostgresSync:
 
         try:
             import asyncpg
+
             self._pool = await asyncpg.create_pool(
                 self.connection_string,
                 min_size=2,
@@ -71,9 +71,7 @@ class PostgresSync:
             )
             await self._init_schema()
         except ImportError:
-            raise ImportError(
-                "asyncpg not installed. Install with: pip install asyncpg"
-            )
+            raise ImportError("asyncpg not installed. Install with: pip install asyncpg")
 
     async def _init_schema(self) -> None:
         """Initialize PostgreSQL schema."""
@@ -149,9 +147,7 @@ class PostgresSync:
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace_id)"
             )
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)"
-            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)")
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at)"
             )
@@ -195,7 +191,7 @@ class PostgresSync:
         logger.info(f"Synced {synced} memories to PostgreSQL")
         return synced
 
-    async def sync_incremental(self, ctx, since: Optional[datetime] = None) -> int:
+    async def sync_incremental(self, ctx, since: datetime | None = None) -> int:
         """
         Incremental sync - only sync memories updated since last sync.
 
@@ -234,7 +230,7 @@ class PostgresSync:
         logger.info(f"Incrementally synced {synced} memories")
         return synced
 
-    async def pull(self, ctx, namespace_id: Optional[str] = None) -> int:
+    async def pull(self, ctx, namespace_id: str | None = None) -> int:
         """
         Pull memories from PostgreSQL to local.
 
@@ -272,9 +268,7 @@ class PostgresSync:
                 existing = ctx.recall(row["id"])
 
                 should_update = False
-                if existing is None:
-                    should_update = True
-                elif self.conflict_resolution == "remote-wins":
+                if existing is None or self.conflict_resolution == "remote-wins":
                     should_update = True
                 elif self.conflict_resolution == "last-write-wins":
                     remote_updated = row["updated_at"]
@@ -303,8 +297,8 @@ class PostgresSync:
         self,
         query: str,
         limit: int = 20,
-        type: Optional[MemoryType] = None,
-        namespace_id: Optional[str] = None,
+        type: MemoryType | None = None,
+        namespace_id: str | None = None,
     ) -> list[SearchResult]:
         """
         Search across all machines in PostgreSQL.
@@ -360,10 +354,12 @@ class PostgresSync:
                 updated_at=row["updated_at"],
                 metadata=row["metadata"] or {},
             )
-            results.append(SearchResult(
-                memory=memory,
-                score=float(row["rank"]),
-            ))
+            results.append(
+                SearchResult(
+                    memory=memory,
+                    score=float(row["rank"]),
+                )
+            )
 
         return results
 
@@ -372,7 +368,7 @@ class PostgresSync:
         source_id: str,
         target_id: str,
         reference_type: str = "related",
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
     ) -> None:
         """
         Add a reference between two memories.
@@ -386,16 +382,24 @@ class PostgresSync:
         await self._ensure_pool()
 
         import uuid
+
         ref_id = str(uuid.uuid4())[:12]
 
         async with self._pool.acquire() as conn:
-            await conn.execute("""
+            await conn.execute(
+                """
                 INSERT INTO memory_references (id, source_memory_id, target_memory_id,
                                                reference_type, metadata)
                 VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT (source_memory_id, target_memory_id, reference_type)
                 DO UPDATE SET metadata = $5
-            """, ref_id, source_id, target_id, reference_type, json.dumps(metadata or {}))
+            """,
+                ref_id,
+                source_id,
+                target_id,
+                reference_type,
+                json.dumps(metadata or {}),
+            )
 
     async def get_references(
         self,
@@ -417,36 +421,46 @@ class PostgresSync:
         references = []
         async with self._pool.acquire() as conn:
             if direction in ("outgoing", "both"):
-                rows = await conn.fetch("""
+                rows = await conn.fetch(
+                    """
                     SELECT r.*, m.content, m.type, m.summary
                     FROM memory_references r
                     JOIN memories m ON r.target_memory_id = m.id
                     WHERE r.source_memory_id = $1
-                """, memory_id)
+                """,
+                    memory_id,
+                )
                 for row in rows:
-                    references.append({
-                        "direction": "outgoing",
-                        "reference_type": row["reference_type"],
-                        "memory_id": row["target_memory_id"],
-                        "content_preview": row["content"][:200],
-                        "type": row["type"],
-                    })
+                    references.append(
+                        {
+                            "direction": "outgoing",
+                            "reference_type": row["reference_type"],
+                            "memory_id": row["target_memory_id"],
+                            "content_preview": row["content"][:200],
+                            "type": row["type"],
+                        }
+                    )
 
             if direction in ("incoming", "both"):
-                rows = await conn.fetch("""
+                rows = await conn.fetch(
+                    """
                     SELECT r.*, m.content, m.type, m.summary
                     FROM memory_references r
                     JOIN memories m ON r.source_memory_id = m.id
                     WHERE r.target_memory_id = $1
-                """, memory_id)
+                """,
+                    memory_id,
+                )
                 for row in rows:
-                    references.append({
-                        "direction": "incoming",
-                        "reference_type": row["reference_type"],
-                        "memory_id": row["source_memory_id"],
-                        "content_preview": row["content"][:200],
-                        "type": row["type"],
-                    })
+                    references.append(
+                        {
+                            "direction": "incoming",
+                            "reference_type": row["reference_type"],
+                            "memory_id": row["source_memory_id"],
+                            "content_preview": row["content"][:200],
+                            "type": row["type"],
+                        }
+                    )
 
         return references
 
@@ -456,15 +470,11 @@ class PostgresSync:
 
         async with self._pool.acquire() as conn:
             total = await conn.fetchval("SELECT COUNT(*) FROM memories")
-            by_type = await conn.fetch(
-                "SELECT type, COUNT(*) as count FROM memories GROUP BY type"
-            )
+            by_type = await conn.fetch("SELECT type, COUNT(*) as count FROM memories GROUP BY type")
             by_machine = await conn.fetch(
                 "SELECT machine_id, COUNT(*) as count FROM memories GROUP BY machine_id"
             )
-            namespaces = await conn.fetch(
-                "SELECT DISTINCT namespace_id FROM memories"
-            )
+            namespaces = await conn.fetch("SELECT DISTINCT namespace_id FROM memories")
             sessions = await conn.fetchval("SELECT COUNT(*) FROM sessions")
             references = await conn.fetchval("SELECT COUNT(*) FROM memory_references")
 
@@ -481,7 +491,8 @@ class PostgresSync:
 
     async def _upsert_memory(self, conn, memory: Memory, machine_id: str) -> None:
         """Upsert a memory to PostgreSQL."""
-        await conn.execute("""
+        await conn.execute(
+            """
             INSERT INTO memories (id, content, type, tags, summary, namespace_id,
                                   source_file, source_repo, session_id, created_at,
                                   updated_at, metadata, machine_id)
@@ -510,29 +521,31 @@ class PostgresSync:
             machine_id,
         )
 
-    async def _get_last_sync_time(self, machine_id: str) -> Optional[datetime]:
+    async def _get_last_sync_time(self, machine_id: str) -> datetime | None:
         """Get last sync time for machine."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT last_sync_at FROM sync_state WHERE machine_id = $1",
-                machine_id
+                "SELECT last_sync_at FROM sync_state WHERE machine_id = $1", machine_id
             )
             return row["last_sync_at"] if row else None
 
     async def _update_sync_state(self, conn, machine_id: str) -> None:
         """Update sync state for machine."""
-        await conn.execute("""
+        await conn.execute(
+            """
             INSERT INTO sync_state (machine_id, last_sync_at, sync_version)
             VALUES ($1, NOW(), 1)
             ON CONFLICT (machine_id) DO UPDATE SET
                 last_sync_at = NOW(),
                 sync_version = sync_state.sync_version + 1
-        """, machine_id)
+        """,
+            machine_id,
+        )
 
     def _get_machine_id(self) -> str:
         """Get unique machine identifier."""
-        import uuid
         import socket
+        import uuid
 
         # Try to use hostname + MAC for consistent ID
         try:
@@ -582,7 +595,7 @@ class SyncDaemon:
         self.sync = sync
         self.interval = interval
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start the sync daemon."""
@@ -598,10 +611,8 @@ class SyncDaemon:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("Sync daemon stopped")
 
     async def _run(self) -> None:

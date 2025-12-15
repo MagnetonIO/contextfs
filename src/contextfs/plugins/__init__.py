@@ -8,8 +8,8 @@ Provides integrations for:
 """
 
 from contextfs.plugins.claude_code import ClaudeCodePlugin
-from contextfs.plugins.gemini import GeminiPlugin
 from contextfs.plugins.codex import CodexPlugin
+from contextfs.plugins.gemini import GeminiPlugin
 
 __all__ = [
     "ClaudeCodePlugin",

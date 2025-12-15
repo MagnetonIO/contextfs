@@ -8,20 +8,19 @@ Extracts:
 """
 
 import json
-from pathlib import Path
-from typing import Optional, Any
 import logging
+from pathlib import Path
+from typing import Any
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
-    RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,8 +81,8 @@ class ConfigHandlerBase(FileTypeHandler):
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk config by top-level keys."""
         chunks: list[DocumentChunk] = []
@@ -178,7 +177,7 @@ class JSONHandler(ConfigHandlerBase):
 
             # Register top-level keys as symbols
             if isinstance(data, dict):
-                for key in data.keys():
+                for key in data:
                     for child in root.children:
                         if child.name == key:
                             symbols[key] = child
@@ -206,6 +205,7 @@ class JSONHandler(ConfigHandlerBase):
     def _strip_comments(self, content: str) -> str:
         """Strip comments from JSONC."""
         import re
+
         # Remove single-line comments
         content = re.sub(r"//.*$", "", content, flags=re.MULTILINE)
         # Remove multi-line comments
@@ -235,13 +235,14 @@ class YAMLHandler(ConfigHandlerBase):
 
         try:
             import yaml
+
             data = yaml.safe_load(content)
 
             if data:
                 root.children = self._build_tree(data, root.id)
 
                 if isinstance(data, dict):
-                    for key in data.keys():
+                    for key in data:
                         for child in root.children:
                             if child.name == key:
                                 symbols[key] = child
@@ -295,11 +296,12 @@ class TOMLHandler(ConfigHandlerBase):
 
         try:
             import tomllib
+
             data = tomllib.loads(content)
 
             root.children = self._build_tree(data, root.id)
 
-            for key in data.keys():
+            for key in data:
                 for child in root.children:
                     if child.name == key:
                         symbols[key] = child
@@ -307,6 +309,7 @@ class TOMLHandler(ConfigHandlerBase):
         except ImportError:
             try:
                 import tomli as tomllib
+
                 data = tomllib.loads(content)
                 root.children = self._build_tree(data, root.id)
             except ImportError:

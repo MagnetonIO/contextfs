@@ -8,19 +8,18 @@ Resolves relationships between documents:
 - Document links and citations
 """
 
-from pathlib import Path
-from typing import Optional
-from collections import defaultdict
 import logging
+from collections import defaultdict
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 from contextfs.filetypes.base import (
+    CrossReference,
+    NodeType,
     ParsedDocument,
     Relationship,
     RelationType,
-    CrossReference,
-    NodeType,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,12 +43,12 @@ class DocumentIndex(BaseModel):
                 self.symbols[name] = []
             self.symbols[name].append((doc.id, node.id))
 
-    def get_by_path(self, path: str) -> Optional[ParsedDocument]:
+    def get_by_path(self, path: str) -> ParsedDocument | None:
         """Get document by file path."""
         doc_id = self.paths.get(path)
         return self.documents.get(doc_id) if doc_id else None
 
-    def get_by_id(self, doc_id: str) -> Optional[ParsedDocument]:
+    def get_by_id(self, doc_id: str) -> ParsedDocument | None:
         """Get document by ID."""
         return self.documents.get(doc_id)
 
@@ -140,10 +139,7 @@ class RelationshipExtractor:
         """Export relationships as dictionary."""
         return {
             "total": len(self.relationships),
-            "by_type": {
-                rel_type.value: len(rels)
-                for rel_type, rels in self._by_type.items()
-            },
+            "by_type": {rel_type.value: len(rels) for rel_type, rels in self._by_type.items()},
             "relationships": [rel.model_dump() for rel in self.relationships],
         }
 
@@ -151,7 +147,7 @@ class RelationshipExtractor:
 class CrossReferenceLinker:
     """Links cross-references between documents."""
 
-    def __init__(self, extractor: Optional[RelationshipExtractor] = None):
+    def __init__(self, extractor: RelationshipExtractor | None = None):
         self.extractor = extractor or RelationshipExtractor()
         self.cross_references: list[CrossReference] = []
         self._resolved: dict[str, CrossReference] = {}
@@ -183,7 +179,7 @@ class CrossReferenceLinker:
 
         return self.cross_references
 
-    def _resolve_relationship(self, rel: Relationship) -> Optional[CrossReference]:
+    def _resolve_relationship(self, rel: Relationship) -> CrossReference | None:
         """Resolve a relationship to a cross-reference."""
         # Try to find target document
         target_doc_id = rel.target_document_id
@@ -195,18 +191,21 @@ class CrossReferenceLinker:
         if not target_doc_id:
             return None
 
+        # Get source and target text
+        source_text = rel.context or rel.source_name or ""
+        target_text = rel.target_name or ""
+
         return CrossReference(
             source_document_id=rel.source_document_id,
-            source_node_id=rel.source_node_id,
+            source_chunk_id=rel.source_node_id,
+            source_text=source_text,
             target_document_id=target_doc_id,
-            target_node_id=target_node_id,
-            reference_type=rel.type.value,
-            context=rel.context,
-            location=rel.location,
-            resolved=True,
+            target_chunk_id=target_node_id,
+            target_text=target_text,
+            ref_type=rel.type.value,
         )
 
-    def _find_target(self, rel: Relationship) -> tuple[Optional[str], Optional[str]]:
+    def _find_target(self, rel: Relationship) -> tuple[str | None, str | None]:
         """Find target document and node for a relationship."""
         target_name = rel.target_name
         if not target_name:
@@ -233,7 +232,7 @@ class CrossReferenceLinker:
 
         return None, None
 
-    def _resolve_import(self, rel: Relationship) -> tuple[Optional[str], Optional[str]]:
+    def _resolve_import(self, rel: Relationship) -> tuple[str | None, str | None]:
         """Resolve import statement to target document."""
         target_name = rel.target_name or ""
         is_relative = rel.attributes.get("is_relative", False)
@@ -256,7 +255,7 @@ class CrossReferenceLinker:
 
         return None, None
 
-    def _resolve_module_path(self, source_dir: Path, module: str) -> Optional[Path]:
+    def _resolve_module_path(self, source_dir: Path, module: str) -> Path | None:
         """Resolve relative module path."""
         # Handle ./ and ../ prefixes
         if module.startswith("./"):
@@ -288,14 +287,9 @@ class CrossReferenceLinker:
             return True
 
         # Package match (module/index.py)
-        if stem == "index" and path_obj.parent.name == module.split(".")[-1]:
-            return True
+        return bool(stem == "index" and path_obj.parent.name == module.split(".")[-1])
 
-        return False
-
-    def _resolve_inheritance(
-        self, rel: Relationship
-    ) -> tuple[Optional[str], Optional[str]]:
+    def _resolve_inheritance(self, rel: Relationship) -> tuple[str | None, str | None]:
         """Resolve class inheritance to target class."""
         target_name = rel.target_name
         if not target_name:
@@ -312,7 +306,7 @@ class CrossReferenceLinker:
 
         return None, None
 
-    def _resolve_link(self, rel: Relationship) -> tuple[Optional[str], Optional[str]]:
+    def _resolve_link(self, rel: Relationship) -> tuple[str | None, str | None]:
         """Resolve document link to target."""
         target_name = rel.target_name or ""
 
@@ -349,9 +343,7 @@ class CrossReferenceLinker:
 
         return None, None
 
-    def _resolve_reference(
-        self, rel: Relationship
-    ) -> tuple[Optional[str], Optional[str]]:
+    def _resolve_reference(self, rel: Relationship) -> tuple[str | None, str | None]:
         """Resolve generic reference (e.g., LaTeX \\ref)."""
         target_name = rel.target_name
         if not target_name:
@@ -371,9 +363,7 @@ class CrossReferenceLinker:
 
         return None, None
 
-    def _resolve_foreign_key(
-        self, rel: Relationship
-    ) -> tuple[Optional[str], Optional[str]]:
+    def _resolve_foreign_key(self, rel: Relationship) -> tuple[str | None, str | None]:
         """Resolve SQL foreign key to target table."""
         target_name = rel.target_name
         if not target_name:
@@ -390,9 +380,7 @@ class CrossReferenceLinker:
 
         return None, None
 
-    def _resolve_citation(
-        self, rel: Relationship
-    ) -> tuple[Optional[str], Optional[str]]:
+    def _resolve_citation(self, rel: Relationship) -> tuple[str | None, str | None]:
         """Resolve citation to bibliography entry."""
         target_name = rel.target_name
         if not target_name:
@@ -418,8 +406,7 @@ class CrossReferenceLinker:
     def get_unresolved(self) -> list[Relationship]:
         """Get relationships that couldn't be resolved."""
         resolved_sources = {
-            (xref.source_document_id, xref.source_node_id)
-            for xref in self.cross_references
+            (xref.source_document_id, xref.source_chunk_id) for xref in self.cross_references
         }
 
         return [
@@ -442,11 +429,13 @@ class CrossReferenceLinker:
             }
 
         for xref in self.cross_references:
-            edges.append({
-                "source": xref.source_document_id,
-                "target": xref.target_document_id,
-                "type": xref.reference_type,
-            })
+            edges.append(
+                {
+                    "source": xref.source_document_id,
+                    "target": xref.target_document_id,
+                    "type": xref.ref_type,
+                }
+            )
 
         return {"nodes": nodes, "edges": edges}
 

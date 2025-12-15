@@ -9,20 +9,19 @@ Extracts:
 """
 
 import ast
-from pathlib import Path
-from typing import Optional
 import logging
+from pathlib import Path
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,7 +107,7 @@ class PythonHandler(FileTypeHandler):
         node: ast.AST,
         content: str,
         parent_id: str,
-    ) -> Optional[DocumentNode]:
+    ) -> DocumentNode | None:
         """Process an AST node."""
         if isinstance(node, ast.ClassDef):
             return self._process_class(node, content, parent_id)
@@ -289,7 +288,7 @@ class PythonHandler(FileTypeHandler):
         node: ast.Assign,
         content: str,
         parent_id: str,
-    ) -> Optional[DocumentNode]:
+    ) -> DocumentNode | None:
         """Process a variable assignment."""
         if not node.targets:
             return None
@@ -335,8 +334,8 @@ class PythonHandler(FileTypeHandler):
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk Python document by AST boundaries."""
         chunk_size = chunk_size or self.default_chunk_size

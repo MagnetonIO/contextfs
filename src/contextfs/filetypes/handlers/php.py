@@ -9,21 +9,21 @@ Extracts:
 - Attributes (PHP 8+)
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,41 +38,34 @@ class PHPHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    NAMESPACE_PATTERN = re.compile(r"namespace\s+([\w\\]+)\s*;")
-    USE_PATTERN = re.compile(
-        r"use\s+([\w\\]+)(?:\s+as\s+(\w+))?\s*;",
-        re.MULTILINE
+    NAMESPACE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"namespace\s+([\w\\]+)\s*;")
+    USE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"use\s+([\w\\]+)(?:\s+as\s+(\w+))?\s*;", re.MULTILINE
     )
-    CLASS_PATTERN = re.compile(
+    CLASS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:#\[([^\]]+)\]\s*)*(?:(abstract|final)\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    INTERFACE_PATTERN = re.compile(
-        r"interface\s+(\w+)(?:\s+extends\s+([^{]+))?\s*\{",
-        re.MULTILINE
+    INTERFACE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"interface\s+(\w+)(?:\s+extends\s+([^{]+))?\s*\{", re.MULTILINE
     )
-    TRAIT_PATTERN = re.compile(
-        r"trait\s+(\w+)\s*\{",
-        re.MULTILINE
+    TRAIT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"trait\s+(\w+)\s*\{", re.MULTILINE)
+    ENUM_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"enum\s+(\w+)(?:\s*:\s*(\w+))?(?:\s+implements\s+([^{]+))?\s*\{", re.MULTILINE
     )
-    ENUM_PATTERN = re.compile(
-        r"enum\s+(\w+)(?:\s*:\s*(\w+))?(?:\s+implements\s+([^{]+))?\s*\{",
-        re.MULTILINE
-    )
-    FUNCTION_PATTERN = re.compile(
+    FUNCTION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:#\[([^\]]+)\]\s*)*(?:(public|private|protected)\s+)?(?:(static)\s+)?function\s+(\w+)\s*\(([^)]*)\)(?:\s*:\s*(\??\w+(?:\|[\w?]+)*))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    CONST_PATTERN = re.compile(
-        r"(?:(public|private|protected)\s+)?const\s+(\w+)\s*=",
-        re.MULTILINE
+    CONST_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:(public|private|protected)\s+)?const\s+(\w+)\s*=", re.MULTILINE
     )
-    PROPERTY_PATTERN = re.compile(
+    PROPERTY_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|private|protected)\s+)?(?:(static|readonly)\s+)?(?:(\??\w+)\s+)?\$(\w+)",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    PHPDOC_PATTERN = re.compile(r"/\*\*\s*(.*?)\s*\*/", re.DOTALL)
-    ATTRIBUTE_PATTERN = re.compile(r"#\[(\w+)(?:\([^]]*\))?\]")
+    PHPDOC_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"/\*\*\s*(.*?)\s*\*/", re.DOTALL)
+    ATTRIBUTE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"#\[(\w+)(?:\([^]]*\))?\]")
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
         """Parse PHP file."""
@@ -129,7 +122,7 @@ class PHPHandler(FileTypeHandler):
         doc.chunks = self.chunk(doc)
         return doc
 
-    def _extract_namespace(self, content: str) -> Optional[str]:
+    def _extract_namespace(self, content: str) -> str | None:
         """Extract namespace declaration."""
         match = self.NAMESPACE_PATTERN.search(content)
         return match.group(1) if match else None
@@ -186,7 +179,7 @@ class PHPHandler(FileTypeHandler):
             class_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"class {name}",
                 docstring=phpdoc,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -201,7 +194,7 @@ class PHPHandler(FileTypeHandler):
             )
 
             # Extract methods
-            class_content = content[match.end():self._get_pos_at_line(content, end_line)]
+            class_content = content[match.end() : self._get_pos_at_line(content, end_line)]
             self._extract_methods(class_content, class_node, line_num)
 
             root.children.append(class_node)
@@ -227,7 +220,7 @@ class PHPHandler(FileTypeHandler):
             interface_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"interface {name}",
                 docstring=phpdoc,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -259,7 +252,7 @@ class PHPHandler(FileTypeHandler):
             trait_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"trait {name}",
                 docstring=phpdoc,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -288,7 +281,7 @@ class PHPHandler(FileTypeHandler):
             enum_node = DocumentNode(
                 type=NodeType.VARIABLE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
@@ -309,13 +302,13 @@ class PHPHandler(FileTypeHandler):
         """Extract standalone function definitions."""
         for match in self.FUNCTION_PATTERN.finditer(content):
             # Skip if inside a class (check for class context)
-            before = content[:match.start()]
+            before = content[: match.start()]
             if before.count("{") != before.count("}"):
                 continue
 
             attributes = match.group(1)
-            visibility = match.group(2)
-            is_static = bool(match.group(3))
+            match.group(2)
+            bool(match.group(3))
             name = match.group(4)
             params = match.group(5)
             return_type = match.group(6)
@@ -329,7 +322,7 @@ class PHPHandler(FileTypeHandler):
             func_node = DocumentNode(
                 type=NodeType.FUNCTION,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"function {name}({params}){f': {return_type}' if return_type else ''}",
                 return_type=return_type,
                 docstring=phpdoc,
@@ -379,7 +372,7 @@ class PHPHandler(FileTypeHandler):
             )
             parent.children.append(method_node)
 
-    def _find_phpdoc(self, content: str, pos: int) -> Optional[str]:
+    def _find_phpdoc(self, content: str, pos: int) -> str | None:
         """Find PHPDoc comment preceding a position."""
         search_start = max(0, pos - 1000)
         segment = content[search_start:pos]
@@ -414,20 +407,19 @@ class PHPHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk PHP by class/function definitions."""
         chunks: list[DocumentChunk] = []
@@ -476,7 +468,11 @@ class PHPHandler(FileTypeHandler):
         for node in document.root.walk():
             if node.type == NodeType.CLASS:
                 extends = node.attributes.get("extends")
-                if extends and not node.attributes.get("is_interface") and not node.attributes.get("is_trait"):
+                if (
+                    extends
+                    and not node.attributes.get("is_interface")
+                    and not node.attributes.get("is_trait")
+                ):
                     rel = Relationship(
                         type=RelationType.INHERITS,
                         source_document_id=document.id,

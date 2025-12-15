@@ -7,10 +7,10 @@ Provides:
 - Factory for creating handlers
 """
 
-from pathlib import Path
-from typing import Optional, Type
-import mimetypes
 import logging
+import mimetypes
+from pathlib import Path
+from typing import Optional
 
 from contextfs.filetypes.base import FileTypeHandler, ParsedDocument
 
@@ -29,7 +29,7 @@ class FileTypeRegistry:
     """
 
     _instance: Optional["FileTypeRegistry"] = None
-    _handlers: dict[str, Type[FileTypeHandler]] = {}
+    _handlers: dict[str, type[FileTypeHandler]] = {}
     _extension_map: dict[str, str] = {}  # extension -> handler name
     _mime_map: dict[str, str] = {}  # mime type -> handler name
 
@@ -49,27 +49,27 @@ class FileTypeRegistry:
     def _register_builtin_handlers(self) -> None:
         """Register all built-in handlers."""
         # Import handlers here to avoid circular imports
-        from contextfs.filetypes.handlers.python import PythonHandler
-        from contextfs.filetypes.handlers.javascript import JavaScriptHandler
-        from contextfs.filetypes.handlers.typescript import TypeScriptHandler
-        from contextfs.filetypes.handlers.java import JavaHandler
-        from contextfs.filetypes.handlers.cpp import CppHandler
-        from contextfs.filetypes.handlers.csharp import CSharpHandler
-        from contextfs.filetypes.handlers.go import GoHandler
-        from contextfs.filetypes.handlers.rust import RustHandler
-        from contextfs.filetypes.handlers.php import PHPHandler
-        from contextfs.filetypes.handlers.ruby import RubyHandler
-        from contextfs.filetypes.handlers.swift import SwiftHandler
-        from contextfs.filetypes.handlers.shell import ShellHandler
-        from contextfs.filetypes.handlers.sql import SQLHandler
-        from contextfs.filetypes.handlers.latex import LaTeXHandler
-        from contextfs.filetypes.handlers.markdown import MarkdownHandler
         from contextfs.filetypes.handlers.config import (
             JSONHandler,
-            YAMLHandler,
             TOMLHandler,
+            YAMLHandler,
         )
+        from contextfs.filetypes.handlers.cpp import CppHandler
+        from contextfs.filetypes.handlers.csharp import CSharpHandler
         from contextfs.filetypes.handlers.generic import GenericTextHandler
+        from contextfs.filetypes.handlers.go import GoHandler
+        from contextfs.filetypes.handlers.java import JavaHandler
+        from contextfs.filetypes.handlers.javascript import JavaScriptHandler
+        from contextfs.filetypes.handlers.latex import LaTeXHandler
+        from contextfs.filetypes.handlers.markdown import MarkdownHandler
+        from contextfs.filetypes.handlers.php import PHPHandler
+        from contextfs.filetypes.handlers.python import PythonHandler
+        from contextfs.filetypes.handlers.ruby import RubyHandler
+        from contextfs.filetypes.handlers.rust import RustHandler
+        from contextfs.filetypes.handlers.shell import ShellHandler
+        from contextfs.filetypes.handlers.sql import SQLHandler
+        from contextfs.filetypes.handlers.swift import SwiftHandler
+        from contextfs.filetypes.handlers.typescript import TypeScriptHandler
 
         # Handler registration order matters for extension conflicts
         # TypeScript before JavaScript (more specific)
@@ -104,7 +104,7 @@ class FileTypeRegistry:
 
     def register(
         self,
-        handler_cls: Type[FileTypeHandler],
+        handler_cls: type[FileTypeHandler],
         override: bool = False,
     ) -> None:
         """
@@ -139,11 +139,11 @@ class FileTypeRegistry:
 
     def get_handler(
         self,
-        file_path: Optional[str] = None,
-        extension: Optional[str] = None,
-        mime_type: Optional[str] = None,
-        handler_name: Optional[str] = None,
-    ) -> Optional[FileTypeHandler]:
+        file_path: str | None = None,
+        extension: str | None = None,
+        mime_type: str | None = None,
+        handler_name: str | None = None,
+    ) -> FileTypeHandler | None:
         """
         Get a handler for a file.
 
@@ -201,8 +201,8 @@ class FileTypeRegistry:
     def parse_file(
         self,
         file_path: str,
-        content: Optional[str] = None,
-    ) -> Optional[ParsedDocument]:
+        content: str | None = None,
+    ) -> ParsedDocument | None:
         """
         Parse a file using the appropriate handler.
 
@@ -248,7 +248,7 @@ class FileTypeRegistry:
 
 
 # Module-level functions
-_registry: Optional[FileTypeRegistry] = None
+_registry: FileTypeRegistry | None = None
 
 
 def get_registry() -> FileTypeRegistry:
@@ -260,11 +260,11 @@ def get_registry() -> FileTypeRegistry:
 
 
 def get_handler(
-    file_path: Optional[str] = None,
-    extension: Optional[str] = None,
-    mime_type: Optional[str] = None,
-    handler_name: Optional[str] = None,
-) -> Optional[FileTypeHandler]:
+    file_path: str | None = None,
+    extension: str | None = None,
+    mime_type: str | None = None,
+    handler_name: str | None = None,
+) -> FileTypeHandler | None:
     """Get a handler for a file."""
     return get_registry().get_handler(
         file_path=file_path,
@@ -274,11 +274,11 @@ def get_handler(
     )
 
 
-def parse_file(file_path: str, content: Optional[str] = None) -> Optional[ParsedDocument]:
+def parse_file(file_path: str, content: str | None = None) -> ParsedDocument | None:
     """Parse a file using the appropriate handler."""
     return get_registry().parse_file(file_path, content)
 
 
-def register_handler(handler_cls: Type[FileTypeHandler], override: bool = False) -> None:
+def register_handler(handler_cls: type[FileTypeHandler], override: bool = False) -> None:
     """Register a custom handler."""
     get_registry().register(handler_cls, override)

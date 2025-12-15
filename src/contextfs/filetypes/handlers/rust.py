@@ -10,21 +10,21 @@ Extracts:
 - Lifetimes and generics
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,52 +39,46 @@ class RustHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    USE_PATTERN = re.compile(
-        r"use\s+([\w:]+)(?:::\{([^}]+)\}|::(\w+))?;",
-        re.MULTILINE
+    USE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"use\s+([\w:]+)(?:::\{([^}]+)\}|::(\w+))?;", re.MULTILINE
     )
-    MOD_PATTERN = re.compile(
-        r"(?:pub\s+)?mod\s+(\w+)\s*[{;]",
-        re.MULTILINE
+    MOD_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:pub\s+)?mod\s+(\w+)\s*[{;]", re.MULTILINE
     )
-    STRUCT_PATTERN = re.compile(
+    STRUCT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:#\[([^\]]+)\]\s*)*(?:pub(?:\([^)]+\))?\s+)?struct\s+(\w+)(?:<([^>]+)>)?(?:\s*\([^)]+\))?(?:\s*where\s+[^{]+)?\s*[{;]",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    ENUM_PATTERN = re.compile(
+    ENUM_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:#\[([^\]]+)\]\s*)*(?:pub(?:\([^)]+\))?\s+)?enum\s+(\w+)(?:<([^>]+)>)?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    TRAIT_PATTERN = re.compile(
+    TRAIT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:pub(?:\([^)]+\))?\s+)?(?:unsafe\s+)?trait\s+(\w+)(?:<([^>]+)>)?(?:\s*:\s*([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    IMPL_PATTERN = re.compile(
+    IMPL_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:unsafe\s+)?impl(?:<([^>]+)>)?\s+(?:(\w+)(?:<[^>]+>)?\s+for\s+)?(\w+)(?:<[^>]+>)?(?:\s*where\s+[^{]+)?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    FN_PATTERN = re.compile(
+    FN_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:#\[([^\]]+)\]\s*)*(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:const\s+)?(?:extern\s+\"[^\"]+\"\s+)?fn\s+(\w+)(?:<([^>]+)>)?\s*\(([^)]*)\)(?:\s*->\s*([^{;]+))?\s*(?:where\s+[^{]+)?\s*[{;]",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    CONST_PATTERN = re.compile(
-        r"(?:pub(?:\([^)]+\))?\s+)?const\s+(\w+)\s*:\s*([^=]+)\s*=",
-        re.MULTILINE
+    CONST_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:pub(?:\([^)]+\))?\s+)?const\s+(\w+)\s*:\s*([^=]+)\s*=", re.MULTILINE
     )
-    STATIC_PATTERN = re.compile(
-        r"(?:pub(?:\([^)]+\))?\s+)?static\s+(?:mut\s+)?(\w+)\s*:\s*([^=]+)\s*=",
-        re.MULTILINE
+    STATIC_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:pub(?:\([^)]+\))?\s+)?static\s+(?:mut\s+)?(\w+)\s*:\s*([^=]+)\s*=", re.MULTILINE
     )
-    TYPE_ALIAS_PATTERN = re.compile(
-        r"(?:pub(?:\([^)]+\))?\s+)?type\s+(\w+)(?:<([^>]+)>)?\s*=\s*([^;]+);",
-        re.MULTILINE
+    TYPE_ALIAS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:pub(?:\([^)]+\))?\s+)?type\s+(\w+)(?:<([^>]+)>)?\s*=\s*([^;]+);", re.MULTILINE
     )
-    MACRO_PATTERN = re.compile(
-        r"macro_rules!\s+(\w+)\s*\{",
-        re.MULTILINE
+    MACRO_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"macro_rules!\s+(\w+)\s*\{", re.MULTILINE
     )
-    DERIVE_PATTERN = re.compile(r"#\[derive\(([^)]+)\)\]")
-    DOC_PATTERN = re.compile(r"///\s*(.*)")
+    DERIVE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"#\[derive\(([^)]+)\)\]")
+    DOC_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"///\s*(.*)")
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
         """Parse Rust file."""
@@ -170,7 +164,11 @@ class RustHandler(FileTypeHandler):
                 parent_id=root.id,
                 attributes={
                     "path": path,
-                    "items": [i.strip() for i in items.split(",")] if items else [single] if single else [],
+                    "items": [i.strip() for i in items.split(",")]
+                    if items
+                    else [single]
+                    if single
+                    else [],
                     "is_std": path.startswith("std::"),
                     "is_crate": path.startswith("crate::"),
                 },
@@ -198,7 +196,9 @@ class RustHandler(FileTypeHandler):
             mod_node = DocumentNode(
                 type=NodeType.MODULE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)] if is_inline else match.group(0),
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)]
+                if is_inline
+                else match.group(0),
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
@@ -217,7 +217,7 @@ class RustHandler(FileTypeHandler):
     ) -> None:
         """Extract struct definitions."""
         for match in self.STRUCT_PATTERN.finditer(content):
-            attrs = match.group(1)
+            match.group(1)
             name = match.group(2)
             generics = match.group(3)
 
@@ -235,7 +235,7 @@ class RustHandler(FileTypeHandler):
             struct_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"struct {name}{f'<{generics}>' if generics else ''}",
                 docstring=doc,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -259,7 +259,7 @@ class RustHandler(FileTypeHandler):
     ) -> None:
         """Extract enum definitions."""
         for match in self.ENUM_PATTERN.finditer(content):
-            attrs = match.group(1)
+            match.group(1)
             name = match.group(2)
             generics = match.group(3)
 
@@ -273,7 +273,7 @@ class RustHandler(FileTypeHandler):
             enum_node = DocumentNode(
                 type=NodeType.VARIABLE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"enum {name}{f'<{generics}>' if generics else ''}",
                 docstring=doc,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -309,7 +309,7 @@ class RustHandler(FileTypeHandler):
             trait_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"trait {name}{f'<{generics}>' if generics else ''}",
                 docstring=doc,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -346,7 +346,7 @@ class RustHandler(FileTypeHandler):
             impl_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=impl_name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=impl_name,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
@@ -369,7 +369,7 @@ class RustHandler(FileTypeHandler):
     ) -> None:
         """Extract function definitions."""
         for match in self.FN_PATTERN.finditer(content):
-            attrs = match.group(1)
+            match.group(1)
             name = match.group(2)
             generics = match.group(3)
             params = match.group(4)
@@ -388,7 +388,9 @@ class RustHandler(FileTypeHandler):
             func_node = DocumentNode(
                 type=NodeType.FUNCTION,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)] if is_definition else match.group(0),
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)]
+                if is_definition
+                else match.group(0),
                 signature=f"fn {name}({params}){f' -> {return_type.strip()}' if return_type else ''}",
                 return_type=return_type.strip() if return_type else None,
                 docstring=doc,
@@ -423,7 +425,7 @@ class RustHandler(FileTypeHandler):
             macro_node = DocumentNode(
                 type=NodeType.FUNCTION,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"macro_rules! {name}",
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
@@ -432,7 +434,7 @@ class RustHandler(FileTypeHandler):
             root.children.append(macro_node)
             symbols[f"{name}!"] = macro_node
 
-    def _find_doc_comment(self, content: str, pos: int) -> Optional[str]:
+    def _find_doc_comment(self, content: str, pos: int) -> str | None:
         """Find doc comment preceding a position."""
         search_start = max(0, pos - 500)
         segment = content[search_start:pos]
@@ -479,20 +481,19 @@ class RustHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk Rust by definitions."""
         chunks: list[DocumentChunk] = []

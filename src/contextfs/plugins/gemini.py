@@ -5,12 +5,9 @@ Provides integration with Google's Gemini CLI tool.
 """
 
 import json
-import os
 from pathlib import Path
-from typing import Optional
 
 from contextfs.core import ContextFS
-from contextfs.schemas import MemoryType
 
 
 class GeminiPlugin:
@@ -20,7 +17,7 @@ class GeminiPlugin:
     Provides context injection and session capture for Gemini CLI.
     """
 
-    def __init__(self, ctx: Optional[ContextFS] = None):
+    def __init__(self, ctx: ContextFS | None = None):
         """
         Initialize Gemini plugin.
 
@@ -148,6 +145,7 @@ if __name__ == "__main__":
 
 
 # CLI commands
+
 
 def install_gemini():
     """Install Gemini plugin."""

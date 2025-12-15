@@ -9,20 +9,20 @@ Provides type-safe file handling with:
 """
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
+    CrossReference,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
-    CrossReference,
-    ChunkStrategy,
     SourceLocation,
 )
-from contextfs.filetypes.registry import FileTypeRegistry, get_handler
+from contextfs.filetypes.integration import RAGIntegration, SmartDocumentProcessor
 from contextfs.filetypes.linker import CrossReferenceLinker, RelationshipExtractor
-from contextfs.filetypes.integration import SmartDocumentProcessor, RAGIntegration
+from contextfs.filetypes.registry import FileTypeRegistry, get_handler
 
 __all__ = [
     # Base classes

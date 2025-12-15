@@ -10,22 +10,22 @@ Extracts:
 - Custom macros and environments
 """
 
-import re
-from pathlib import Path
-from typing import Optional
-from dataclasses import dataclass
 import logging
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LaTeXToken:
     """A parsed LaTeX token."""
+
     type: str
     content: str
     line: int
@@ -55,12 +56,40 @@ class LaTeXHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # LaTeX patterns
-    COMMAND_PATTERN = re.compile(r"\\([a-zA-Z@]+)\*?(?:\[([^\]]*)\])?(?:\{([^}]*)\})*")
-    ENVIRONMENT_PATTERN = re.compile(r"\\begin\{(\w+)\}(.*?)\\end\{\1\}", re.DOTALL)
-    SECTION_COMMANDS = ["part", "chapter", "section", "subsection", "subsubsection", "paragraph"]
-    MATH_ENVIRONMENTS = ["equation", "align", "gather", "multline", "eqnarray", "math", "displaymath"]
-    THEOREM_ENVIRONMENTS = ["theorem", "lemma", "corollary", "proposition", "definition", "proof", "example", "remark"]
-    FLOAT_ENVIRONMENTS = ["figure", "table", "algorithm", "listing"]
+    COMMAND_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"\\([a-zA-Z@]+)\*?(?:\[([^\]]*)\])?(?:\{([^}]*)\})*"
+    )
+    ENVIRONMENT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"\\begin\{(\w+)\}(.*?)\\end\{\1\}", re.DOTALL
+    )
+    SECTION_COMMANDS: ClassVar[list[str]] = [
+        "part",
+        "chapter",
+        "section",
+        "subsection",
+        "subsubsection",
+        "paragraph",
+    ]
+    MATH_ENVIRONMENTS: ClassVar[list[str]] = [
+        "equation",
+        "align",
+        "gather",
+        "multline",
+        "eqnarray",
+        "math",
+        "displaymath",
+    ]
+    THEOREM_ENVIRONMENTS: ClassVar[list[str]] = [
+        "theorem",
+        "lemma",
+        "corollary",
+        "proposition",
+        "definition",
+        "proof",
+        "example",
+        "remark",
+    ]
+    FLOAT_ENVIRONMENTS: ClassVar[list[str]] = ["figure", "table", "algorithm", "listing"]
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
         """Parse LaTeX file into structured document."""
@@ -116,7 +145,7 @@ class LaTeXHandler(FileTypeHandler):
 
         return doc
 
-    def _extract_document_class(self, content: str) -> Optional[str]:
+    def _extract_document_class(self, content: str) -> str | None:
         """Extract document class."""
         match = re.search(r"\\documentclass(?:\[.*?\])?\{(\w+)\}", content)
         return match.group(1) if match else None
@@ -130,7 +159,7 @@ class LaTeXHandler(FileTypeHandler):
                 packages.append(pkg.strip())
         return packages
 
-    def _extract_title(self, content: str) -> Optional[str]:
+    def _extract_title(self, content: str) -> str | None:
         """Extract document title."""
         match = re.search(r"\\title\{([^}]+)\}", content)
         return match.group(1) if match else None
@@ -144,7 +173,7 @@ class LaTeXHandler(FileTypeHandler):
     ) -> None:
         """Parse document structure (sections, etc.)."""
         lines = content.split("\n")
-        current_section: Optional[DocumentNode] = None
+        current_section: DocumentNode | None = None
         section_stack: list[DocumentNode] = []
         current_content_lines: list[tuple[int, str]] = []
 
@@ -156,8 +185,12 @@ class LaTeXHandler(FileTypeHandler):
                 if match:
                     # Save current content to previous section
                     if current_section and current_content_lines:
-                        current_section.content = "\n".join(l for _, l in current_content_lines)
-                        current_section.location.end_line = current_content_lines[-1][0] if current_content_lines else line_num - 1
+                        current_section.content = "\n".join(
+                            text for _, text in current_content_lines
+                        )
+                        current_section.location.end_line = (
+                            current_content_lines[-1][0] if current_content_lines else line_num - 1
+                        )
 
                     # Create section node
                     node_type = self._section_to_node_type(cmd)
@@ -198,7 +231,7 @@ class LaTeXHandler(FileTypeHandler):
 
         # Finalize last section
         if current_section and current_content_lines:
-            current_section.content = "\n".join(l for _, l in current_content_lines)
+            current_section.content = "\n".join(text for _, text in current_content_lines)
             current_section.location.end_line = current_content_lines[-1][0]
 
     def _section_to_node_type(self, cmd: str) -> NodeType:
@@ -272,7 +305,15 @@ class LaTeXHandler(FileTypeHandler):
         references: list[DocumentNode],
     ) -> None:
         """Extract citations."""
-        cite_commands = ["cite", "citep", "citet", "citeauthor", "citeyear", "parencite", "textcite"]
+        cite_commands = [
+            "cite",
+            "citep",
+            "citet",
+            "citeauthor",
+            "citeyear",
+            "parencite",
+            "textcite",
+        ]
         pattern = rf"\\({'|'.join(cite_commands)})\{{([^}}]+)\}}"
 
         for match in re.finditer(pattern, content):
@@ -341,17 +382,19 @@ class LaTeXHandler(FileTypeHandler):
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk LaTeX document by sections."""
         chunks: list[DocumentChunk] = []
         chunk_size = chunk_size or self.default_chunk_size
 
         # Get sections and equations
-        sections = document.get_nodes_by_type(NodeType.SECTION) + \
-                   document.get_nodes_by_type(NodeType.CHAPTER) + \
-                   document.get_nodes_by_type(NodeType.SUBSECTION)
+        sections = (
+            document.get_nodes_by_type(NodeType.SECTION)
+            + document.get_nodes_by_type(NodeType.CHAPTER)
+            + document.get_nodes_by_type(NodeType.SUBSECTION)
+        )
         equations = document.get_nodes_by_type(NodeType.EQUATION)
 
         # Chunk sections

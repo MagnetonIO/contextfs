@@ -9,21 +9,21 @@ Extracts:
 - Shebang
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,26 +38,19 @@ class ShellHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    SHEBANG_PATTERN = re.compile(r"^#!\s*(/\S+)")
-    FUNCTION_PATTERN = re.compile(
-        r"(?:function\s+)?(\w+)\s*\(\s*\)\s*\{",
-        re.MULTILINE
+    SHEBANG_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"^#!\s*(/\S+)")
+    FUNCTION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:function\s+)?(\w+)\s*\(\s*\)\s*\{", re.MULTILINE
     )
-    VARIABLE_PATTERN = re.compile(
-        r"^(\w+)=(.*)$",
-        re.MULTILINE
+    VARIABLE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"^(\w+)=(.*)$", re.MULTILINE)
+    EXPORT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^export\s+(\w+)(?:=(.*))?$", re.MULTILINE
     )
-    EXPORT_PATTERN = re.compile(
-        r"^export\s+(\w+)(?:=(.*))?$",
-        re.MULTILINE
+    ALIAS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^alias\s+(\w+)=['\"]?([^'\"#\n]+)['\"]?", re.MULTILINE
     )
-    ALIAS_PATTERN = re.compile(
-        r"^alias\s+(\w+)=['\"]?([^'\"#\n]+)['\"]?",
-        re.MULTILINE
-    )
-    SOURCE_PATTERN = re.compile(
-        r"(?:source|\\.)\s+['\"]?([^'\"#\n]+)['\"]?",
-        re.MULTILINE
+    SOURCE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:source|\\.)\s+['\"]?([^'\"#\n]+)['\"]?", re.MULTILINE
     )
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
@@ -110,12 +103,12 @@ class ShellHandler(FileTypeHandler):
         doc.chunks = self.chunk(doc)
         return doc
 
-    def _extract_shebang(self, content: str) -> Optional[str]:
+    def _extract_shebang(self, content: str) -> str | None:
         """Extract shebang line."""
         match = self.SHEBANG_PATTERN.match(content)
         return match.group(1) if match else None
 
-    def _detect_shell(self, shebang: Optional[str], file_path: str) -> str:
+    def _detect_shell(self, shebang: str | None, file_path: str) -> str:
         """Detect shell type from shebang or extension."""
         if shebang:
             if "bash" in shebang:
@@ -185,7 +178,7 @@ class ShellHandler(FileTypeHandler):
             func_node = DocumentNode(
                 type=NodeType.FUNCTION,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"{name}()",
                 docstring=doc_comment,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -248,7 +241,7 @@ class ShellHandler(FileTypeHandler):
             root.children.append(alias_node)
             symbols[name] = alias_node
 
-    def _find_doc_comment(self, content: str, pos: int) -> Optional[str]:
+    def _find_doc_comment(self, content: str, pos: int) -> str | None:
         """Find shell doc comment preceding a position."""
         search_start = max(0, pos - 300)
         segment = content[search_start:pos]
@@ -284,20 +277,19 @@ class ShellHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk Shell by function definitions."""
         chunks: list[DocumentChunk] = []

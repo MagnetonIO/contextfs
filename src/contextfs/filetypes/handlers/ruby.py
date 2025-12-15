@@ -9,21 +9,21 @@ Extracts:
 - Attr accessors
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,33 +38,24 @@ class RubyHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    REQUIRE_PATTERN = re.compile(
-        r"require(?:_relative)?\s+['\"]([^'\"]+)['\"]",
-        re.MULTILINE
+    REQUIRE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"require(?:_relative)?\s+['\"]([^'\"]+)['\"]", re.MULTILINE
     )
-    MODULE_PATTERN = re.compile(
-        r"module\s+(\w+(?:::\w+)*)",
-        re.MULTILINE
+    MODULE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"module\s+(\w+(?:::\w+)*)", re.MULTILINE
     )
-    CLASS_PATTERN = re.compile(
-        r"class\s+(\w+(?:::\w+)*)(?:\s*<\s*(\w+(?:::\w+)*))?\s*$",
-        re.MULTILINE
+    CLASS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"class\s+(\w+(?:::\w+)*)(?:\s*<\s*(\w+(?:::\w+)*))?\s*$", re.MULTILINE
     )
-    METHOD_PATTERN = re.compile(
-        r"def\s+(self\.)?(\w+[?!=]?)\s*(?:\(([^)]*)\))?",
-        re.MULTILINE
+    METHOD_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"def\s+(self\.)?(\w+[?!=]?)\s*(?:\(([^)]*)\))?", re.MULTILINE
     )
-    ATTR_PATTERN = re.compile(
-        r"attr_(reader|writer|accessor)\s+(.+?)(?=\n|#)",
-        re.MULTILINE
+    ATTR_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"attr_(reader|writer|accessor)\s+(.+?)(?=\n|#)", re.MULTILINE
     )
-    CONSTANT_PATTERN = re.compile(
-        r"([A-Z][A-Z0-9_]*)\s*=",
-        re.MULTILINE
-    )
-    INCLUDE_PATTERN = re.compile(
-        r"(?:include|extend|prepend)\s+(\w+(?:::\w+)*)",
-        re.MULTILINE
+    CONSTANT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"([A-Z][A-Z0-9_]*)\s*=", re.MULTILINE)
+    INCLUDE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:include|extend|prepend)\s+(\w+(?:::\w+)*)", re.MULTILINE
     )
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
@@ -161,7 +152,7 @@ class RubyHandler(FileTypeHandler):
             module_node = DocumentNode(
                 type=NodeType.MODULE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 docstring=doc_comment,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
@@ -187,13 +178,13 @@ class RubyHandler(FileTypeHandler):
             doc_comment = self._find_doc_comment(content, start_pos)
 
             # Extract includes/extends within class
-            class_content = content[match.end():self._get_pos_at_line(content, end_line)]
+            class_content = content[match.end() : self._get_pos_at_line(content, end_line)]
             includes = [m.group(1) for m in self.INCLUDE_PATTERN.finditer(class_content)]
 
             class_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"class {name}{f' < {superclass}' if superclass else ''}",
                 docstring=doc_comment,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -245,7 +236,7 @@ class RubyHandler(FileTypeHandler):
                     method_node = DocumentNode(
                         type=NodeType.FUNCTION,
                         name=name,
-                        content="\n".join(lines[i:end_line + 1]),
+                        content="\n".join(lines[i : end_line + 1]),
                         signature=f"def {name}({params})",
                         docstring=doc_comment,
                         location=SourceLocation(start_line=line_num, end_line=end_line + 1),
@@ -292,7 +283,9 @@ class RubyHandler(FileTypeHandler):
         """Find matching 'end' for Ruby block."""
         depth = 1
         line = start_line
-        keywords = re.compile(r"\b(class|module|def|do|if|unless|case|while|until|for|begin)\b(?!\s*:)")
+        keywords = re.compile(
+            r"\b(class|module|def|do|if|unless|case|while|until|for|begin)\b(?!\s*:)"
+        )
         end_pattern = re.compile(r"\bend\b")
 
         for i, char in enumerate(content[start:], start):
@@ -302,7 +295,7 @@ class RubyHandler(FileTypeHandler):
                 line_end = content.find("\n", i + 1)
                 if line_end == -1:
                     line_end = len(content)
-                current_line = content[i + 1:line_end]
+                current_line = content[i + 1 : line_end]
 
                 # Count block openers
                 depth += len(keywords.findall(current_line))
@@ -327,7 +320,7 @@ class RubyHandler(FileTypeHandler):
                     return i
         return start
 
-    def _find_doc_comment(self, content: str, pos: int) -> Optional[str]:
+    def _find_doc_comment(self, content: str, pos: int) -> str | None:
         """Find Ruby doc comment preceding a position."""
         search_start = max(0, pos - 500)
         segment = content[search_start:pos]
@@ -344,7 +337,7 @@ class RubyHandler(FileTypeHandler):
 
         return "\n".join(doc_lines) if doc_lines else None
 
-    def _find_line_doc_comment(self, lines: list[str], line_idx: int) -> Optional[str]:
+    def _find_line_doc_comment(self, lines: list[str], line_idx: int) -> str | None:
         """Find doc comment on preceding lines."""
         doc_lines = []
         for i in range(line_idx - 1, -1, -1):
@@ -359,20 +352,19 @@ class RubyHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk Ruby by class/module/method definitions."""
         chunks: list[DocumentChunk] = []

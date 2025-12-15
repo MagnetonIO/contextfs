@@ -4,21 +4,19 @@ Core ContextFS class - main interface for memory operations.
 
 import json
 import sqlite3
-from pathlib import Path
-from typing import Optional, Any
 from datetime import datetime
-import uuid
+from pathlib import Path
 
+from contextfs.config import get_config
+from contextfs.rag import RAGBackend
 from contextfs.schemas import (
     Memory,
     MemoryType,
-    Session,
-    SessionMessage,
     Namespace,
     SearchResult,
+    Session,
+    SessionMessage,
 )
-from contextfs.config import get_config, Config
-from contextfs.rag import RAGBackend
 
 
 class ContextFS:
@@ -34,8 +32,8 @@ class ContextFS:
 
     def __init__(
         self,
-        data_dir: Optional[Path] = None,
-        namespace_id: Optional[str] = None,
+        data_dir: Path | None = None,
+        namespace_id: str | None = None,
         auto_load: bool = True,
     ):
         """
@@ -66,7 +64,7 @@ class ContextFS:
         )
 
         # Current session
-        self._current_session: Optional[Session] = None
+        self._current_session: Session | None = None
 
         # Auto-load memories
         if auto_load and self.config.auto_load_on_startup:
@@ -74,7 +72,6 @@ class ContextFS:
 
     def _detect_namespace(self) -> str:
         """Detect namespace from current git repo or use global."""
-        import os
         cwd = Path.cwd()
 
         # Walk up to find .git
@@ -158,9 +155,13 @@ class ContextFS:
         """)
 
         # Indexes
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace_id)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace_id)"
+        )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions(namespace_id)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions(namespace_id)"
+        )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_label ON sessions(label)")
 
         conn.commit()
@@ -177,10 +178,10 @@ class ContextFS:
         self,
         content: str,
         type: MemoryType = MemoryType.FACT,
-        tags: Optional[list[str]] = None,
-        summary: Optional[str] = None,
-        namespace_id: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        namespace_id: str | None = None,
+        metadata: dict | None = None,
     ) -> Memory:
         """
         Save content to memory.
@@ -210,30 +211,36 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO memories (id, content, type, tags, summary, namespace_id,
                                   source_file, source_repo, session_id, created_at, updated_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            memory.id,
-            memory.content,
-            memory.type.value,
-            json.dumps(memory.tags),
-            memory.summary,
-            memory.namespace_id,
-            memory.source_file,
-            memory.source_repo,
-            memory.session_id,
-            memory.created_at.isoformat(),
-            memory.updated_at.isoformat(),
-            json.dumps(memory.metadata),
-        ))
+        """,
+            (
+                memory.id,
+                memory.content,
+                memory.type.value,
+                json.dumps(memory.tags),
+                memory.summary,
+                memory.namespace_id,
+                memory.source_file,
+                memory.source_repo,
+                memory.session_id,
+                memory.created_at.isoformat(),
+                memory.updated_at.isoformat(),
+                json.dumps(memory.metadata),
+            ),
+        )
 
         # Update FTS
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO memories_fts (id, content, summary, tags)
             VALUES (?, ?, ?, ?)
-        """, (memory.id, memory.content, memory.summary, " ".join(memory.tags)))
+        """,
+            (memory.id, memory.content, memory.summary, " ".join(memory.tags)),
+        )
 
         conn.commit()
         conn.close()
@@ -247,9 +254,9 @@ class ContextFS:
         self,
         query: str,
         limit: int = 10,
-        type: Optional[MemoryType] = None,
-        tags: Optional[list[str]] = None,
-        namespace_id: Optional[str] = None,
+        type: MemoryType | None = None,
+        tags: list[str] | None = None,
+        namespace_id: str | None = None,
         use_semantic: bool = True,
     ) -> list[SearchResult]:
         """
@@ -281,9 +288,9 @@ class ContextFS:
         self,
         query: str,
         limit: int,
-        type: Optional[MemoryType],
-        tags: Optional[list[str]],
-        namespace_id: Optional[str],
+        type: MemoryType | None,
+        tags: list[str] | None,
+        namespace_id: str | None,
     ) -> list[SearchResult]:
         """Full-text search fallback."""
         conn = sqlite3.connect(self._db_path)
@@ -317,7 +324,7 @@ class ContextFS:
 
         return results
 
-    def recall(self, memory_id: str) -> Optional[Memory]:
+    def recall(self, memory_id: str) -> Memory | None:
         """
         Recall a specific memory by ID.
 
@@ -330,10 +337,7 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT * FROM memories WHERE id LIKE ?",
-            (f"{memory_id}%",)
-        )
+        cursor.execute("SELECT * FROM memories WHERE id LIKE ?", (f"{memory_id}%",))
         row = cursor.fetchone()
         conn.close()
 
@@ -344,8 +348,8 @@ class ContextFS:
     def list_recent(
         self,
         limit: int = 10,
-        type: Optional[MemoryType] = None,
-        namespace_id: Optional[str] = None,
+        type: MemoryType | None = None,
+        namespace_id: str | None = None,
     ) -> list[Memory]:
         """List recent memories."""
         conn = sqlite3.connect(self._db_path)
@@ -409,9 +413,9 @@ class ContextFS:
     def start_session(
         self,
         tool: str = "contextfs",
-        label: Optional[str] = None,
-        repo_path: Optional[str] = None,
-        branch: Optional[str] = None,
+        label: str | None = None,
+        repo_path: str | None = None,
+        branch: str | None = None,
     ) -> Session:
         """Start a new session."""
         # End current session if exists
@@ -430,22 +434,25 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO sessions (id, label, namespace_id, tool, repo_path, branch,
                                   started_at, ended_at, summary, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            session.id,
-            session.label,
-            session.namespace_id,
-            session.tool,
-            session.repo_path,
-            session.branch,
-            session.started_at.isoformat(),
-            None,
-            None,
-            json.dumps(session.metadata),
-        ))
+        """,
+            (
+                session.id,
+                session.label,
+                session.namespace_id,
+                session.tool,
+                session.repo_path,
+                session.branch,
+                session.started_at.isoformat(),
+                None,
+                None,
+                json.dumps(session.metadata),
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -464,14 +471,17 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             UPDATE sessions SET ended_at = ?, summary = ?
             WHERE id = ?
-        """, (
-            self._current_session.ended_at.isoformat(),
-            self._current_session.summary,
-            self._current_session.id,
-        ))
+        """,
+            (
+                self._current_session.ended_at.isoformat(),
+                self._current_session.summary,
+                self._current_session.id,
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -499,17 +509,20 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO messages (id, session_id, role, content, timestamp, metadata)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            msg.id,
-            self._current_session.id,
-            msg.role,
-            msg.content,
-            msg.timestamp.isoformat(),
-            json.dumps(msg.metadata),
-        ))
+        """,
+            (
+                msg.id,
+                self._current_session.id,
+                msg.role,
+                msg.content,
+                msg.timestamp.isoformat(),
+                json.dumps(msg.metadata),
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -518,23 +531,17 @@ class ContextFS:
 
     def load_session(
         self,
-        session_id: Optional[str] = None,
-        label: Optional[str] = None,
-    ) -> Optional[Session]:
+        session_id: str | None = None,
+        label: str | None = None,
+    ) -> Session | None:
         """Load a session by ID or label."""
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
         if session_id:
-            cursor.execute(
-                "SELECT * FROM sessions WHERE id LIKE ?",
-                (f"{session_id}%",)
-            )
+            cursor.execute("SELECT * FROM sessions WHERE id LIKE ?", (f"{session_id}%",))
         elif label:
-            cursor.execute(
-                "SELECT * FROM sessions WHERE label = ?",
-                (label,)
-            )
+            cursor.execute("SELECT * FROM sessions WHERE label = ?", (label,))
         else:
             return None
 
@@ -558,17 +565,18 @@ class ContextFS:
 
         # Load messages
         cursor.execute(
-            "SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp",
-            (session.id,)
+            "SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp", (session.id,)
         )
         for msg_row in cursor.fetchall():
-            session.messages.append(SessionMessage(
-                id=msg_row[0],
-                role=msg_row[2],
-                content=msg_row[3],
-                timestamp=datetime.fromisoformat(msg_row[4]),
-                metadata=json.loads(msg_row[5]) if msg_row[5] else {},
-            ))
+            session.messages.append(
+                SessionMessage(
+                    id=msg_row[0],
+                    role=msg_row[2],
+                    content=msg_row[3],
+                    timestamp=datetime.fromisoformat(msg_row[4]),
+                    metadata=json.loads(msg_row[5]) if msg_row[5] else {},
+                )
+            )
 
         conn.close()
         return session
@@ -576,8 +584,8 @@ class ContextFS:
     def list_sessions(
         self,
         limit: int = 10,
-        tool: Optional[str] = None,
-        label: Optional[str] = None,
+        tool: str | None = None,
+        label: str | None = None,
     ) -> list[Session]:
         """List recent sessions."""
         conn = sqlite3.connect(self._db_path)
@@ -602,18 +610,20 @@ class ContextFS:
 
         sessions = []
         for row in rows:
-            sessions.append(Session(
-                id=row[0],
-                label=row[1],
-                namespace_id=row[2],
-                tool=row[3],
-                repo_path=row[4],
-                branch=row[5],
-                started_at=datetime.fromisoformat(row[6]),
-                ended_at=datetime.fromisoformat(row[7]) if row[7] else None,
-                summary=row[8],
-                metadata=json.loads(row[9]) if row[9] else {},
-            ))
+            sessions.append(
+                Session(
+                    id=row[0],
+                    label=row[1],
+                    namespace_id=row[2],
+                    tool=row[3],
+                    repo_path=row[4],
+                    branch=row[5],
+                    started_at=datetime.fromisoformat(row[6]),
+                    ended_at=datetime.fromisoformat(row[7]) if row[7] else None,
+                    summary=row[8],
+                    metadata=json.loads(row[9]) if row[9] else {},
+                )
+            )
 
         return sessions
 
@@ -628,7 +638,7 @@ class ContextFS:
 
         return "\n".join(lines)
 
-    def _get_current_branch(self) -> Optional[str]:
+    def _get_current_branch(self) -> str | None:
         """Get current git branch."""
         try:
             head_path = Path.cwd() / ".git" / "HEAD"
@@ -647,7 +657,7 @@ class ContextFS:
         results = self.search(task, limit=limit)
         return [r.memory.to_context_string() for r in results]
 
-    def get_current_session(self) -> Optional[Session]:
+    def get_current_session(self) -> Session | None:
         """Get current active session."""
         return self._current_session
 

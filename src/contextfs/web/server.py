@@ -12,33 +12,34 @@ Provides:
 import asyncio
 import json
 import logging
-from pathlib import Path
-from typing import Optional, Any, List
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
-from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 import uvicorn
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from contextfs.core import ContextFS
-from contextfs.schemas import MemoryType, Memory, Session, SearchResult
 from contextfs.fts import FTSBackend, HybridSearch
+from contextfs.schemas import Memory, MemoryType, SearchResult, Session
 
 logger = logging.getLogger(__name__)
 
 
 # ==================== Pydantic Models ====================
 
+
 class MemoryCreate(BaseModel):
     content: str
     type: str = "fact"
-    tags: List[str] = Field(default_factory=list)
-    summary: Optional[str] = None
-    namespace_id: Optional[str] = None
+    tags: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    namespace_id: str | None = None
     metadata: dict = Field(default_factory=dict)
 
 
@@ -46,12 +47,12 @@ class MemoryResponse(BaseModel):
     id: str
     content: str
     type: str
-    tags: List[str]
-    summary: Optional[str]
+    tags: list[str]
+    summary: str | None
     namespace_id: str
-    source_file: Optional[str]
-    source_repo: Optional[str]
-    session_id: Optional[str]
+    source_file: str | None
+    source_repo: str | None
+    session_id: str | None
     created_at: str
     updated_at: str
     metadata: dict
@@ -60,62 +61,63 @@ class MemoryResponse(BaseModel):
 class SearchResultResponse(BaseModel):
     memory: MemoryResponse
     score: float
-    highlights: List[str] = Field(default_factory=list)
+    highlights: list[str] = Field(default_factory=list)
 
 
 class SessionResponse(BaseModel):
     id: str
-    label: Optional[str]
+    label: str | None
     namespace_id: str
     tool: str
-    repo_path: Optional[str]
-    branch: Optional[str]
+    repo_path: str | None
+    branch: str | None
     started_at: str
-    ended_at: Optional[str]
-    summary: Optional[str]
+    ended_at: str | None
+    summary: str | None
     message_count: int = 0
 
 
 class SessionDetailResponse(SessionResponse):
-    messages: List[dict] = Field(default_factory=list)
+    messages: list[dict] = Field(default_factory=list)
 
 
 class StatsResponse(BaseModel):
     total_memories: int
     memories_by_type: dict
     total_sessions: int
-    namespaces: List[str]
+    namespaces: list[str]
     fts_indexed: int
     rag_indexed: int
 
 
 class APIResponse(BaseModel):
     success: bool
-    data: Optional[Any] = None
-    error: Optional[str] = None
+    data: Any | None = None
+    error: str | None = None
 
 
 class MCPRequest(BaseModel):
     jsonrpc: str = "2.0"
     method: str
     params: dict = Field(default_factory=dict)
-    id: Optional[Any] = None
+    id: Any | None = None
 
 
 class MCPResponse(BaseModel):
     jsonrpc: str = "2.0"
-    result: Optional[Any] = None
-    error: Optional[dict] = None
-    id: Optional[Any] = None
+    result: Any | None = None
+    error: dict | None = None
+    id: Any | None = None
 
 
 # ==================== WebSocket Manager ====================
+
 
 class ConnectionManager:
     """Manage WebSocket connections."""
 
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: list[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -126,18 +128,17 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         for connection in self.active_connections:
-            try:
+            with suppress(Exception):
                 await connection.send_json(message)
-            except Exception:
-                pass
 
 
 # ==================== Application Factory ====================
 
+
 def create_app(
-    ctx: Optional[ContextFS] = None,
-    static_dir: Optional[Path] = None,
-    templates_dir: Optional[Path] = None,
+    ctx: ContextFS | None = None,
+    static_dir: Path | None = None,
+    templates_dir: Path | None = None,
 ) -> FastAPI:
     """
     Create FastAPI application.
@@ -209,13 +210,13 @@ def create_app(
     @app.get("/api/search", response_model=APIResponse)
     async def search(
         q: str = Query(..., description="Search query"),
-        type: Optional[str] = Query(None, description="Memory type filter"),
-        namespace: Optional[str] = Query(None, description="Namespace filter"),
+        type: str | None = Query(None, description="Memory type filter"),
+        namespace: str | None = Query(None, description="Namespace filter"),
         limit: int = Query(20, ge=1, le=100, description="Max results"),
         semantic: bool = Query(True, description="Use semantic search"),
     ):
         """Search memories using semantic or keyword search."""
-        ctx = get_ctx()
+        get_ctx()
         hybrid = get_hybrid()
         fts = get_fts()
 
@@ -253,8 +254,8 @@ def create_app(
     @app.get("/api/memories", response_model=APIResponse)
     async def list_memories(
         limit: int = Query(20, ge=1, le=100),
-        type: Optional[str] = None,
-        namespace: Optional[str] = None,
+        type: str | None = None,
+        namespace: str | None = None,
     ):
         """List recent memories."""
         ctx = get_ctx()
@@ -312,10 +313,12 @@ def create_app(
             )
 
             # Notify WebSocket clients
-            await ws_manager.broadcast({
-                "type": "memory_created",
-                "memory": serialize_memory(memory),
-            })
+            await ws_manager.broadcast(
+                {
+                    "type": "memory_created",
+                    "memory": serialize_memory(memory),
+                }
+            )
 
             return APIResponse(success=True, data=serialize_memory(memory))
 
@@ -332,10 +335,12 @@ def create_app(
             deleted = await asyncio.to_thread(ctx.delete, memory_id)
 
             if deleted:
-                await ws_manager.broadcast({
-                    "type": "memory_deleted",
-                    "id": memory_id,
-                })
+                await ws_manager.broadcast(
+                    {
+                        "type": "memory_deleted",
+                        "id": memory_id,
+                    }
+                )
                 return APIResponse(success=True)
             else:
                 raise HTTPException(status_code=404, detail="Memory not found")
@@ -351,7 +356,7 @@ def create_app(
     @app.get("/api/sessions", response_model=APIResponse)
     async def list_sessions(
         limit: int = Query(20, ge=1, le=100),
-        tool: Optional[str] = None,
+        tool: str | None = None,
     ):
         """List sessions."""
         ctx = get_ctx()
@@ -448,7 +453,7 @@ def create_app(
 
         try:
             memories = await asyncio.to_thread(ctx.list_recent, limit=10000)
-            namespaces = list(set(m.namespace_id for m in memories))
+            namespaces = list({m.namespace_id for m in memories})
             return APIResponse(success=True, data=namespaces)
 
         except Exception as e:
@@ -471,9 +476,7 @@ def create_app(
 
             return JSONResponse(
                 content=data,
-                headers={
-                    "Content-Disposition": 'attachment; filename="contextfs-export.json"'
-                },
+                headers={"Content-Disposition": 'attachment; filename="contextfs-export.json"'},
             )
 
         except Exception as e:
@@ -487,6 +490,7 @@ def create_app(
 
         try:
             from contextfs.sync import PostgresSync
+
             sync = PostgresSync()
             count = await sync.sync_all(ctx)
             return APIResponse(success=True, data={"synced": count})
@@ -544,6 +548,7 @@ def create_app(
     @app.get("/mcp/sse")
     async def mcp_sse():
         """MCP Server-Sent Events endpoint."""
+
         async def event_stream():
             # Send initial tools list
             tools = mcp_tools_list()
@@ -595,6 +600,7 @@ def create_app(
 
 
 # ==================== Helper Functions ====================
+
 
 def serialize_memory(memory: Memory) -> dict:
     """Serialize Memory to dict."""
@@ -652,7 +658,15 @@ def mcp_tools_list() -> dict:
                         "content": {"type": "string", "description": "Content to save"},
                         "type": {
                             "type": "string",
-                            "enum": ["fact", "decision", "procedural", "episodic", "user", "code", "error"],
+                            "enum": [
+                                "fact",
+                                "decision",
+                                "procedural",
+                                "episodic",
+                                "user",
+                                "code",
+                                "error",
+                            ],
                             "default": "fact",
                         },
                         "tags": {"type": "array", "items": {"type": "string"}},
@@ -722,7 +736,9 @@ def mcp_tools_list() -> dict:
     }
 
 
-async def mcp_tools_call(params: dict, ctx: ContextFS, hybrid: HybridSearch, fts: FTSBackend) -> dict:
+async def mcp_tools_call(
+    params: dict, ctx: ContextFS, hybrid: HybridSearch, fts: FTSBackend
+) -> dict:
     """Execute an MCP tool call."""
     tool_name = params.get("name")
     arguments = params.get("arguments", {})
@@ -747,16 +763,17 @@ async def mcp_tools_call(params: dict, ctx: ContextFS, hybrid: HybridSearch, fts
             limit=arguments.get("limit", 10),
             type=MemoryType(arguments["type"]) if arguments.get("type") else None,
         )
-        text = "\n\n".join([
-            f"[{r.memory.type.value}] {r.memory.content[:200]}..."
-            for r in results
-        ])
+        text = "\n\n".join(
+            [f"[{r.memory.type.value}] {r.memory.content[:200]}..." for r in results]
+        )
         return {"content": [{"type": "text", "text": text or "No results found"}]}
 
     elif tool_name == "contextfs_recall":
         memory = await asyncio.to_thread(ctx.recall, arguments["id"])
         if memory:
-            return {"content": [{"type": "text", "text": f"[{memory.type.value}] {memory.content}"}]}
+            return {
+                "content": [{"type": "text", "text": f"[{memory.type.value}] {memory.content}"}]
+            }
         return {"content": [{"type": "text", "text": "Memory not found"}]}
 
     elif tool_name == "contextfs_list":
@@ -765,10 +782,7 @@ async def mcp_tools_call(params: dict, ctx: ContextFS, hybrid: HybridSearch, fts
             limit=arguments.get("limit", 10),
             type=MemoryType(arguments["type"]) if arguments.get("type") else None,
         )
-        text = "\n".join([
-            f"- [{m.type.value}] {m.id[:8]}: {m.content[:100]}..."
-            for m in memories
-        ])
+        text = "\n".join([f"- [{m.type.value}] {m.id[:8]}: {m.content[:100]}..." for m in memories])
         return {"content": [{"type": "text", "text": text or "No memories"}]}
 
     elif tool_name == "contextfs_sessions":
@@ -776,10 +790,7 @@ async def mcp_tools_call(params: dict, ctx: ContextFS, hybrid: HybridSearch, fts
             ctx.list_sessions,
             limit=arguments.get("limit", 10),
         )
-        text = "\n".join([
-            f"- {s.id[:8]}: {s.tool} ({s.started_at.isoformat()})"
-            for s in sessions
-        ])
+        text = "\n".join([f"- {s.id[:8]}: {s.tool} ({s.started_at.isoformat()})" for s in sessions])
         return {"content": [{"type": "text", "text": text or "No sessions"}]}
 
     elif tool_name == "contextfs_load_session":
@@ -789,10 +800,7 @@ async def mcp_tools_call(params: dict, ctx: ContextFS, hybrid: HybridSearch, fts
             label=arguments.get("label"),
         )
         if session:
-            messages = "\n".join([
-                f"{m.role}: {m.content[:200]}"
-                for m in session.messages[-10:]
-            ])
+            messages = "\n".join([f"{m.role}: {m.content[:200]}" for m in session.messages[-10:]])
             return {"content": [{"type": "text", "text": messages or "Empty session"}]}
         return {"content": [{"type": "text", "text": "Session not found"}]}
 
@@ -802,10 +810,11 @@ async def mcp_tools_call(params: dict, ctx: ContextFS, hybrid: HybridSearch, fts
 
 # ==================== Server Runner ====================
 
+
 def run_server(
     host: str = "127.0.0.1",
     port: int = 8765,
-    ctx: Optional[ContextFS] = None,
+    ctx: ContextFS | None = None,
     reload: bool = False,
 ) -> None:
     """

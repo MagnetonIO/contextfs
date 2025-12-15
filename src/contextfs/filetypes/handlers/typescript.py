@@ -9,21 +9,21 @@ Extracts:
 - Enums
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,45 +38,38 @@ class TypeScriptHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    IMPORT_PATTERN = re.compile(
+    IMPORT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"import\s+(?:type\s+)?(?:(?:\{([^}]+)\}|(\w+)|\*\s+as\s+(\w+))\s+from\s+)?['\"]([^'\"]+)['\"]",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    EXPORT_PATTERN = re.compile(
+    EXPORT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|interface|type|enum)\s+(\w+)",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    FUNCTION_PATTERN = re.compile(
+    FUNCTION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<([^>]+)>)?\s*\(([^)]*)\)(?:\s*:\s*([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    ARROW_FUNCTION_PATTERN = re.compile(
+    ARROW_FUNCTION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:export\s+)?(?:const|let|var)\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:<([^>]+)>)?\s*\([^)]*\)\s*(?::\s*[^=]+)?\s*=>",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    CLASS_PATTERN = re.compile(
+    CLASS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:export\s+)?(?:abstract\s+)?class\s+(\w+)(?:<([^>]+)>)?(?:\s+extends\s+(\w+)(?:<[^>]+>)?)?(?:\s+implements\s+([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    INTERFACE_PATTERN = re.compile(
-        r"(?:export\s+)?interface\s+(\w+)(?:<([^>]+)>)?(?:\s+extends\s+([^{]+))?\s*\{",
-        re.MULTILINE
+    INTERFACE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:export\s+)?interface\s+(\w+)(?:<([^>]+)>)?(?:\s+extends\s+([^{]+))?\s*\{", re.MULTILINE
     )
-    TYPE_ALIAS_PATTERN = re.compile(
-        r"(?:export\s+)?type\s+(\w+)(?:<([^>]+)>)?\s*=\s*([^;]+);",
-        re.MULTILINE
+    TYPE_ALIAS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:export\s+)?type\s+(\w+)(?:<([^>]+)>)?\s*=\s*([^;]+);", re.MULTILINE
     )
-    ENUM_PATTERN = re.compile(
-        r"(?:export\s+)?(?:const\s+)?enum\s+(\w+)\s*\{",
-        re.MULTILINE
+    ENUM_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:export\s+)?(?:const\s+)?enum\s+(\w+)\s*\{", re.MULTILINE
     )
-    DECORATOR_PATTERN = re.compile(
-        r"@(\w+)(?:\([^)]*\))?",
-        re.MULTILINE
-    )
-    NAMESPACE_PATTERN = re.compile(
-        r"(?:export\s+)?(?:declare\s+)?(?:namespace|module)\s+(\w+)\s*\{",
-        re.MULTILINE
+    DECORATOR_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"@(\w+)(?:\([^)]*\))?", re.MULTILINE)
+    NAMESPACE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:export\s+)?(?:declare\s+)?(?:namespace|module)\s+(\w+)\s*\{", re.MULTILINE
     )
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
@@ -191,7 +184,7 @@ class TypeScriptHandler(FileTypeHandler):
             interface_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"interface {name}{f'<{generics}>' if generics else ''}",
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
@@ -199,7 +192,7 @@ class TypeScriptHandler(FileTypeHandler):
                     "is_interface": True,
                     "generics": generics,
                     "extends": [e.strip() for e in extends.split(",")] if extends else [],
-                    "is_exported": "export" in content[max(0, match.start()-15):match.start()],
+                    "is_exported": "export" in content[max(0, match.start() - 15) : match.start()],
                 },
             )
             root.children.append(interface_node)
@@ -224,13 +217,15 @@ class TypeScriptHandler(FileTypeHandler):
                 name=name,
                 content=match.group(0),
                 signature=f"type {name}{f'<{generics}>' if generics else ''} = ...",
-                location=SourceLocation(start_line=line_num, end_line=line_num + type_def.count("\n")),
+                location=SourceLocation(
+                    start_line=line_num, end_line=line_num + type_def.count("\n")
+                ),
                 parent_id=root.id,
                 attributes={
                     "is_type_alias": True,
                     "generics": generics,
                     "type_definition": type_def.strip(),
-                    "is_exported": "export" in content[max(0, match.start()-15):match.start()],
+                    "is_exported": "export" in content[max(0, match.start() - 15) : match.start()],
                 },
             )
             root.children.append(type_node)
@@ -254,13 +249,13 @@ class TypeScriptHandler(FileTypeHandler):
             enum_node = DocumentNode(
                 type=NodeType.VARIABLE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
                     "is_enum": True,
                     "is_const_enum": is_const,
-                    "is_exported": "export" in content[max(0, match.start()-15):match.start()],
+                    "is_exported": "export" in content[max(0, match.start() - 15) : match.start()],
                 },
             )
             root.children.append(enum_node)
@@ -289,7 +284,7 @@ class TypeScriptHandler(FileTypeHandler):
             class_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"class {name}{f'<{generics}>' if generics else ''}",
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
@@ -297,8 +292,9 @@ class TypeScriptHandler(FileTypeHandler):
                     "generics": generics,
                     "extends": extends,
                     "implements": [i.strip() for i in implements.split(",")] if implements else [],
-                    "is_abstract": "abstract" in content[max(0, match.start()-15):match.start()],
-                    "is_exported": "export" in content[max(0, match.start()-15):match.start()],
+                    "is_abstract": "abstract"
+                    in content[max(0, match.start() - 15) : match.start()],
+                    "is_exported": "export" in content[max(0, match.start() - 15) : match.start()],
                     "decorators": decorators,
                 },
             )
@@ -326,15 +322,15 @@ class TypeScriptHandler(FileTypeHandler):
             func_node = DocumentNode(
                 type=NodeType.FUNCTION,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"function {name}{f'<{generics}>' if generics else ''}({params}){f': {return_type.strip()}' if return_type else ''}",
                 return_type=return_type.strip() if return_type else None,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
                     "generics": generics,
-                    "is_async": "async" in content[max(0, match.start()-10):match.start()],
-                    "is_exported": "export" in content[max(0, match.start()-15):match.start()],
+                    "is_async": "async" in content[max(0, match.start() - 10) : match.start()],
+                    "is_exported": "export" in content[max(0, match.start() - 15) : match.start()],
                 },
             )
             root.children.append(func_node)
@@ -361,7 +357,7 @@ class TypeScriptHandler(FileTypeHandler):
                     "is_arrow": True,
                     "generics": generics,
                     "is_async": "async" in match.group(0),
-                    "is_exported": "export" in content[max(0, match.start()-15):match.start()],
+                    "is_exported": "export" in content[max(0, match.start() - 15) : match.start()],
                 },
             )
             root.children.append(func_node)
@@ -384,13 +380,13 @@ class TypeScriptHandler(FileTypeHandler):
             ns_node = DocumentNode(
                 type=NodeType.MODULE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
                     "is_namespace": True,
                     "is_declare": "declare" in match.group(0),
-                    "is_exported": "export" in content[max(0, match.start()-15):match.start()],
+                    "is_exported": "export" in content[max(0, match.start() - 15) : match.start()],
                 },
             )
             root.children.append(ns_node)
@@ -426,20 +422,19 @@ class TypeScriptHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk TypeScript by definitions."""
         chunks: list[DocumentChunk] = []

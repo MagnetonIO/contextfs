@@ -8,21 +8,22 @@ Provides Pydantic models for:
 - Cross-references
 """
 
+import hashlib
+import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Any, TypeVar, Generic
-import hashlib
-import uuid
+from typing import Any
 
 from pydantic import BaseModel, Field, computed_field
 
-
 # ==================== Enums ====================
+
 
 class NodeType(str, Enum):
     """Types of AST nodes across all file types."""
+
     # Generic
     ROOT = "root"
     SECTION = "section"
@@ -97,6 +98,7 @@ class NodeType(str, Enum):
 
 class RelationType(str, Enum):
     """Types of relationships between documents/nodes."""
+
     # Code relationships
     IMPORTS = "imports"
     IMPORTED_BY = "imported_by"
@@ -135,6 +137,7 @@ class RelationType(str, Enum):
 
 class ChunkStrategy(str, Enum):
     """Strategies for chunking documents."""
+
     FIXED_SIZE = "fixed_size"
     SEMANTIC = "semantic"
     AST_BOUNDARY = "ast_boundary"
@@ -144,12 +147,14 @@ class ChunkStrategy(str, Enum):
 
 # ==================== Document Models ====================
 
+
 class SourceLocation(BaseModel):
     """Location in source file."""
+
     start_line: int
     end_line: int
-    start_col: Optional[int] = None
-    end_col: Optional[int] = None
+    start_col: int | None = None
+    end_col: int | None = None
 
     @computed_field
     @property
@@ -163,29 +168,30 @@ class DocumentNode(BaseModel):
 
     Represents a structural element like a function, section, or table.
     """
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
     type: NodeType
-    name: Optional[str] = None
+    name: str | None = None
     content: str = ""
-    location: Optional[SourceLocation] = None
+    location: SourceLocation | None = None
 
     # AST structure
     children: list["DocumentNode"] = Field(default_factory=list)
-    parent_id: Optional[str] = None
+    parent_id: str | None = None
 
     # Metadata
     attributes: dict[str, Any] = Field(default_factory=dict)
     annotations: list[str] = Field(default_factory=list)
 
     # For code nodes
-    signature: Optional[str] = None
-    docstring: Optional[str] = None
-    return_type: Optional[str] = None
+    signature: str | None = None
+    docstring: str | None = None
+    return_type: str | None = None
     parameters: list[dict[str, Any]] = Field(default_factory=list)
 
     # For references
-    target: Optional[str] = None  # What this node references
-    resolved_target_id: Optional[str] = None  # Resolved node ID
+    target: str | None = None  # What this node references
+    resolved_target_id: str | None = None  # Resolved node ID
 
     @computed_field
     @property
@@ -215,6 +221,7 @@ class DocumentChunk(BaseModel):
 
     Includes context from the AST and metadata for retrieval.
     """
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
     content: str
 
@@ -222,7 +229,7 @@ class DocumentChunk(BaseModel):
     document_id: str
     file_path: str
     node_ids: list[str] = Field(default_factory=list)  # AST nodes in this chunk
-    location: Optional[SourceLocation] = None
+    location: SourceLocation | None = None
 
     # Chunking metadata
     chunk_index: int = 0
@@ -231,17 +238,17 @@ class DocumentChunk(BaseModel):
 
     # Context for better retrieval
     context_before: str = ""  # Text before this chunk
-    context_after: str = ""   # Text after this chunk
+    context_after: str = ""  # Text after this chunk
     breadcrumb: list[str] = Field(default_factory=list)  # Path in AST
 
     # Semantic metadata
-    summary: Optional[str] = None
+    summary: str | None = None
     keywords: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
 
     # Embedding preparation
-    embedding_text: Optional[str] = None  # Preprocessed text for embedding
-    token_count: Optional[int] = None
+    embedding_text: str | None = None  # Preprocessed text for embedding
+    token_count: int | None = None
 
     @computed_field
     @property
@@ -269,6 +276,7 @@ class ParsedDocument(BaseModel):
     """
     A fully parsed document with AST and metadata.
     """
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     file_path: str
     file_type: str
@@ -288,8 +296,8 @@ class ParsedDocument(BaseModel):
     chunks: list[DocumentChunk] = Field(default_factory=list)
 
     # Metadata
-    title: Optional[str] = None
-    language: Optional[str] = None
+    title: str | None = None
+    language: str | None = None
     created_at: datetime = Field(default_factory=datetime.now)
     parsed_at: datetime = Field(default_factory=datetime.now)
 
@@ -306,14 +314,14 @@ class ParsedDocument(BaseModel):
     def content_hash(self) -> str:
         return hashlib.sha256(self.raw_content.encode()).hexdigest()[:16]
 
-    def get_node(self, node_id: str) -> Optional[DocumentNode]:
+    def get_node(self, node_id: str) -> DocumentNode | None:
         """Find a node by ID."""
         for node in self.root.walk():
             if node.id == node_id:
                 return node
         return None
 
-    def get_symbol(self, name: str) -> Optional[DocumentNode]:
+    def get_symbol(self, name: str) -> DocumentNode | None:
         """Find a symbol by name."""
         return self.symbols.get(name)
 
@@ -324,29 +332,31 @@ class ParsedDocument(BaseModel):
 
 # ==================== Relationship Models ====================
 
+
 class Relationship(BaseModel):
     """
     A relationship between two documents or nodes.
     """
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
     type: RelationType
 
     # Source
     source_document_id: str
-    source_node_id: Optional[str] = None
-    source_name: Optional[str] = None
-    source_path: Optional[str] = None
+    source_node_id: str | None = None
+    source_name: str | None = None
+    source_path: str | None = None
 
     # Target
-    target_document_id: Optional[str] = None  # None if external
-    target_node_id: Optional[str] = None
+    target_document_id: str | None = None  # None if external
+    target_node_id: str | None = None
     target_name: str
-    target_path: Optional[str] = None
+    target_path: str | None = None
 
     # Metadata
     confidence: float = 1.0
-    context: Optional[str] = None  # Surrounding code/text
-    location: Optional[SourceLocation] = None
+    context: str | None = None  # Surrounding code/text
+    location: SourceLocation | None = None
     attributes: dict[str, Any] = Field(default_factory=dict)
 
     created_at: datetime = Field(default_factory=datetime.now)
@@ -363,16 +373,17 @@ class CrossReference(BaseModel):
 
     Used for linking related content across the codebase.
     """
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
 
     # Source
     source_document_id: str
-    source_chunk_id: Optional[str] = None
+    source_chunk_id: str | None = None
     source_text: str
 
     # Target
     target_document_id: str
-    target_chunk_id: Optional[str] = None
+    target_chunk_id: str | None = None
     target_text: str
 
     # Reference type
@@ -381,12 +392,13 @@ class CrossReference(BaseModel):
     # Metadata
     bidirectional: bool = False
     weight: float = 1.0
-    context: Optional[str] = None
+    context: str | None = None
 
     created_at: datetime = Field(default_factory=datetime.now)
 
 
 # ==================== File Handler Base ====================
+
 
 class FileTypeHandler(BaseModel, ABC):
     """
@@ -398,6 +410,7 @@ class FileTypeHandler(BaseModel, ABC):
     - extract_relationships(): Find relationships to other files
     - prepare_for_embedding(): Optimize text for vector search
     """
+
     # File type identification
     name: str
     extensions: list[str]
@@ -433,8 +446,8 @@ class FileTypeHandler(BaseModel, ABC):
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """
         Split document into chunks for embedding.
@@ -493,7 +506,7 @@ class FileTypeHandler(BaseModel, ABC):
         path = Path(file_path)
         return path.suffix.lower() in self.extensions
 
-    def get_language(self, file_path: str) -> Optional[str]:
+    def get_language(self, file_path: str) -> str | None:
         """Get the language/format of the file."""
         return self.name
 

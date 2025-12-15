@@ -4,15 +4,14 @@ CLI for ContextFS.
 Provides command-line access to memory operations.
 """
 
-import typer
-from typing import Optional
 from pathlib import Path
+
+import typer
 from rich.console import Console
 from rich.table import Table
 
 from contextfs.core import ContextFS
 from contextfs.schemas import MemoryType
-
 
 app = typer.Typer(
     name="contextfs",
@@ -31,8 +30,8 @@ def get_ctx() -> ContextFS:
 def save(
     content: str = typer.Argument(..., help="Content to save"),
     type: str = typer.Option("fact", "--type", "-t", help="Memory type"),
-    tags: Optional[str] = typer.Option(None, "--tags", help="Comma-separated tags"),
-    summary: Optional[str] = typer.Option(None, "--summary", "-s", help="Brief summary"),
+    tags: str | None = typer.Option(None, "--tags", help="Comma-separated tags"),
+    summary: str | None = typer.Option(None, "--summary", "-s", help="Brief summary"),
 ):
     """Save a memory."""
     ctx = get_ctx()
@@ -52,7 +51,7 @@ def save(
         summary=summary,
     )
 
-    console.print(f"[green]Memory saved[/green]")
+    console.print("[green]Memory saved[/green]")
     console.print(f"ID: {memory.id}")
     console.print(f"Type: {memory.type.value}")
 
@@ -61,7 +60,7 @@ def save(
 def search(
     query: str = typer.Argument(..., help="Search query"),
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
-    type: Optional[str] = typer.Option(None, "--type", "-t", help="Filter by type"),
+    type: str | None = typer.Option(None, "--type", "-t", help="Filter by type"),
 ):
     """Search memories."""
     ctx = get_ctx()
@@ -117,7 +116,7 @@ def recall(
 @app.command("list")
 def list_memories(
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
-    type: Optional[str] = typer.Option(None, "--type", "-t", help="Filter by type"),
+    type: str | None = typer.Option(None, "--type", "-t", help="Filter by type"),
 ):
     """List recent memories."""
     ctx = get_ctx()
@@ -168,14 +167,14 @@ def delete(
     if ctx.delete(memory.id):
         console.print(f"[green]Memory deleted: {memory.id}[/green]")
     else:
-        console.print(f"[red]Failed to delete memory[/red]")
+        console.print("[red]Failed to delete memory[/red]")
 
 
 @app.command()
 def sessions(
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
-    tool: Optional[str] = typer.Option(None, "--tool", help="Filter by tool"),
-    label: Optional[str] = typer.Option(None, "--label", help="Filter by label"),
+    tool: str | None = typer.Option(None, "--tool", help="Filter by tool"),
+    label: str | None = typer.Option(None, "--label", help="Filter by label"),
 ):
     """List recent sessions."""
     ctx = get_ctx()
@@ -245,7 +244,7 @@ def status():
 
 @app.command()
 def init(
-    path: Optional[Path] = typer.Argument(None, help="Directory to initialize"),
+    path: Path | None = typer.Argument(None, help="Directory to initialize"),
 ):
     """Initialize ContextFS in a directory."""
     target = path or Path.cwd()
@@ -272,6 +271,7 @@ def init(
 def serve():
     """Start the MCP server."""
     from contextfs.mcp_server import main as mcp_main
+
     console.print("[green]Starting ContextFS MCP server...[/green]")
     mcp_main()
 

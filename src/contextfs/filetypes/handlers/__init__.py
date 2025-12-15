@@ -26,23 +26,23 @@ To add a new handler:
 4. Add to this `__init__.py` and `DEFAULT_HANDLERS` in `registry.py`
 """
 
-from contextfs.filetypes.handlers.python import PythonHandler
-from contextfs.filetypes.handlers.javascript import JavaScriptHandler
-from contextfs.filetypes.handlers.typescript import TypeScriptHandler
-from contextfs.filetypes.handlers.java import JavaHandler
+from contextfs.filetypes.handlers.config import JSONHandler, TOMLHandler, YAMLHandler
 from contextfs.filetypes.handlers.cpp import CppHandler
 from contextfs.filetypes.handlers.csharp import CSharpHandler
+from contextfs.filetypes.handlers.generic import GenericTextHandler
 from contextfs.filetypes.handlers.go import GoHandler
-from contextfs.filetypes.handlers.rust import RustHandler
-from contextfs.filetypes.handlers.php import PHPHandler
-from contextfs.filetypes.handlers.ruby import RubyHandler
-from contextfs.filetypes.handlers.swift import SwiftHandler
-from contextfs.filetypes.handlers.shell import ShellHandler
-from contextfs.filetypes.handlers.sql import SQLHandler
+from contextfs.filetypes.handlers.java import JavaHandler
+from contextfs.filetypes.handlers.javascript import JavaScriptHandler
 from contextfs.filetypes.handlers.latex import LaTeXHandler
 from contextfs.filetypes.handlers.markdown import MarkdownHandler
-from contextfs.filetypes.handlers.config import JSONHandler, YAMLHandler, TOMLHandler
-from contextfs.filetypes.handlers.generic import GenericTextHandler
+from contextfs.filetypes.handlers.php import PHPHandler
+from contextfs.filetypes.handlers.python import PythonHandler
+from contextfs.filetypes.handlers.ruby import RubyHandler
+from contextfs.filetypes.handlers.rust import RustHandler
+from contextfs.filetypes.handlers.shell import ShellHandler
+from contextfs.filetypes.handlers.sql import SQLHandler
+from contextfs.filetypes.handlers.swift import SwiftHandler
+from contextfs.filetypes.handlers.typescript import TypeScriptHandler
 
 __all__ = [
     # Top 10 languages

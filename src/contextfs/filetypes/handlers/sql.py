@@ -9,21 +9,21 @@ Extracts:
 - Comments and documentation
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,29 +38,29 @@ class SQLHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # SQL patterns
-    CREATE_TABLE_PATTERN = re.compile(
+    CREATE_TABLE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"CREATE\s+(?:TEMP(?:ORARY)?\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([`\"\[]?\w+[`\"\]]?(?:\.[`\"\[]?\w+[`\"\]]?)?)\s*\((.*?)\)\s*;?",
-        re.IGNORECASE | re.DOTALL
+        re.IGNORECASE | re.DOTALL,
     )
-    CREATE_VIEW_PATTERN = re.compile(
+    CREATE_VIEW_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?VIEW\s+([`\"\[]?\w+[`\"\]]?(?:\.[`\"\[]?\w+[`\"\]]?)?)\s+AS\s+(.*?);",
-        re.IGNORECASE | re.DOTALL
+        re.IGNORECASE | re.DOTALL,
     )
-    CREATE_INDEX_PATTERN = re.compile(
+    CREATE_INDEX_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?([`\"\[]?\w+[`\"\]]?)\s+ON\s+([`\"\[]?\w+[`\"\]]?)\s*\((.*?)\)\s*;?",
-        re.IGNORECASE | re.DOTALL
+        re.IGNORECASE | re.DOTALL,
     )
-    CREATE_FUNCTION_PATTERN = re.compile(
+    CREATE_FUNCTION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([`\"\[]?\w+[`\"\]]?)\s*\((.*?)\).*?(?:RETURNS|LANGUAGE)",
-        re.IGNORECASE | re.DOTALL
+        re.IGNORECASE | re.DOTALL,
     )
-    FOREIGN_KEY_PATTERN = re.compile(
+    FOREIGN_KEY_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+([`\"\[]?\w+[`\"\]]?)\s*\(([^)]+)\)",
-        re.IGNORECASE
+        re.IGNORECASE,
     )
-    COLUMN_PATTERN = re.compile(
+    COLUMN_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"([`\"\[]?\w+[`\"\]]?)\s+([\w\(\),\s]+?)(?:(?:NOT\s+NULL|NULL|PRIMARY\s+KEY|UNIQUE|DEFAULT|REFERENCES|CHECK|CONSTRAINT)\b.*?)?(?:,|$)",
-        re.IGNORECASE
+        re.IGNORECASE,
     )
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
@@ -120,7 +120,6 @@ class SQLHandler(FileTypeHandler):
         current_start = 1
         in_string = False
         string_char = None
-        line_num = 1
 
         lines = content.split("\n")
 
@@ -132,7 +131,7 @@ class SQLHandler(FileTypeHandler):
                     string_char = char
                 elif in_string and char == string_char:
                     # Check for escaped quote
-                    if j > 0 and line[j-1] != "\\":
+                    if j > 0 and line[j - 1] != "\\":
                         in_string = False
 
             current_stmt.append(line)
@@ -158,7 +157,7 @@ class SQLHandler(FileTypeHandler):
         content: str,
         start_line: int,
         parent_id: str,
-    ) -> Optional[DocumentNode]:
+    ) -> DocumentNode | None:
         """Parse a single SQL statement."""
         content_upper = content.upper().strip()
         end_line = start_line + content.count("\n")
@@ -262,7 +261,9 @@ class SQLHandler(FileTypeHandler):
 
         # INSERT
         if content_upper.startswith("INSERT"):
-            table_match = re.search(r"INSERT\s+INTO\s+([`\"\[]?\w+[`\"\]]?)", content, re.IGNORECASE)
+            table_match = re.search(
+                r"INSERT\s+INTO\s+([`\"\[]?\w+[`\"\]]?)", content, re.IGNORECASE
+            )
             table_name = self._clean_identifier(table_match.group(1)) if table_match else None
 
             return DocumentNode(
@@ -290,7 +291,9 @@ class SQLHandler(FileTypeHandler):
 
         # DELETE
         if content_upper.startswith("DELETE"):
-            table_match = re.search(r"DELETE\s+FROM\s+([`\"\[]?\w+[`\"\]]?)", content, re.IGNORECASE)
+            table_match = re.search(
+                r"DELETE\s+FROM\s+([`\"\[]?\w+[`\"\]]?)", content, re.IGNORECASE
+            )
             table_name = self._clean_identifier(table_match.group(1)) if table_match else None
 
             return DocumentNode(
@@ -324,7 +327,7 @@ class SQLHandler(FileTypeHandler):
 
     def _clean_identifier(self, name: str) -> str:
         """Remove quotes/brackets from identifier."""
-        return name.strip("`\"[]")
+        return name.strip('`"[]')
 
     def _parse_columns(self, columns_str: str) -> list[dict]:
         """Parse column definitions."""
@@ -354,12 +357,14 @@ class SQLHandler(FileTypeHandler):
 
         return columns
 
-    def _parse_single_column(self, col_str: str) -> Optional[dict]:
+    def _parse_single_column(self, col_str: str) -> dict | None:
         """Parse a single column definition."""
         col_str = col_str.strip()
 
         # Skip constraints
-        if col_str.upper().startswith(("PRIMARY KEY", "FOREIGN KEY", "CONSTRAINT", "UNIQUE", "CHECK", "INDEX")):
+        if col_str.upper().startswith(
+            ("PRIMARY KEY", "FOREIGN KEY", "CONSTRAINT", "UNIQUE", "CHECK", "INDEX")
+        ):
             return None
 
         # Extract column name and type
@@ -382,7 +387,7 @@ class SQLHandler(FileTypeHandler):
             "default": self._extract_default(rest),
         }
 
-    def _extract_default(self, rest: str) -> Optional[str]:
+    def _extract_default(self, rest: str) -> str | None:
         """Extract default value."""
         match = re.search(r"DEFAULT\s+([^\s,]+)", rest, re.IGNORECASE)
         return match.group(1) if match else None
@@ -392,7 +397,9 @@ class SQLHandler(FileTypeHandler):
         pks = []
 
         # Inline PRIMARY KEY
-        for match in re.finditer(r"([`\"\[]?\w+[`\"\]]?)\s+\w+.*?PRIMARY\s+KEY", columns_str, re.IGNORECASE):
+        for match in re.finditer(
+            r"([`\"\[]?\w+[`\"\]]?)\s+\w+.*?PRIMARY\s+KEY", columns_str, re.IGNORECASE
+        ):
             pks.append(self._clean_identifier(match.group(1)))
 
         # Constraint PRIMARY KEY
@@ -445,7 +452,7 @@ class SQLHandler(FileTypeHandler):
 
         return list(tables)
 
-    def _extract_function_language(self, content: str) -> Optional[str]:
+    def _extract_function_language(self, content: str) -> str | None:
         """Extract function language (PL/pgSQL, etc.)."""
         match = re.search(r"LANGUAGE\s+(\w+)", content, re.IGNORECASE)
         return match.group(1) if match else None
@@ -468,8 +475,8 @@ class SQLHandler(FileTypeHandler):
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk SQL document by statements."""
         chunks: list[DocumentChunk] = []

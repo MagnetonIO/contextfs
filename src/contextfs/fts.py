@@ -5,11 +5,10 @@ Provides BM25-ranked keyword search as a lightweight alternative to RAG.
 Can be used standalone or alongside the RAG backend for hybrid search.
 """
 
-import sqlite3
 import json
-from pathlib import Path
-from typing import Optional
+import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 from contextfs.schemas import Memory, MemoryType, SearchResult
 
@@ -107,9 +106,9 @@ class FTSBackend:
         self,
         query: str,
         limit: int = 10,
-        type: Optional[MemoryType] = None,
-        tags: Optional[list[str]] = None,
-        namespace_id: Optional[str] = None,
+        type: MemoryType | None = None,
+        tags: list[str] | None = None,
+        namespace_id: str | None = None,
         min_score: float = 0.0,
     ) -> list[SearchResult]:
         """
@@ -177,11 +176,13 @@ class FTSBackend:
             if tags and not any(t in memory.tags for t in tags):
                 continue
 
-            results.append(SearchResult(
-                memory=memory,
-                score=score,
-                highlights=self._get_highlights(memory.content, query),
-            ))
+            results.append(
+                SearchResult(
+                    memory=memory,
+                    score=score,
+                    highlights=self._get_highlights(memory.content, query),
+                )
+            )
 
             if len(results) >= limit:
                 break
@@ -199,7 +200,7 @@ class FTSBackend:
         - Column targeting: content:word
         """
         # Escape special characters if not using advanced syntax
-        if not any(c in query for c in ['"', '*', 'AND', 'OR', 'NOT', ':']):
+        if not any(c in query for c in ['"', "*", "AND", "OR", "NOT", ":"]):
             # Split into words and add prefix matching for better recall
             words = query.strip().split()
             if len(words) == 1:
@@ -214,8 +215,8 @@ class FTSBackend:
         self,
         query: str,
         limit: int,
-        type: Optional[MemoryType],
-        namespace_id: Optional[str],
+        type: MemoryType | None,
+        namespace_id: str | None,
     ) -> list[SearchResult]:
         """Fallback LIKE-based search."""
         conn = sqlite3.connect(self.db_path)
@@ -238,19 +239,16 @@ class FTSBackend:
         rows = cursor.fetchall()
         conn.close()
 
-        return [
-            SearchResult(memory=self._row_to_memory(row), score=0.5)
-            for row in rows
-        ]
+        return [SearchResult(memory=self._row_to_memory(row), score=0.5) for row in rows]
 
     def _get_highlights(self, content: str, query: str, context: int = 50) -> list[str]:
         """Extract highlighted snippets around query matches."""
         highlights = []
-        words = query.lower().replace('"', '').split()
+        words = query.lower().replace('"', "").split()
         content_lower = content.lower()
 
         for word in words:
-            word_clean = word.rstrip('*')
+            word_clean = word.rstrip("*")
             idx = content_lower.find(word_clean)
             if idx >= 0:
                 start = max(0, idx - context)
@@ -320,9 +318,9 @@ class HybridSearch:
         self,
         query: str,
         limit: int = 10,
-        type: Optional[MemoryType] = None,
-        tags: Optional[list[str]] = None,
-        namespace_id: Optional[str] = None,
+        type: MemoryType | None = None,
+        tags: list[str] | None = None,
+        namespace_id: str | None = None,
         fts_weight: float = 0.4,
         rag_weight: float = 0.6,
     ) -> list[SearchResult]:
@@ -409,10 +407,12 @@ class HybridSearch:
             max_score = (fts_weight + rag_weight) / (k + 1)
             normalized_score = min(1.0, scores[memory_id] / max_score)
 
-            results.append(SearchResult(
-                memory=memories[memory_id],
-                score=normalized_score,
-                highlights=highlights.get(memory_id, []),
-            ))
+            results.append(
+                SearchResult(
+                    memory=memories[memory_id],
+                    score=normalized_score,
+                    highlights=highlights.get(memory_id, []),
+                )
+            )
 
         return results

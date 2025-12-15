@@ -7,15 +7,9 @@ Provides:
 - Auto-save sessions on exit
 """
 
-import json
-import os
-import sys
 from pathlib import Path
-from typing import Optional
-from datetime import datetime
 
 from contextfs.core import ContextFS
-from contextfs.schemas import MemoryType
 
 
 class ClaudeCodePlugin:
@@ -26,7 +20,7 @@ class ClaudeCodePlugin:
     capture and inject context.
     """
 
-    def __init__(self, ctx: Optional[ContextFS] = None):
+    def __init__(self, ctx: ContextFS | None = None):
         """
         Initialize Claude Code plugin.
 
@@ -172,7 +166,7 @@ if __name__ == "__main__":
         """Install search skill."""
         self._skills_dir.mkdir(parents=True, exist_ok=True)
 
-        search_skill = '''# ContextFS Search Skill
+        search_skill = """# ContextFS Search Skill
 
 Search your AI memory for relevant context.
 
@@ -203,11 +197,12 @@ results = ctx.search(query, limit=5)
 for r in results:
     print(f"[{r.memory.type.value}] {r.memory.content}")
 ```
-'''
+"""
         (self._skills_dir / "contextfs-search.md").write_text(search_skill)
 
 
 # Hook entry points for direct execution
+
 
 def session_start_hook():
     """Entry point for session start hook."""
@@ -235,6 +230,7 @@ def capture_message_hook(role: str, content: str):
 
 
 # CLI commands
+
 
 def install_claude_code():
     """Install Claude Code plugin."""

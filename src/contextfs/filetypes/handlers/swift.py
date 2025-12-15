@@ -9,21 +9,21 @@ Extracts:
 - Generics and associated types
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,45 +38,44 @@ class SwiftHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    IMPORT_PATTERN = re.compile(
-        r"import\s+(?:(\w+)\s+)?(\w+(?:\.\w+)*)",
-        re.MULTILINE
+    IMPORT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"import\s+(?:(\w+)\s+)?(\w+(?:\.\w+)*)", re.MULTILINE
     )
-    CLASS_PATTERN = re.compile(
+    CLASS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:@\w+(?:\([^)]*\))?\s*)*(?:(open|public|internal|fileprivate|private)\s+)?(?:(final)\s+)?class\s+(\w+)(?:<([^>]+)>)?(?:\s*:\s*([^{]+))?\s*(?:where\s+[^{]+)?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    STRUCT_PATTERN = re.compile(
+    STRUCT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:@\w+(?:\([^)]*\))?\s*)*(?:(public|internal|fileprivate|private)\s+)?struct\s+(\w+)(?:<([^>]+)>)?(?:\s*:\s*([^{]+))?\s*(?:where\s+[^{]+)?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    ENUM_PATTERN = re.compile(
+    ENUM_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:@\w+(?:\([^)]*\))?\s*)*(?:(public|internal|fileprivate|private)\s+)?(?:indirect\s+)?enum\s+(\w+)(?:<([^>]+)>)?(?:\s*:\s*([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    PROTOCOL_PATTERN = re.compile(
+    PROTOCOL_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:@\w+(?:\([^)]*\))?\s*)*(?:(public|internal|fileprivate|private)\s+)?protocol\s+(\w+)(?:\s*:\s*([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    EXTENSION_PATTERN = re.compile(
+    EXTENSION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|internal|fileprivate|private)\s+)?extension\s+(\w+)(?:<[^>]+>)?(?:\s*:\s*([^{]+))?\s*(?:where\s+[^{]+)?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    FUNC_PATTERN = re.compile(
+    FUNC_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:@\w+(?:\([^)]*\))?\s*)*(?:(open|public|internal|fileprivate|private)\s+)?(?:(static|class|mutating|override)\s+)?func\s+(\w+)(?:<([^>]+)>)?\s*\(([^)]*)\)(?:\s*(?:throws|rethrows))?\s*(?:->\s*([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    INIT_PATTERN = re.compile(
+    INIT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|internal|fileprivate|private)\s+)?(?:(convenience|required)\s+)?init(?:\?|!)?\s*\(([^)]*)\)(?:\s*throws)?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    PROPERTY_PATTERN = re.compile(
+    PROPERTY_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|internal|fileprivate|private)\s+)?(?:(static|class|lazy|weak)\s+)?(?:var|let)\s+(\w+)\s*:\s*([^={\n]+)",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    TYPEALIAS_PATTERN = re.compile(
+    TYPEALIAS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|internal|fileprivate|private)\s+)?typealias\s+(\w+)(?:<([^>]+)>)?\s*=\s*([^\n]+)",
-        re.MULTILINE
+        re.MULTILINE,
     )
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
@@ -199,7 +198,7 @@ class SwiftHandler(FileTypeHandler):
             class_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"class {name}{f'<{generics}>' if generics else ''}",
                 docstring=doc_comment,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -237,7 +236,7 @@ class SwiftHandler(FileTypeHandler):
             struct_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"struct {name}{f'<{generics}>' if generics else ''}",
                 docstring=doc_comment,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -263,7 +262,7 @@ class SwiftHandler(FileTypeHandler):
             access = match.group(1) or "internal"
             name = match.group(2)
             generics = match.group(3)
-            raw_type_or_protocols = match.group(4)
+            match.group(4)
 
             start_pos = match.start()
             line_num = content[:start_pos].count("\n") + 1
@@ -274,7 +273,7 @@ class SwiftHandler(FileTypeHandler):
             enum_node = DocumentNode(
                 type=NodeType.VARIABLE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"enum {name}{f'<{generics}>' if generics else ''}",
                 docstring=doc_comment,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -283,7 +282,8 @@ class SwiftHandler(FileTypeHandler):
                     "is_enum": True,
                     "access": access,
                     "generics": generics,
-                    "is_indirect": "indirect" in content[max(0, match.start()-20):match.start()],
+                    "is_indirect": "indirect"
+                    in content[max(0, match.start() - 20) : match.start()],
                 },
             )
             root.children.append(enum_node)
@@ -310,7 +310,7 @@ class SwiftHandler(FileTypeHandler):
             protocol_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"protocol {name}",
                 docstring=doc_comment,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -332,7 +332,7 @@ class SwiftHandler(FileTypeHandler):
     ) -> None:
         """Extract extension definitions."""
         for match in self.EXTENSION_PATTERN.finditer(content):
-            access = match.group(1)
+            match.group(1)
             extended_type = match.group(2)
             protocols = match.group(3)
 
@@ -345,7 +345,7 @@ class SwiftHandler(FileTypeHandler):
             ext_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=ext_name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=ext_name,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
@@ -367,7 +367,7 @@ class SwiftHandler(FileTypeHandler):
         """Extract standalone function definitions."""
         for match in self.FUNC_PATTERN.finditer(content):
             # Skip if inside a type
-            before = content[:match.start()]
+            before = content[: match.start()]
             if before.count("{") != before.count("}"):
                 continue
 
@@ -387,7 +387,7 @@ class SwiftHandler(FileTypeHandler):
             func_node = DocumentNode(
                 type=NodeType.FUNCTION,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"func {name}({params}){f' -> {return_type.strip()}' if return_type else ''}",
                 return_type=return_type.strip() if return_type else None,
                 docstring=doc_comment,
@@ -407,9 +407,11 @@ class SwiftHandler(FileTypeHandler):
     def _is_protocol_name(self, name: str) -> bool:
         """Check if name follows Swift protocol naming convention."""
         # Protocols often end with 'able', 'ible', 'Protocol', or 'Delegate'
-        return any(name.endswith(suffix) for suffix in ["able", "ible", "Protocol", "Delegate", "Type"])
+        return any(
+            name.endswith(suffix) for suffix in ["able", "ible", "Protocol", "Delegate", "Type"]
+        )
 
-    def _find_doc_comment(self, content: str, pos: int) -> Optional[str]:
+    def _find_doc_comment(self, content: str, pos: int) -> str | None:
         """Find Swift doc comment preceding a position."""
         search_start = max(0, pos - 500)
         segment = content[search_start:pos]
@@ -420,9 +422,7 @@ class SwiftHandler(FileTypeHandler):
             line = line.strip()
             if line.startswith("///"):
                 doc_lines.insert(0, line[3:].strip())
-            elif line.startswith("@"):
-                continue
-            elif not line:
+            elif line.startswith("@") or not line:
                 continue
             else:
                 break
@@ -456,20 +456,19 @@ class SwiftHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk Swift by type/function definitions."""
         chunks: list[DocumentChunk] = []

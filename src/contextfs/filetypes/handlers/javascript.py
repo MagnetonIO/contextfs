@@ -8,21 +8,21 @@ Extracts:
 - React components
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,35 +41,33 @@ class JavaScriptHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    IMPORT_PATTERN = re.compile(
+    IMPORT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"import\s+(?:(?:\{([^}]+)\}|(\w+)|\*\s+as\s+(\w+))\s+from\s+)?['\"]([^'\"]+)['\"]",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    EXPORT_PATTERN = re.compile(
+    EXPORT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|interface|type)\s+(\w+)",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    FUNCTION_PATTERN = re.compile(
+    FUNCTION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)(?:\s*:\s*([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    ARROW_FUNCTION_PATTERN = re.compile(
+    ARROW_FUNCTION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*(?::\s*[^=]+)?\s*=>",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    CLASS_PATTERN = re.compile(
+    CLASS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:export\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    INTERFACE_PATTERN = re.compile(
-        r"(?:export\s+)?interface\s+(\w+)(?:\s+extends\s+([^{]+))?\s*\{",
-        re.MULTILINE
+    INTERFACE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:export\s+)?interface\s+(\w+)(?:\s+extends\s+([^{]+))?\s*\{", re.MULTILINE
     )
-    TYPE_PATTERN = re.compile(
-        r"(?:export\s+)?type\s+(\w+)(?:<[^>]+>)?\s*=",
-        re.MULTILINE
+    TYPE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:export\s+)?type\s+(\w+)(?:<[^>]+>)?\s*=", re.MULTILINE
     )
-    JSDOC_PATTERN = re.compile(r"/\*\*\s*(.*?)\s*\*/", re.DOTALL)
+    JSDOC_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"/\*\*\s*(.*?)\s*\*/", re.DOTALL)
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
         """Parse JavaScript/TypeScript file."""
@@ -183,15 +181,15 @@ class JavaScriptHandler(FileTypeHandler):
             func_node = DocumentNode(
                 type=NodeType.FUNCTION,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"function {name}({params}){': ' + return_type.strip() if return_type else ''}",
                 docstring=jsdoc,
                 return_type=return_type.strip() if return_type else None,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
-                    "is_async": "async" in content[max(0, match.start()-10):match.start()],
-                    "is_exported": "export" in content[max(0, match.start()-15):match.start()],
+                    "is_async": "async" in content[max(0, match.start() - 10) : match.start()],
+                    "is_exported": "export" in content[max(0, match.start() - 15) : match.start()],
                 },
             )
             root.children.append(func_node)
@@ -214,7 +212,7 @@ class JavaScriptHandler(FileTypeHandler):
                 parent_id=root.id,
                 attributes={
                     "is_arrow": True,
-                    "is_async": "async" in content[max(0, match.start()-10):match.start()],
+                    "is_async": "async" in content[max(0, match.start() - 10) : match.start()],
                 },
             )
             root.children.append(func_node)
@@ -240,15 +238,16 @@ class JavaScriptHandler(FileTypeHandler):
             class_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 docstring=jsdoc,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
                     "extends": extends,
                     "implements": [i.strip() for i in implements.split(",")] if implements else [],
-                    "is_exported": "export" in content[max(0, match.start()-15):match.start()],
-                    "is_abstract": "abstract" in content[max(0, match.start()-15):match.start()],
+                    "is_exported": "export" in content[max(0, match.start() - 15) : match.start()],
+                    "is_abstract": "abstract"
+                    in content[max(0, match.start() - 15) : match.start()],
                 },
             )
             root.children.append(class_node)
@@ -272,7 +271,7 @@ class JavaScriptHandler(FileTypeHandler):
             interface_node = DocumentNode(
                 type=NodeType.CLASS,  # Using CLASS for interface
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
@@ -349,16 +348,15 @@ class JavaScriptHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
-    def _find_preceding_jsdoc(self, content: str, pos: int) -> Optional[str]:
+    def _find_preceding_jsdoc(self, content: str, pos: int) -> str | None:
         """Find JSDoc comment preceding a position."""
         # Look backwards for */
         search_start = max(0, pos - 500)
@@ -372,8 +370,8 @@ class JavaScriptHandler(FileTypeHandler):
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk JavaScript/TypeScript by definitions."""
         chunks: list[DocumentChunk] = []

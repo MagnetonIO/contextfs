@@ -9,21 +9,21 @@ Extracts:
 - Generics
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,35 +38,33 @@ class CSharpHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    USING_PATTERN = re.compile(
-        r"using\s+(?:static\s+)?([\w.]+)(?:\s*=\s*([\w.]+))?\s*;",
-        re.MULTILINE
+    USING_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"using\s+(?:static\s+)?([\w.]+)(?:\s*=\s*([\w.]+))?\s*;", re.MULTILINE
     )
-    NAMESPACE_PATTERN = re.compile(
-        r"namespace\s+([\w.]+)\s*[{;]",
-        re.MULTILINE
+    NAMESPACE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"namespace\s+([\w.]+)\s*[{;]", re.MULTILINE
     )
-    CLASS_PATTERN = re.compile(
+    CLASS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:\[([^\]]+)\]\s*)*(?:(public|private|protected|internal)\s+)?(?:(abstract|sealed|static|partial)\s+)*(?:(class|struct|record|interface))\s+(\w+)(?:<([^>]+)>)?(?:\s*:\s*([^{]+))?\s*(?:where\s+[^{]+)?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    METHOD_PATTERN = re.compile(
+    METHOD_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:\[([^\]]+)\]\s*)*(?:(public|private|protected|internal)\s+)?(?:(static|virtual|override|abstract|async|partial)\s+)*(?:(\w+(?:<[^>]+>)?(?:\?)?(?:\[\])*)\s+)?(\w+)\s*(?:<([^>]+)>)?\s*\(([^)]*)\)\s*(?:where\s+[^{]+)?\s*[{;=>]",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    PROPERTY_PATTERN = re.compile(
+    PROPERTY_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|private|protected|internal)\s+)?(?:(static|virtual|override|abstract)\s+)?(\w+(?:<[^>]+>)?(?:\?)?)\s+(\w+)\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    ENUM_PATTERN = re.compile(
+    ENUM_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|private|protected|internal)\s+)?enum\s+(\w+)(?:\s*:\s*(\w+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    DELEGATE_PATTERN = re.compile(
+    DELEGATE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|private|protected|internal)\s+)?delegate\s+(\w+(?:<[^>]+>)?)\s+(\w+)\s*\(([^)]*)\)\s*;",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    ATTRIBUTE_PATTERN = re.compile(r"\[(\w+)(?:\([^\]]*\))?\]")
+    ATTRIBUTE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"\[(\w+)(?:\([^\]]*\))?\]")
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
         """Parse C# file."""
@@ -144,7 +142,7 @@ class CSharpHandler(FileTypeHandler):
             root.children.append(using_node)
             references.append(using_node)
 
-    def _extract_namespace(self, content: str) -> Optional[str]:
+    def _extract_namespace(self, content: str) -> str | None:
         """Extract namespace declaration."""
         match = self.NAMESPACE_PATTERN.search(content)
         return match.group(1) if match else None
@@ -183,7 +181,7 @@ class CSharpHandler(FileTypeHandler):
             type_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"{kind} {name}{f'<{generics}>' if generics else ''}",
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
@@ -202,7 +200,7 @@ class CSharpHandler(FileTypeHandler):
             )
 
             # Extract methods within type
-            type_content = content[match.end():self._get_pos_at_line(content, end_line)]
+            type_content = content[match.end() : self._get_pos_at_line(content, end_line)]
             self._extract_methods(type_content, type_node, line_num)
 
             root.children.append(type_node)
@@ -275,7 +273,7 @@ class CSharpHandler(FileTypeHandler):
             enum_node = DocumentNode(
                 type=NodeType.VARIABLE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
@@ -310,20 +308,19 @@ class CSharpHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk C# by type definitions."""
         chunks: list[DocumentChunk] = []

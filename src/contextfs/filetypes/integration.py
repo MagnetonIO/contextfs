@@ -7,18 +7,15 @@ Provides smart document processing with:
 - Cross-reference indexing
 """
 
-from pathlib import Path
-from typing import Optional
-from datetime import datetime
 import logging
+from pathlib import Path
 
 from contextfs.filetypes.base import (
-    ParsedDocument,
-    DocumentChunk,
     ChunkStrategy,
+    ParsedDocument,
 )
+from contextfs.filetypes.linker import CrossReferenceLinker
 from contextfs.filetypes.registry import FileTypeRegistry, get_handler
-from contextfs.filetypes.linker import CrossReferenceLinker, RelationshipExtractor
 from contextfs.schemas import Memory, MemoryType
 
 logger = logging.getLogger(__name__)
@@ -36,7 +33,7 @@ class SmartDocumentProcessor:
         self,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
-        linker: Optional[CrossReferenceLinker] = None,
+        linker: CrossReferenceLinker | None = None,
     ):
         """
         Initialize processor.
@@ -84,23 +81,25 @@ class SmartDocumentProcessor:
             # Convert chunks to result format
             results = []
             for chunk in doc.chunks:
-                results.append({
-                    "content": chunk.content,
-                    "embedding_text": chunk.embedding_text or chunk.content,
-                    "metadata": {
-                        "source_file": str(file_path),
-                        "file_type": doc.file_type,
-                        "language": doc.language,
-                        "chunk_index": chunk.chunk_index,
-                        "total_chunks": chunk.total_chunks,
-                        "strategy": chunk.strategy.value if chunk.strategy else "unknown",
-                        "node_ids": chunk.node_ids,
-                        "summary": chunk.summary,
-                        "keywords": chunk.keywords,
-                        "document_id": doc.id,
-                        "breadcrumb": chunk.breadcrumb,
-                    },
-                })
+                results.append(
+                    {
+                        "content": chunk.content,
+                        "embedding_text": chunk.embedding_text or chunk.content,
+                        "metadata": {
+                            "source_file": str(file_path),
+                            "file_type": doc.file_type,
+                            "language": doc.language,
+                            "chunk_index": chunk.chunk_index,
+                            "total_chunks": chunk.total_chunks,
+                            "strategy": chunk.strategy.value if chunk.strategy else "unknown",
+                            "node_ids": chunk.node_ids,
+                            "summary": chunk.summary,
+                            "keywords": chunk.keywords,
+                            "document_id": doc.id,
+                            "breadcrumb": chunk.breadcrumb,
+                        },
+                    }
+                )
 
             return results
 
@@ -117,25 +116,27 @@ class SmartDocumentProcessor:
 
         results = []
         for chunk in doc.chunks:
-            results.append({
-                "content": chunk.content,
-                "embedding_text": chunk.embedding_text or chunk.content,
-                "metadata": {
-                    "source_file": str(file_path),
-                    "file_type": "text",
-                    "chunk_index": chunk.chunk_index,
-                    "total_chunks": chunk.total_chunks,
-                    "strategy": ChunkStrategy.FIXED_SIZE.value,
-                    "document_id": doc.id,
-                },
-            })
+            results.append(
+                {
+                    "content": chunk.content,
+                    "embedding_text": chunk.embedding_text or chunk.content,
+                    "metadata": {
+                        "source_file": str(file_path),
+                        "file_type": "text",
+                        "chunk_index": chunk.chunk_index,
+                        "total_chunks": chunk.total_chunks,
+                        "strategy": ChunkStrategy.FIXED_SIZE.value,
+                        "document_id": doc.id,
+                    },
+                }
+            )
 
         return results
 
     def process_directory(
         self,
         directory: Path,
-        extensions: Optional[list[str]] = None,
+        extensions: list[str] | None = None,
         recursive: bool = True,
     ) -> list[dict]:
         """
@@ -167,7 +168,7 @@ class SmartDocumentProcessor:
 
         return all_chunks
 
-    def get_document(self, file_path: str) -> Optional[ParsedDocument]:
+    def get_document(self, file_path: str) -> ParsedDocument | None:
         """Get cached parsed document."""
         return self._parsed_cache.get(file_path)
 
@@ -200,7 +201,7 @@ class RAGIntegration:
     - Cross-reference boosting
     """
 
-    def __init__(self, rag_backend, processor: Optional[SmartDocumentProcessor] = None):
+    def __init__(self, rag_backend, processor: SmartDocumentProcessor | None = None):
         """
         Initialize integration.
 
@@ -257,17 +258,20 @@ class RAGIntegration:
         embedding = self.rag._get_embedding(embedding_text)
 
         import json
+
         self.rag._collection.add(
             ids=[memory.id],
             embeddings=[embedding],
             documents=[memory.content],
-            metadatas=[{
-                "type": memory.type.value,
-                "tags": json.dumps(memory.tags),
-                "namespace_id": memory.namespace_id,
-                "summary": memory.summary or "",
-                "created_at": memory.created_at.isoformat(),
-            }],
+            metadatas=[
+                {
+                    "type": memory.type.value,
+                    "tags": json.dumps(memory.tags),
+                    "namespace_id": memory.namespace_id,
+                    "summary": memory.summary or "",
+                    "created_at": memory.created_at.isoformat(),
+                }
+            ],
         )
 
     def _extract_tags(self, chunk: dict) -> list[str]:
@@ -295,7 +299,7 @@ class RAGIntegration:
         self,
         directory: Path,
         namespace_id: str = "global",
-        extensions: Optional[list[str]] = None,
+        extensions: list[str] | None = None,
     ) -> dict:
         """
         Index all files in a directory.
@@ -328,9 +332,7 @@ class RAGIntegration:
         xref_stats = self.processor.linker.to_dict()
 
         return {
-            "files_processed": len(set(
-                c["metadata"]["source_file"] for c in chunks
-            )),
+            "files_processed": len({c["metadata"]["source_file"] for c in chunks}),
             "chunks_created": len(chunks),
             "memories_added": len(memory_ids),
             "relationships": xref_stats.get("total", 0),
@@ -342,7 +344,7 @@ class RAGIntegration:
         query: str,
         limit: int = 10,
         include_related: bool = True,
-        namespace_id: Optional[str] = None,
+        namespace_id: str | None = None,
     ) -> list[dict]:
         """
         Search with relationship context.
@@ -356,7 +358,6 @@ class RAGIntegration:
         Returns:
             Search results with context
         """
-        from contextfs.schemas import MemoryType
 
         # Basic semantic search
         results = self.rag.search(
@@ -395,21 +396,21 @@ class RAGIntegration:
                 for xref in self.processor.linker.cross_references:
                     if xref.source_document_id == doc_id:
                         # Find memory for target
-                        target_doc = self.processor.linker.index.get_by_id(
-                            xref.target_document_id
-                        )
+                        target_doc = self.processor.linker.index.get_by_id(xref.target_document_id)
                         if target_doc:
-                            related.append({
-                                "type": xref.reference_type,
-                                "file_path": target_doc.file_path,
-                                "document_id": target_doc.id,
-                            })
+                            related.append(
+                                {
+                                    "type": xref.reference_type,
+                                    "file_path": target_doc.file_path,
+                                    "document_id": target_doc.id,
+                                }
+                            )
 
                 break
 
         return related
 
-    def get_file_summary(self, file_path: str) -> Optional[dict]:
+    def get_file_summary(self, file_path: str) -> dict | None:
         """Get summary and structure of a parsed file."""
         doc = self.processor.get_document(file_path)
         if not doc:

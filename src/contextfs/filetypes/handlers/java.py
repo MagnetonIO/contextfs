@@ -9,21 +9,21 @@ Extracts:
 - Generics
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,37 +38,36 @@ class JavaHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    PACKAGE_PATTERN = re.compile(r"package\s+([\w.]+)\s*;")
-    IMPORT_PATTERN = re.compile(
-        r"import\s+(static\s+)?([\w.]+(?:\.\*)?)\s*;",
-        re.MULTILINE
+    PACKAGE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"package\s+([\w.]+)\s*;")
+    IMPORT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"import\s+(static\s+)?([\w.]+(?:\.\*)?)\s*;", re.MULTILINE
     )
-    CLASS_PATTERN = re.compile(
+    CLASS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(@\w+(?:\([^)]*\))?)\s+)*(?:(public|private|protected)\s+)?(?:(abstract|final)\s+)?(?:(static)\s+)?class\s+(\w+)(?:<([^>]+)>)?(?:\s+extends\s+(\w+)(?:<[^>]+>)?)?(?:\s+implements\s+([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    INTERFACE_PATTERN = re.compile(
+    INTERFACE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|private|protected)\s+)?interface\s+(\w+)(?:<([^>]+)>)?(?:\s+extends\s+([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    ENUM_PATTERN = re.compile(
+    ENUM_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|private|protected)\s+)?enum\s+(\w+)(?:\s+implements\s+([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    RECORD_PATTERN = re.compile(
+    RECORD_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|private|protected)\s+)?record\s+(\w+)\s*\(([^)]*)\)(?:\s+implements\s+([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    METHOD_PATTERN = re.compile(
+    METHOD_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(@\w+(?:\([^)]*\))?)\s+)*(?:(public|private|protected)\s+)?(?:(static|final|abstract|synchronized)\s+)*(?:<([^>]+)>\s+)?(\w+(?:<[^>]+>)?(?:\[\])*)\s+(\w+)\s*\(([^)]*)\)(?:\s+throws\s+([^{;]+))?\s*[{;]",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    CONSTRUCTOR_PATTERN = re.compile(
+    CONSTRUCTOR_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:(public|private|protected)\s+)?(\w+)\s*\(([^)]*)\)(?:\s+throws\s+([^{]+))?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    ANNOTATION_PATTERN = re.compile(r"@(\w+)(?:\([^)]*\))?")
-    JAVADOC_PATTERN = re.compile(r"/\*\*\s*(.*?)\s*\*/", re.DOTALL)
+    ANNOTATION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"@(\w+)(?:\([^)]*\))?")
+    JAVADOC_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"/\*\*\s*(.*?)\s*\*/", re.DOTALL)
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
         """Parse Java file."""
@@ -122,7 +121,7 @@ class JavaHandler(FileTypeHandler):
         doc.chunks = self.chunk(doc)
         return doc
 
-    def _extract_package(self, content: str) -> Optional[str]:
+    def _extract_package(self, content: str) -> str | None:
         """Extract package declaration."""
         match = self.PACKAGE_PATTERN.search(content)
         return match.group(1) if match else None
@@ -183,7 +182,7 @@ class JavaHandler(FileTypeHandler):
             class_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"class {name}{f'<{generics}>' if generics else ''}",
                 docstring=javadoc,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -201,7 +200,11 @@ class JavaHandler(FileTypeHandler):
             )
 
             # Extract methods within class
-            self._extract_methods(content[match.end():self._get_pos_at_line(content, end_line)], class_node, line_num)
+            self._extract_methods(
+                content[match.end() : self._get_pos_at_line(content, end_line)],
+                class_node,
+                line_num,
+            )
 
             root.children.append(class_node)
             symbols[name] = class_node
@@ -228,7 +231,7 @@ class JavaHandler(FileTypeHandler):
             interface_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"interface {name}{f'<{generics}>' if generics else ''}",
                 docstring=javadoc,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -262,7 +265,7 @@ class JavaHandler(FileTypeHandler):
             enum_node = DocumentNode(
                 type=NodeType.VARIABLE,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
                 attributes={
@@ -294,7 +297,7 @@ class JavaHandler(FileTypeHandler):
             record_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"record {name}({components})",
                 location=SourceLocation(start_line=line_num, end_line=end_line),
                 parent_id=root.id,
@@ -353,7 +356,7 @@ class JavaHandler(FileTypeHandler):
         """Parse annotation names from text."""
         return [m.group(1) for m in self.ANNOTATION_PATTERN.finditer(text)]
 
-    def _find_preceding_javadoc(self, content: str, pos: int) -> Optional[str]:
+    def _find_preceding_javadoc(self, content: str, pos: int) -> str | None:
         """Find Javadoc comment preceding a position."""
         search_start = max(0, pos - 1000)
         segment = content[search_start:pos]
@@ -385,20 +388,19 @@ class JavaHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk Java by class/interface definitions."""
         chunks: list[DocumentChunk] = []

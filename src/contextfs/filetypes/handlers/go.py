@@ -9,21 +9,21 @@ Extracts:
 - Constants and variables
 """
 
+import logging
 import re
 from pathlib import Path
-from typing import Optional
-import logging
+from typing import ClassVar
 
 from contextfs.filetypes.base import (
-    FileTypeHandler,
-    ParsedDocument,
+    ChunkStrategy,
     DocumentChunk,
     DocumentNode,
+    FileTypeHandler,
     NodeType,
+    ParsedDocument,
     Relationship,
     RelationType,
     SourceLocation,
-    ChunkStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,38 +38,31 @@ class GoHandler(FileTypeHandler):
     chunk_strategy: ChunkStrategy = ChunkStrategy.AST_BOUNDARY
 
     # Patterns
-    PACKAGE_PATTERN = re.compile(r"package\s+(\w+)")
-    IMPORT_PATTERN = re.compile(
-        r'import\s+(?:(\w+)\s+)?"([^"]+)"',
-        re.MULTILINE
+    PACKAGE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"package\s+(\w+)")
+    IMPORT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r'import\s+(?:(\w+)\s+)?"([^"]+)"', re.MULTILINE
     )
-    IMPORT_BLOCK_PATTERN = re.compile(
-        r'import\s*\(\s*((?:[^)]+))\)',
-        re.DOTALL
+    IMPORT_BLOCK_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"import\s*\(\s*((?:[^)]+))\)", re.DOTALL
     )
-    FUNC_PATTERN = re.compile(
+    FUNC_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"func\s+(?:\((\w+)\s+\*?(\w+)\)\s+)?(\w+)\s*(?:\[([^\]]+)\])?\s*\(([^)]*)\)\s*(?:\(([^)]*)\)|(\w+(?:\s*,\s*\w+)*)?)?\s*\{",
-        re.MULTILINE
+        re.MULTILINE,
     )
-    STRUCT_PATTERN = re.compile(
-        r"type\s+(\w+)\s+struct\s*\{",
-        re.MULTILINE
+    STRUCT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"type\s+(\w+)\s+struct\s*\{", re.MULTILINE
     )
-    INTERFACE_PATTERN = re.compile(
-        r"type\s+(\w+)\s+interface\s*\{",
-        re.MULTILINE
+    INTERFACE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"type\s+(\w+)\s+interface\s*\{", re.MULTILINE
     )
-    TYPE_ALIAS_PATTERN = re.compile(
-        r"type\s+(\w+)\s+(?!=\s*struct|interface)(\w+(?:\[[^\]]*\])?)",
-        re.MULTILINE
+    TYPE_ALIAS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"type\s+(\w+)\s+(?!=\s*struct|interface)(\w+(?:\[[^\]]*\])?)", re.MULTILINE
     )
-    CONST_PATTERN = re.compile(
-        r"const\s+(\w+)(?:\s+\w+)?\s*=",
-        re.MULTILINE
+    CONST_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"const\s+(\w+)(?:\s+\w+)?\s*=", re.MULTILINE
     )
-    VAR_PATTERN = re.compile(
-        r"var\s+(\w+)\s+(\w+(?:\[[^\]]*\])?)",
-        re.MULTILINE
+    VAR_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"var\s+(\w+)\s+(\w+(?:\[[^\]]*\])?)", re.MULTILINE
     )
 
     def parse(self, content: str, file_path: str) -> ParsedDocument:
@@ -125,7 +118,7 @@ class GoHandler(FileTypeHandler):
         doc.chunks = self.chunk(doc)
         return doc
 
-    def _extract_package(self, content: str) -> Optional[str]:
+    def _extract_package(self, content: str) -> str | None:
         """Extract package declaration."""
         match = self.PACKAGE_PATTERN.search(content)
         return match.group(1) if match else None
@@ -154,7 +147,7 @@ class GoHandler(FileTypeHandler):
                 attributes={
                     "import_path": import_path,
                     "alias": alias,
-                    "is_stdlib": not "." in import_path.split("/")[0],
+                    "is_stdlib": "." not in import_path.split("/")[0],
                 },
             )
             root.children.append(import_node)
@@ -211,7 +204,7 @@ class GoHandler(FileTypeHandler):
             struct_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"type {name} struct",
                 docstring=doc_comment,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -242,7 +235,7 @@ class GoHandler(FileTypeHandler):
             interface_node = DocumentNode(
                 type=NodeType.CLASS,
                 name=name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=f"type {name} interface",
                 docstring=doc_comment,
                 location=SourceLocation(start_line=line_num, end_line=end_line),
@@ -280,7 +273,7 @@ class GoHandler(FileTypeHandler):
             return_type = return_tuple or return_single or ""
             is_method = bool(receiver_type)
 
-            signature = f"func "
+            signature = "func "
             if is_method:
                 signature += f"({receiver_name} *{receiver_type}) "
             signature += f"{func_name}({params})"
@@ -290,7 +283,7 @@ class GoHandler(FileTypeHandler):
             func_node = DocumentNode(
                 type=NodeType.FUNCTION,
                 name=func_name,
-                content=content[match.start():self._get_pos_at_line(content, end_line + 1)],
+                content=content[match.start() : self._get_pos_at_line(content, end_line + 1)],
                 signature=signature,
                 return_type=return_type.strip() if return_type else None,
                 docstring=doc_comment,
@@ -343,7 +336,7 @@ class GoHandler(FileTypeHandler):
             root.children.append(type_node)
             symbols[name] = type_node
 
-    def _find_doc_comment(self, content: str, pos: int) -> Optional[str]:
+    def _find_doc_comment(self, content: str, pos: int) -> str | None:
         """Find Go doc comment preceding a position."""
         search_start = max(0, pos - 500)
         segment = content[search_start:pos]
@@ -382,20 +375,19 @@ class GoHandler(FileTypeHandler):
 
     def _get_pos_at_line(self, content: str, line: int) -> int:
         """Get character position at start of line."""
-        pos = 0
         for i, c in enumerate(content):
             if line <= 1:
                 return i
             if c == "\n":
                 line -= 1
-                pos = i + 1
+                i + 1
         return len(content)
 
     def chunk(
         self,
         document: ParsedDocument,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> list[DocumentChunk]:
         """Chunk Go by definitions."""
         chunks: list[DocumentChunk] = []
