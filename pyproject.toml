@@ -1,0 +1,99 @@
+[project]
+name = "contextfs"
+version = "0.1.0"
+description = "Universal AI memory layer - cross-client, cross-repo context management with RAG"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Matthew Long", email = "matt@magnetonio.com" },
+    { name = "The YonedaAI Collaboration" }
+]
+requires-python = ">=3.10"
+keywords = ["ai", "memory", "context", "mcp", "rag", "llm", "agents", "claude", "gemini", "codex"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # MCP Protocol
+    "mcp>=1.0.0",
+
+    # Vector Store & Embeddings
+    "chromadb>=0.4.18",
+    "sentence-transformers>=2.2.2",
+
+    # LLM APIs
+    "anthropic>=0.18",
+    "openai>=1.0",
+
+    # Data & Validation
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+
+    # Tokenization
+    "tiktoken>=0.5.2",
+
+    # Web/API
+    "fastapi>=0.104.1",
+    "uvicorn>=0.24.0",
+
+    # CLI
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+
+    # Git integration
+    "gitpython>=3.1.40",
+
+    # Utilities
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.104.1",
+    "uvicorn>=0.24.0",
+    "websockets>=12.0",
+]
+postgres = [
+    "asyncpg>=0.29.0",
+    "psycopg2-binary>=2.9.9",
+]
+all = [
+    "contextfs[web,postgres]",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "mypy>=1.5.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+contextfs = "contextfs.cli:app"
+ctx = "contextfs.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/MagnetonIO/contextfs"
+Repository = "https://github.com/MagnetonIO/contextfs"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/contextfs"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

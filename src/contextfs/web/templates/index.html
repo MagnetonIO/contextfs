@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ContextFS Memory Browser</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ContextFS</h1>
+            <p class="subtitle">Memory Browser</p>
+        </header>
+
+        <div class="search-section">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search memories..." autofocus>
+                <button id="search-btn" type="button">Search</button>
+            </div>
+            <div class="filters">
+                <select id="type-filter">
+                    <option value="">All Types</option>
+                    <option value="fact">Fact</option>
+                    <option value="decision">Decision</option>
+                    <option value="procedural">Procedural</option>
+                    <option value="episodic">Episodic</option>
+                    <option value="user">User</option>
+                    <option value="code">Code</option>
+                    <option value="error">Error</option>
+                </select>
+                <select id="namespace-filter">
+                    <option value="">All Namespaces</option>
+                </select>
+                <label class="toggle">
+                    <input type="checkbox" id="semantic-toggle" checked>
+                    <span>Semantic Search</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" data-tab="search">Search</button>
+            <button class="tab" data-tab="recent">Recent</button>
+            <button class="tab" data-tab="sessions">Sessions</button>
+            <button class="tab" data-tab="stats">Stats</button>
+        </div>
+
+        <main id="content">
+            <div id="search-tab" class="tab-content active">
+                <div id="results" class="memory-list">
+                    <p class="placeholder">Enter a search query to find memories</p>
+                </div>
+            </div>
+            <div id="recent-tab" class="tab-content">
+                <div id="recent-memories" class="memory-list">
+                    <p class="placeholder">Loading recent memories...</p>
+                </div>
+            </div>
+            <div id="sessions-tab" class="tab-content">
+                <div id="sessions-list" class="session-list">
+                    <p class="placeholder">Loading sessions...</p>
+                </div>
+            </div>
+            <div id="stats-tab" class="tab-content">
+                <div id="stats-content" class="stats-grid">
+                    <p class="placeholder">Loading statistics...</p>
+                </div>
+            </div>
+        </main>
+
+        <div id="memory-modal" class="modal">
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <div id="modal-body"></div>
+            </div>
+        </div>
+
+        <footer>
+            <div class="footer-info">
+                <span id="db-status">Connecting...</span>
+                <span id="memory-count">0 memories</span>
+            </div>
+            <div class="footer-actions">
+                <button id="export-btn" title="Export memories">Export</button>
+                <button id="sync-btn" title="Sync to PostgreSQL">Sync</button>
+            </div>
+        </footer>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

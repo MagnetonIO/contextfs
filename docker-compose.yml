@@ -1,0 +1,69 @@
+version: "3.8"
+
+services:
+  # PostgreSQL for global memory sync
+  postgres:
+    image: postgres:16-alpine
+    container_name: contextfs-postgres
+    environment:
+      POSTGRES_USER: contextfs
+      POSTGRES_PASSWORD: contextfs
+      POSTGRES_DB: contextfs
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contextfs -d contextfs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ContextFS API server (optional - for remote access)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: contextfs-api
+    environment:
+      CONTEXTFS_POSTGRES_URL: postgresql://contextfs:contextfs@postgres:5432/contextfs
+      CONTEXTFS_DATA_DIR: /data
+    ports:
+      - "8765:8765"
+    volumes:
+      - contextfs_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - with-api
+
+  # pgAdmin for database management (optional)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: contextfs-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@contextfs.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    profiles:
+      - with-admin
+
+volumes:
+  postgres_data:
+  contextfs_data:
+  pgadmin_data:
+
+networks:
+  default:
+    name: contextfs-network
