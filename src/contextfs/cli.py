@@ -298,6 +298,95 @@ def status():
         console.print(f"  Messages: {len(session.messages)}")
 
 
+def find_git_root(start_path: Path) -> Path | None:
+    """Find the git root directory from start_path."""
+    current = start_path.resolve()
+    for parent in [current] + list(current.parents):
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+@app.command()
+def index(
+    path: Path | None = typer.Argument(None, help="Repository path (auto-detects git root)"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-index even if already indexed"),
+    incremental: bool = typer.Option(True, "--incremental/--full", help="Only index new/changed files"),
+):
+    """Index a repository's codebase for semantic search."""
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+
+    # Determine repo path
+    start_path = path or Path.cwd()
+    repo_path = find_git_root(start_path)
+
+    if not repo_path:
+        # Not in a git repo, use the provided path or cwd
+        repo_path = start_path.resolve()
+        console.print(f"[yellow]Not a git repository, indexing: {repo_path}[/yellow]")
+    else:
+        console.print(f"[cyan]Found git repository: {repo_path}[/cyan]")
+
+    if not repo_path.exists():
+        console.print(f"[red]Path does not exist: {repo_path}[/red]")
+        raise typer.Exit(1)
+
+    ctx = get_ctx()
+
+    # Check if already indexed
+    status = ctx.get_index_status()
+    if status and status.indexed and not force:
+        console.print(f"\n[yellow]Repository already indexed:[/yellow]")
+        console.print(f"  Files: {status.files_indexed}")
+        console.print(f"  Memories: {status.memories_created}")
+        console.print(f"  Indexed at: {status.indexed_at}")
+        console.print(f"\n[dim]Use --force to re-index[/dim]")
+        return
+
+    if force:
+        console.print("[yellow]Force re-indexing...[/yellow]")
+        ctx.clear_index()
+
+    # Index with progress
+    console.print(f"\n[bold]Indexing {repo_path.name}...[/bold]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Discovering files...", total=None)
+
+        def on_progress(current: int, total: int, filename: str):
+            progress.update(task, total=total, completed=current, description=f"[cyan]{filename[:50]}[/cyan]")
+
+        result = ctx.index_repository(
+            repo_path=repo_path,
+            on_progress=on_progress,
+            incremental=incremental,
+        )
+
+    # Display results
+    console.print(f"\n[green]✅ Indexing complete![/green]\n")
+
+    table = Table(title="Indexing Results")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", style="green", justify="right")
+
+    table.add_row("Files discovered", str(result.get("files_discovered", 0)))
+    table.add_row("Files indexed", str(result.get("files_indexed", 0)))
+    table.add_row("Commits indexed", str(result.get("commits_indexed", 0)))
+    table.add_row("Memories created", str(result.get("memories_created", 0)))
+    table.add_row("Skipped (unchanged)", str(result.get("skipped", 0)))
+
+    console.print(table)
+
+    if result.get("errors"):
+        console.print(f"\n[yellow]Warnings: {len(result['errors'])} files had errors[/yellow]")
+
+
 @app.command()
 def init(
     path: Path | None = typer.Argument(None, help="Directory to initialize"),
