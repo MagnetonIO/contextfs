@@ -1134,8 +1134,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     )
                 ]
             else:
-                # Check if there's existing index data
-                status = ctx.get_index_status()
+                # Check if there's existing index data for current repo
+                from pathlib import Path
+
+                cwd = Path.cwd()
+                status = ctx.get_index_status(repo_path=cwd)
                 if status and status.indexed:
                     return [
                         TextContent(
