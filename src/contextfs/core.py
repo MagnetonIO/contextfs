@@ -277,6 +277,12 @@ class ContextFS:
             logger.warning(f"Auto-indexing failed: {e}")
             return None
 
+    def _namespace_for_path(self, repo_path: Path) -> str:
+        """Get namespace ID for a repository path."""
+        from contextfs.schemas import Namespace
+
+        return Namespace.for_repo(str(repo_path)).id
+
     def index_repository(
         self,
         repo_path: Path | None = None,
@@ -298,22 +304,42 @@ class ContextFS:
         if not path:
             raise ValueError("No repository path available")
 
+        # Use namespace derived from the repo being indexed, not ctx's namespace
+        namespace_id = self._namespace_for_path(Path(path))
+
         indexer = self._get_auto_indexer()
         return indexer.index_repository(
             repo_path=path,
-            namespace_id=self.namespace_id,
+            namespace_id=namespace_id,
             rag_backend=self.rag,
             on_progress=on_progress,
             incremental=incremental,
         )
 
-    def get_index_status(self):
-        """Get indexing status for current namespace."""
-        return self._get_auto_indexer().get_status(self.namespace_id)
+    def get_index_status(self, repo_path: Path | None = None):
+        """Get indexing status for a repository.
 
-    def clear_index(self) -> None:
-        """Clear indexing status for current namespace."""
-        self._get_auto_indexer().clear_index(self.namespace_id)
+        Args:
+            repo_path: Repository path (default: current working directory's repo)
+        """
+        if repo_path:
+            namespace_id = self._namespace_for_path(repo_path)
+        else:
+            # Detect from current working directory
+            namespace_id, _ = self._detect_namespace_and_repo()
+        return self._get_auto_indexer().get_status(namespace_id)
+
+    def clear_index(self, repo_path: Path | None = None) -> None:
+        """Clear indexing status for a repository.
+
+        Args:
+            repo_path: Repository path (default: current working directory's repo)
+        """
+        if repo_path:
+            namespace_id = self._namespace_for_path(repo_path)
+        else:
+            namespace_id, _ = self._detect_namespace_and_repo()
+        self._get_auto_indexer().clear_index(namespace_id)
         self._indexing_triggered = False
 
     def list_indexes(self) -> list:

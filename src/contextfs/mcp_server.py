@@ -996,7 +996,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     _indexing_state = IndexingState()
 
             # Check if already indexed (unless force)
-            status = ctx.get_index_status()
+            status = ctx.get_index_status(repo_path=cwd)
             if status and status.indexed and not force:
                 return [
                     TextContent(
@@ -1009,7 +1009,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
             # Clear index if forcing
             if force:
-                ctx.clear_index()
+                ctx.clear_index(repo_path=cwd)
 
             # Reset indexing state
             _indexing_state = IndexingState(
@@ -1129,8 +1129,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         type="text",
                         text=f"Indexing complete: {repo}\n"
                         f"Files indexed: {result.get('files_indexed', 0)}\n"
-                        f"Chunks created: {result.get('chunks_created', 0)}\n"
-                        f"Skipped: {result.get('files_skipped', 0)}",
+                        f"Memories created: {result.get('memories_created', 0)}\n"
+                        f"Skipped: {result.get('skipped', 0)}",
                     )
                 ]
             else:
