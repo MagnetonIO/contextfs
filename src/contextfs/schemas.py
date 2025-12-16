@@ -47,11 +47,15 @@ class Namespace(BaseModel):
 
     @classmethod
     def for_repo(cls, repo_path: str) -> "Namespace":
-        repo_id = hashlib.sha256(repo_path.encode()).hexdigest()[:12]
+        from pathlib import Path
+
+        # Resolve symlinks to get canonical path for consistent namespace
+        resolved_path = str(Path(repo_path).resolve())
+        repo_id = hashlib.sha256(resolved_path.encode()).hexdigest()[:12]
         return cls(
             id=f"repo-{repo_id}",
-            name=repo_path.split("/")[-1],
-            repo_path=repo_path,
+            name=resolved_path.split("/")[-1],
+            repo_path=resolved_path,
         )
 
 
