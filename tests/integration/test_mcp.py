@@ -119,6 +119,7 @@ class TestMCPServerTools:
     @pytest.mark.slow
     async def test_call_tool_index(self, git_repo: Path, temp_dir: Path):
         """Test contextfs_index tool call."""
+        import asyncio
         import os
 
         import contextfs.mcp_server as mcp_module
@@ -136,20 +137,32 @@ class TestMCPServerTools:
             test_ctx = ContextFS(data_dir=data_dir, auto_index=False)
             mcp_module._ctx = test_ctx
             mcp_module._session_started = False
+            mcp_module._indexing_state = mcp_module.IndexingState()
 
             from contextfs.mcp_server import call_tool
 
+            # Start indexing (runs in background)
             result = await call_tool("contextfs_index", {"incremental": True})
-
             assert len(result) == 1
             text = result[0].text
-            assert "indexed successfully" in text or "already indexed" in text
+            assert "Started indexing" in text or "already indexed" in text
+
+            # Wait for background indexing to complete
+            if "Started indexing" in text:
+                for _ in range(30):  # Wait up to 30 seconds
+                    await asyncio.sleep(1)
+                    status = await call_tool("contextfs_index_status", {})
+                    status_text = status[0].text
+                    if "complete" in status_text or "No indexing" in status_text:
+                        break
+                assert "complete" in status_text or "No indexing" in status_text
         finally:
             os.chdir(original_cwd)
             if mcp_module._ctx:
                 mcp_module._ctx.close()
             mcp_module._ctx = None
             mcp_module._session_started = False
+            mcp_module._indexing_state = mcp_module.IndexingState()
 
     @pytest.mark.asyncio
     async def test_call_tool_index_not_in_repo(self, temp_dir: Path):

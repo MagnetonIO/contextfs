@@ -6,6 +6,8 @@ Works with Claude Desktop, Claude Code, and any MCP client.
 """
 
 import asyncio
+from dataclasses import dataclass, field
+from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -22,6 +24,24 @@ _source_tool: str = "claude-desktop"  # Default for Claude Desktop MCP
 
 # Session auto-started flag
 _session_started: bool = False
+
+
+@dataclass
+class IndexingState:
+    """Track background indexing state."""
+
+    running: bool = False
+    repo_name: str = ""
+    current_file: str = ""
+    current: int = 0
+    total: int = 0
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    task: asyncio.Task | None = field(default=None, repr=False)
+
+
+# Global indexing state
+_indexing_state = IndexingState()
 
 
 def get_ctx() -> ContextFS:
@@ -476,7 +496,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="contextfs_index",
-            description="Index the current repository's codebase into memory for semantic search",
+            description="Start indexing the current repository's codebase in background. Use contextfs_index_status to check progress.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -493,12 +513,27 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="contextfs_index_status",
+            description="Check or cancel background indexing operation",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "cancel": {
+                        "type": "boolean",
+                        "description": "Set to true to cancel the running indexing operation",
+                        "default": False,
+                    },
+                },
+            },
+        ),
     ]
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls."""
+    global _indexing_state
     ctx = get_ctx()
 
     try:
@@ -791,6 +826,28 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if not repo_name:
                 return [TextContent(type="text", text="Error: Not in a git repository")]
 
+            # Check if indexing is already running
+            if _indexing_state.running:
+                # Verify the task is actually still alive
+                task_alive = _indexing_state.task is not None and not _indexing_state.task.done()
+
+                if task_alive and not force:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"Indexing already in progress for '{_indexing_state.repo_name}'.\n"
+                            f"Progress: {_indexing_state.current}/{_indexing_state.total} files\n"
+                            f"Use force=true to cancel and restart.",
+                        )
+                    ]
+                elif task_alive and force:
+                    # Cancel the running task
+                    _indexing_state.task.cancel()
+                    _indexing_state = IndexingState()
+                else:
+                    # Task is dead but state wasn't cleaned up - reset it
+                    _indexing_state = IndexingState()
+
             # Check if already indexed (unless force)
             status = ctx.get_index_status()
             if status and status.get("indexed") and not force:
@@ -807,18 +864,145 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if force:
                 ctx.clear_index()
 
-            # Index the repository
-            result = ctx.index_repository(repo_path=cwd, incremental=incremental)
+            # Reset indexing state
+            _indexing_state = IndexingState(
+                running=True,
+                repo_name=repo_name,
+            )
+
+            # Get progress token for MCP notifications
+            progress_token = None
+            mcp_session = None
+            try:
+                req_ctx = server.request_context
+                if req_ctx.meta and req_ctx.meta.progressToken:
+                    progress_token = req_ctx.meta.progressToken
+                    mcp_session = req_ctx.session
+            except (LookupError, AttributeError):
+                pass
+
+            async def run_indexing():
+                """Run indexing in background."""
+                loop = asyncio.get_running_loop()
+
+                def on_progress(current: int, total: int, filename: str) -> None:
+                    """Update state and send MCP progress notification."""
+                    _indexing_state.current = current
+                    _indexing_state.total = total
+                    _indexing_state.current_file = filename
+
+                    # Send MCP progress notification if available
+                    if progress_token and mcp_session:
+                        try:
+                            coro = mcp_session.send_progress_notification(
+                                progress_token=progress_token,
+                                progress=float(current),
+                                total=float(total),
+                                message=f"Indexing: {filename}",
+                            )
+                            asyncio.run_coroutine_threadsafe(coro, loop)
+                        except Exception:
+                            pass
+
+                try:
+                    # Run blocking indexing in thread pool
+                    result = await asyncio.to_thread(
+                        ctx.index_repository,
+                        repo_path=cwd,
+                        incremental=incremental,
+                        on_progress=on_progress,
+                    )
+                    _indexing_state.result = result
+                    _indexing_state.running = False
+                except Exception as e:
+                    _indexing_state.error = str(e)
+                    _indexing_state.running = False
+
+            # Start background task
+            _indexing_state.task = asyncio.create_task(run_indexing())
 
             return [
                 TextContent(
                     type="text",
-                    text=f"Repository '{repo_name}' indexed successfully.\n"
-                    f"Files indexed: {result.get('files_indexed', 0)}\n"
-                    f"Chunks created: {result.get('chunks_created', 0)}\n"
-                    f"Skipped: {result.get('files_skipped', 0)}",
+                    text=f"Started indexing '{repo_name}' in background.\n"
+                    f"Use contextfs_index_status to check progress.",
                 )
             ]
+
+        elif name == "contextfs_index_status":
+            cancel = arguments.get("cancel", False)
+
+            if _indexing_state.running:
+                # Handle cancel request
+                if cancel:
+                    if _indexing_state.task and not _indexing_state.task.done():
+                        _indexing_state.task.cancel()
+                    repo = _indexing_state.repo_name
+                    progress = f"{_indexing_state.current}/{_indexing_state.total}"
+                    _indexing_state = IndexingState()
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"Indexing cancelled for '{repo}'.\n"
+                            f"Progress at cancellation: {progress} files",
+                        )
+                    ]
+
+                # Return progress
+                pct = 0
+                if _indexing_state.total > 0:
+                    pct = int(100 * _indexing_state.current / _indexing_state.total)
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Indexing in progress: {_indexing_state.repo_name}\n"
+                        f"Progress: {_indexing_state.current}/{_indexing_state.total} files ({pct}%)\n"
+                        f"Current: {_indexing_state.current_file}\n"
+                        f"Use cancel=true to stop indexing.",
+                    )
+                ]
+            elif _indexing_state.error:
+                error = _indexing_state.error
+                repo = _indexing_state.repo_name
+                # Reset state after reporting error
+                _indexing_state = IndexingState()
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Indexing failed for '{repo}'.\nError: {error}",
+                    )
+                ]
+            elif _indexing_state.result:
+                result = _indexing_state.result
+                repo = _indexing_state.repo_name
+                # Reset state after reporting completion
+                _indexing_state = IndexingState()
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Indexing complete: {repo}\n"
+                        f"Files indexed: {result.get('files_indexed', 0)}\n"
+                        f"Chunks created: {result.get('chunks_created', 0)}\n"
+                        f"Skipped: {result.get('files_skipped', 0)}",
+                    )
+                ]
+            else:
+                # Check if there's existing index data
+                status = ctx.get_index_status()
+                if status and status.get("indexed"):
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"No indexing in progress.\n"
+                            f"Repository indexed: {status.get('total_files', 0)} files",
+                        )
+                    ]
+                return [
+                    TextContent(
+                        type="text",
+                        text="No indexing in progress. Use contextfs_index to start.",
+                    )
+                ]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

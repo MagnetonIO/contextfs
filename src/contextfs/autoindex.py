@@ -483,7 +483,7 @@ class AutoIndexer:
         for idx, file_path in enumerate(files):
             rel_path = str(file_path.relative_to(repo_path))
 
-            # Progress callback
+            # Progress callback - show file being processed
             if on_progress:
                 on_progress(idx + 1, total_files, rel_path)
 
@@ -502,8 +502,8 @@ class AutoIndexer:
                     skipped += 1
                     continue
 
-                # Create memories from chunks
-                file_memories = 0
+                # Create memories from chunks (batch for speed)
+                file_memory_list = []
                 for chunk in chunks:
                     memory = Memory(
                         content=chunk["content"],
@@ -520,13 +520,27 @@ class AutoIndexer:
                             "auto_indexed": True,
                         },
                     )
+                    file_memory_list.append(memory)
 
-                    try:
-                        rag_backend.add_memory(memory)
-                        file_memories += 1
-                        memories_created += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to save memory for {rel_path}: {e}")
+                # Batch add all memories for this file (much faster)
+                try:
+                    if hasattr(rag_backend, "add_memories_batch"):
+                        added = rag_backend.add_memories_batch(file_memory_list)
+                        memories_created += added
+                        file_memories = added
+                    else:
+                        # Fallback to individual adds
+                        file_memories = 0
+                        for memory in file_memory_list:
+                            try:
+                                rag_backend.add_memory(memory)
+                                file_memories += 1
+                                memories_created += 1
+                            except Exception as e:
+                                logger.warning(f"Failed to save memory for {rel_path}: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to batch save memories for {rel_path}: {e}")
+                    file_memories = 0
 
                 # Track indexed file
                 if file_memories > 0:

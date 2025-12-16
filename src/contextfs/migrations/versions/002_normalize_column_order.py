@@ -20,6 +20,35 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _ensure_fts_table(conn) -> None:
+    """Ensure FTS table exists, creating it if needed."""
+    # Check if FTS table exists
+    result = conn.execute(
+        sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts'")
+    )
+    if result.fetchone() is not None:
+        return  # FTS table already exists
+
+    # Create FTS table
+    conn.execute(
+        sa.text("""
+        CREATE VIRTUAL TABLE memories_fts USING fts5(
+            id, content, summary, tags,
+            content='memories',
+            content_rowid='rowid'
+        )
+    """)
+    )
+
+    # Populate FTS index from existing memories
+    conn.execute(
+        sa.text("""
+        INSERT INTO memories_fts (id, content, summary, tags)
+        SELECT id, content, summary, tags FROM memories
+    """)
+    )
+
+
 def upgrade() -> None:
     """
     Normalize column order by recreating the memories table.
@@ -40,7 +69,9 @@ def upgrade() -> None:
     # Expected order: source_tool (8), project (9), session_id (10)
     # Old order: session_id (8), ..., source_tool (12), project (13)
     if columns.get("source_tool", 99) < columns.get("session_id", 0):
-        return  # Already in correct order
+        # Column order is correct, but still need to ensure FTS table exists
+        _ensure_fts_table(conn)
+        return
 
     # Check if columns exist (might be old database)
     has_source_tool = "source_tool" in columns

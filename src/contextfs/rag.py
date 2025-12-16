@@ -85,6 +85,14 @@ class RAGBackend:
         embedding = self._embedding_model.encode(text, convert_to_numpy=True)
         return embedding.tolist()
 
+    def _get_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple texts in batch (much faster)."""
+        self._ensure_initialized()
+        embeddings = self._embedding_model.encode(
+            texts, convert_to_numpy=True, show_progress_bar=False
+        )
+        return embeddings.tolist()
+
     def add_memory(self, memory: Memory) -> None:
         """
         Add a memory to the vector store.
@@ -116,6 +124,56 @@ class RAGBackend:
                 }
             ],
         )
+
+    def add_memories_batch(self, memories: list[Memory]) -> int:
+        """
+        Add multiple memories in batch (much faster than individual adds).
+
+        Args:
+            memories: List of Memory objects to add
+
+        Returns:
+            Number of memories successfully added
+        """
+        if not memories:
+            return 0
+
+        self._ensure_initialized()
+
+        # Prepare texts for batch embedding
+        texts = []
+        for memory in memories:
+            text = memory.content
+            if memory.summary:
+                text = f"{memory.summary}\n{text}"
+            texts.append(text)
+
+        # Batch encode all texts at once (much faster)
+        embeddings = self._get_embeddings_batch(texts)
+
+        # Prepare batch data for ChromaDB
+        ids = [m.id for m in memories]
+        documents = [m.content for m in memories]
+        metadatas = [
+            {
+                "type": m.type.value,
+                "tags": json.dumps(m.tags),
+                "namespace_id": m.namespace_id,
+                "summary": m.summary or "",
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in memories
+        ]
+
+        # Add all at once to ChromaDB
+        self._collection.add(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+        )
+
+        return len(memories)
 
     def remove_memory(self, memory_id: str) -> None:
         """Remove a memory from the vector store."""

@@ -159,7 +159,9 @@ class GenericTextHandler(FileTypeHandler):
             chunk.embedding_text = self.prepare_for_embedding(chunk, document)
             chunks.append(chunk)
 
-            start = end - char_overlap
+            # Move start forward, ensuring progress (avoid infinite loop for small files)
+            new_start = end - char_overlap
+            start = end if new_start <= start else new_start
 
         return chunks
 
