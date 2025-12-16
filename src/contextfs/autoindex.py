@@ -260,6 +260,17 @@ class AutoIndexer:
             )
         """)
 
+        # Track indexed commits for incremental updates
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS indexed_commits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace_id TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                indexed_at TEXT NOT NULL,
+                UNIQUE(namespace_id, commit_hash)
+            )
+        """)
+
         conn.commit()
         conn.close()
 
@@ -563,6 +574,7 @@ class AutoIndexer:
             rag_backend=rag_backend,
             max_commits=100,
             on_progress=on_progress,
+            incremental=incremental,
         )
         memories_created += git_stats["memories_created"]
 
@@ -654,6 +666,7 @@ class AutoIndexer:
         rag_backend: RAGBackend,
         max_commits: int = 100,
         on_progress: Callable[[int, int, str], None] | None = None,
+        incremental: bool = True,
     ) -> dict:
         """
         Index git commit history to RAG backend.
@@ -664,21 +677,42 @@ class AutoIndexer:
             rag_backend: RAG backend for vector storage
             max_commits: Maximum commits to index
             on_progress: Progress callback
+            incremental: Only index new commits
 
         Returns:
             Indexing statistics
         """
-        logger.info(f"Indexing git history for {repo_path}")
+        logger.info(f"Indexing git history for {repo_path} (incremental={incremental})")
 
         commits = self._get_git_commits(repo_path, max_commits)
         if not commits:
             logger.info("No git commits found")
-            return {"commits_indexed": 0, "memories_created": 0}
+            return {"commits_indexed": 0, "memories_created": 0, "skipped": 0}
 
+        # Get already indexed commits for incremental mode
+        indexed_commits = set()
+        if incremental:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT commit_hash FROM indexed_commits WHERE namespace_id = ?",
+                (namespace_id,),
+            )
+            indexed_commits = {row[0] for row in cursor.fetchall()}
+            conn.close()
+
+        commits_indexed = 0
         memories_created = 0
+        skipped = 0
+
         for idx, commit in enumerate(commits):
             if on_progress:
                 on_progress(idx + 1, len(commits), commit["hash"][:8])
+
+            # Skip already indexed commits in incremental mode
+            if incremental and commit["hash"] in indexed_commits:
+                skipped += 1
+                continue
 
             # Create memory for each commit
             content = f"""Git Commit: {commit["hash"][:8]}
@@ -709,14 +743,33 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
             try:
                 rag_backend.add_memory(memory)
                 memories_created += 1
+                commits_indexed += 1
+                # Record indexed commit
+                self._record_indexed_commit(namespace_id, commit["hash"])
             except Exception as e:
                 logger.warning(f"Failed to index commit {commit['hash'][:8]}: {e}")
 
-        logger.info(f"Indexed {memories_created} git commits")
+        logger.info(f"Indexed {commits_indexed} git commits ({skipped} skipped)")
         return {
-            "commits_indexed": len(commits),
+            "commits_indexed": commits_indexed,
             "memories_created": memories_created,
+            "skipped": skipped,
         }
+
+    def _record_indexed_commit(self, namespace_id: str, commit_hash: str) -> None:
+        """Record indexed commit for incremental updates."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO indexed_commits
+            (namespace_id, commit_hash, indexed_at)
+            VALUES (?, ?, ?)
+        """,
+            (namespace_id, commit_hash, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
 
     def _get_git_commits(self, repo_path: Path, max_commits: int) -> list[dict]:
         """Get git commit history."""

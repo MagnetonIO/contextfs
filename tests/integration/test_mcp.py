@@ -3,9 +3,90 @@ Integration tests for MCP server.
 """
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
+
+
+class TestIndexStatus:
+    """Tests for IndexStatus attribute access (bug fix verification)."""
+
+    def test_index_status_has_attributes(self):
+        """Test that IndexStatus object has expected attributes (not dict methods)."""
+        from contextfs.autoindex import IndexStatus
+
+        status = IndexStatus(
+            namespace_id="test-ns",
+            indexed=True,
+            files_indexed=10,
+        )
+
+        # These should work (attribute access)
+        assert status.indexed is True
+        assert status.files_indexed == 10
+        assert status.namespace_id == "test-ns"
+
+        # This should NOT work (dict access) - verifies it's not a dict
+        assert not hasattr(status, "get")
+
+    def test_get_index_status_returns_object(self, temp_dir: Path):
+        """Test that ContextFS.get_index_status returns IndexStatus object."""
+        from contextfs.autoindex import IndexStatus
+        from contextfs.core import ContextFS
+
+        data_dir = temp_dir / "contextfs_data"
+        ctx = ContextFS(data_dir=data_dir, auto_index=False)
+
+        status = ctx.get_index_status()
+
+        # Status may be None if not indexed, or IndexStatus if indexed
+        if status is not None:
+            assert isinstance(status, IndexStatus)
+            assert hasattr(status, "indexed")
+            assert hasattr(status, "files_indexed")
+            assert not hasattr(status, "get")  # Not a dict
+
+        ctx.close()
+
+
+class TestCLIBackgroundIndex:
+    """Tests for CLI background indexing flag."""
+
+    def test_background_flag_returns_immediately(self, temp_dir: Path):
+        """Test that --background flag spawns subprocess and returns quickly."""
+        import sys
+
+        # Create a directory with some files
+        repo_dir = temp_dir / "test-repo"
+        repo_dir.mkdir()
+        (repo_dir / "test.py").write_text("def foo(): pass")
+
+        # Initialize git
+        subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"], cwd=repo_dir, capture_output=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=repo_dir, capture_output=True
+        )
+
+        start_time = time.time()
+
+        # Run with --background flag
+        result = subprocess.run(
+            [sys.executable, "-m", "contextfs.cli", "index", "--background", "--quiet"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            timeout=5,  # Should return within 5 seconds
+        )
+
+        elapsed = time.time() - start_time
+
+        # Should return quickly (< 2 seconds) since it spawns background process
+        assert elapsed < 2.0, f"Background index took too long: {elapsed}s"
+        assert result.returncode == 0
 
 
 class TestMCPServerTools:

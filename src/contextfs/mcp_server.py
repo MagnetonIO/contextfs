@@ -6,6 +6,8 @@ Works with Claude Desktop, Claude Code, and any MCP client.
 """
 
 import asyncio
+import os
+import signal
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,9 +52,10 @@ def get_ctx() -> ContextFS:
     if _ctx is None:
         _ctx = ContextFS(auto_load=True)
 
-    # Auto-start session for Claude Desktop
-    if not _session_started and get_source_tool() == "claude-desktop":
-        _ctx.start_session(tool="claude-desktop")
+    # Auto-start session for any tool that uses the MCP server
+    if not _session_started:
+        tool = get_source_tool()
+        _ctx.start_session(tool=tool)
         _session_started = True
 
     return _ctx
@@ -850,12 +853,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
             # Check if already indexed (unless force)
             status = ctx.get_index_status()
-            if status and status.get("indexed") and not force:
+            if status and status.indexed and not force:
                 return [
                     TextContent(
                         type="text",
                         text=f"Repository '{repo_name}' already indexed.\n"
-                        f"Files: {status.get('total_files', 0)}\n"
+                        f"Files: {status.files_indexed}\n"
                         f"Use force=true to re-index.",
                     )
                 ]
@@ -989,12 +992,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             else:
                 # Check if there's existing index data
                 status = ctx.get_index_status()
-                if status and status.get("indexed"):
+                if status and status.indexed:
                     return [
                         TextContent(
                             type="text",
                             text=f"No indexing in progress.\n"
-                            f"Repository indexed: {status.get('total_files', 0)} files",
+                            f"Repository indexed: {status.files_indexed} files",
                         )
                     ]
                 return [
@@ -1014,21 +1017,71 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 async def run_server():
     """Run the MCP server."""
     global _ctx, _session_started
+
+    # Set up signal handlers for clean shutdown
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def signal_handler():
+        shutdown_event.set()
+
+    # Handle SIGINT and SIGTERM
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, signal_handler)
+        except (NotImplementedError, OSError):
+            # Windows doesn't support add_signal_handler
+            pass
+
     try:
         async with stdio_server() as (read_stream, write_stream):
-            await server.run(read_stream, write_stream, server.create_initialization_options())
+            # Run server until shutdown signal
+            server_task = asyncio.create_task(
+                server.run(read_stream, write_stream, server.create_initialization_options())
+            )
+            shutdown_task = asyncio.create_task(shutdown_event.wait())
+
+            done, pending = await asyncio.wait(
+                [server_task, shutdown_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # Cancel pending tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+    except asyncio.CancelledError:
+        # Normal shutdown - don't treat as error
+        pass
+    except Exception:
+        # Suppress other exceptions during shutdown
+        pass
     finally:
-        # Auto-save session on server shutdown
-        if _ctx is not None and _session_started:
+        # Clean shutdown - close ContextFS if open
+        if _ctx is not None:
             try:
-                _ctx.end_session(summary="Auto-saved on MCP server shutdown")
+                _ctx.close()
             except Exception:
-                pass  # Don't fail on cleanup errors
+                pass
+        _ctx = None
+        _session_started = False
 
 
 def main():
     """Entry point for MCP server."""
-    asyncio.run(run_server())
+    try:
+        asyncio.run(run_server())
+    except (KeyboardInterrupt, SystemExit, BrokenPipeError):
+        pass
+    except Exception:
+        # Exit cleanly without error
+        pass
+    # Always exit with success code to prevent "MCP server failed" messages
+    # This is normal shutdown - stdin closing is how Claude Code signals exit
+    os._exit(0)
 
 
 if __name__ == "__main__":

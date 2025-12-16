@@ -39,6 +39,11 @@ class ClaudeCodePlugin:
         print("Claude Code plugin installed successfully.")
         print(f"Settings: {self._settings_file}")
         print(f"Skills: {self._skills_dir}")
+        print("\nInstalled components:")
+        print("  - SessionStart hook (auto-index in background)")
+        print("  - PreCompact hook (auto-save before context compaction)")
+        print("  - MCP server (contextfs)")
+        print("\nRestart Claude Code for changes to take effect.")
 
     def uninstall(self) -> None:
         """Uninstall Claude Code hooks from settings."""
@@ -46,14 +51,18 @@ class ClaudeCodePlugin:
             settings = json.loads(self._settings_file.read_text())
             if "hooks" in settings:
                 # Remove contextfs hooks
-                for hook_type in ["PreCompact", "SessionEnd"]:
+                for hook_type in ["SessionStart", "PreCompact", "SessionEnd"]:
                     if hook_type in settings["hooks"]:
                         settings["hooks"][hook_type] = [
                             h
                             for h in settings["hooks"][hook_type]
                             if "contextfs" not in h.get("hooks", [{}])[0].get("command", "")
                         ]
-                self._settings_file.write_text(json.dumps(settings, indent=2))
+            # Remove MCP server
+            if "mcpServers" in settings and "contextfs" in settings["mcpServers"]:
+                del settings["mcpServers"]["contextfs"]
+
+            self._settings_file.write_text(json.dumps(settings, indent=2))
 
         # Remove skill files
         skill_file = self._skills_dir / "contextfs-search.md"
@@ -76,6 +85,19 @@ class ClaudeCodePlugin:
         if "hooks" not in settings:
             settings["hooks"] = {}
 
+        # Add SessionStart hook (indexes on session start in background)
+        settings["hooks"]["SessionStart"] = [
+            {
+                "matcher": {},
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "uvx contextfs index --quiet --background",
+                    }
+                ],
+            }
+        ]
+
         # Add PreCompact hook (saves before context compaction)
         settings["hooks"]["PreCompact"] = [
             {
@@ -89,18 +111,16 @@ class ClaudeCodePlugin:
             }
         ]
 
-        # Add SessionEnd hook (saves when session ends)
-        settings["hooks"]["SessionEnd"] = [
-            {
-                "matcher": {},
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "uvx contextfs save-session --label 'session-end'",
-                    }
-                ],
-            }
-        ]
+        # Ensure mcpServers section exists
+        if "mcpServers" not in settings:
+            settings["mcpServers"] = {}
+
+        # Add contextfs MCP server
+        settings["mcpServers"]["contextfs"] = {
+            "command": "uvx",
+            "args": ["contextfs", "serve"],
+            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-code"},
+        }
 
         # Write updated settings
         self._settings_file.write_text(json.dumps(settings, indent=2))

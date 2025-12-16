@@ -4,6 +4,7 @@ CLI for ContextFS.
 Provides command-line access to memory operations.
 """
 
+from importlib.metadata import version as get_version
 from pathlib import Path
 
 import typer
@@ -13,12 +14,33 @@ from rich.table import Table
 from contextfs.core import ContextFS
 from contextfs.schemas import MemoryType
 
+
+def version_callback(value: bool):
+    if value:
+        print(f"contextfs {get_version('contextfs')}")
+        raise typer.Exit()
+
+
 app = typer.Typer(
     name="contextfs",
     help="ContextFS - Universal AI Memory Layer",
     no_args_is_help=True,
 )
 console = Console()
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        None,
+        "--version",
+        "-V",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+):
+    pass
 
 
 def get_ctx() -> ContextFS:
@@ -171,6 +193,139 @@ def delete(
 
 
 @app.command()
+def prune(
+    days: int | None = typer.Option(None, "--days", "-d", help="Delete memories older than N days"),
+    type: str | None = typer.Option(None, "--type", "-t", help="Only delete memories of this type"),
+    repo: str | None = typer.Option(
+        None, "--repo", "-r", help="Only delete memories from this repo"
+    ),
+    auto_indexed: bool = typer.Option(
+        False, "--auto-indexed", help="Only delete auto-indexed memories"
+    ),
+    all_memories: bool = typer.Option(
+        False, "--all", help="Delete ALL memories (use with caution)"
+    ),
+    confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be deleted without deleting"
+    ),
+):
+    """Prune memories based on criteria.
+
+    Examples:
+        contextfs prune --days 30                    # Delete memories older than 30 days
+        contextfs prune --repo myproject --all      # Delete all memories from a repo
+        contextfs prune --auto-indexed --days 7     # Delete week-old auto-indexed memories
+        contextfs prune --all --yes                 # Delete ALL memories (dangerous!)
+    """
+    from datetime import datetime, timedelta
+
+    # Require at least one filter unless --all is specified
+    if not all_memories and not days and not repo and not type and not auto_indexed:
+        console.print(
+            "[red]Error: Specify at least one filter (--days, --repo, --type, --auto-indexed) or use --all[/red]"
+        )
+        raise typer.Exit(1)
+
+    ctx = get_ctx()
+    cutoff = datetime.now() - timedelta(days=days) if days else None
+
+    # Get all memories
+    memories = ctx.list_recent(limit=10000)
+
+    # Filter by criteria
+    to_delete = []
+    for m in memories:
+        # If --all without other filters, include everything
+        if all_memories and not days and not repo and not type and not auto_indexed:
+            to_delete.append(m)
+            continue
+
+        # Check age
+        if cutoff and m.created_at >= cutoff:
+            continue
+
+        # Check repo filter
+        if repo and m.source_repo != repo:
+            continue
+
+        # Check type filter
+        if type and m.type.value != type:
+            continue
+
+        # Check auto-indexed filter
+        if auto_indexed and not m.metadata.get("auto_indexed"):
+            continue
+
+        # If we got here with filters, add it
+        if days or repo or type or auto_indexed:
+            to_delete.append(m)
+
+    if not to_delete:
+        console.print("[yellow]No memories match the criteria[/yellow]")
+        return
+
+    # Build filter description
+    filters = []
+    if days:
+        filters.append(f"older than {days} days")
+    if repo:
+        filters.append(f"from repo '{repo}'")
+    if type:
+        filters.append(f"type={type}")
+    if auto_indexed:
+        filters.append("auto-indexed")
+    if all_memories and not filters:
+        filters.append("ALL MEMORIES")
+    filter_desc = ", ".join(filters) if filters else "all"
+
+    # Show what would be deleted
+    console.print(f"\n[bold]Found {len(to_delete)} memories to delete ({filter_desc}):[/bold]")
+
+    table = Table()
+    table.add_column("ID", style="cyan")
+    table.add_column("Type", style="magenta")
+    table.add_column("Repo", style="blue")
+    table.add_column("Created", style="green")
+    table.add_column("Content/Summary")
+
+    for m in to_delete[:20]:  # Show first 20
+        content = m.summary or m.content[:50] + "..."
+        table.add_row(
+            m.id[:8],
+            m.type.value,
+            m.source_repo or "-",
+            m.created_at.strftime("%Y-%m-%d"),
+            content,
+        )
+
+    console.print(table)
+
+    if len(to_delete) > 20:
+        console.print(f"[dim]... and {len(to_delete) - 20} more[/dim]")
+
+    if dry_run:
+        console.print("\n[yellow]Dry run - no memories deleted[/yellow]")
+        return
+
+    if not confirm:
+        warning = ""
+        if all_memories and not days and not repo:
+            warning = "[bold red]WARNING: This will delete ALL memories![/bold red]\n"
+        console.print(warning)
+        if not typer.confirm(f"Delete {len(to_delete)} memories?"):
+            raise typer.Abort()
+
+    # Delete memories
+    deleted = 0
+    for m in to_delete:
+        if ctx.delete(m.id):
+            deleted += 1
+
+    console.print(f"\n[green]Deleted {deleted} memories[/green]")
+
+
+@app.command()
 def sessions(
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
     tool: str | None = typer.Option(None, "--tool", help="Filter by tool"),
@@ -255,8 +410,9 @@ def save_session(
         except Exception as e:
             console.print(f"[yellow]Warning: Could not read transcript: {e}[/yellow]")
 
-    # End session to save it
-    ctx.end_session(summary=f"Auto-saved session: {label or 'unnamed'}")
+    # Set summary and end session to save it
+    session.summary = f"Auto-saved session: {label or 'unnamed'}"
+    ctx.end_session(generate_summary=False)
 
     console.print("[green]Session saved[/green]")
     console.print(f"ID: {session.id}")
@@ -320,81 +476,127 @@ def index(
     incremental: bool = typer.Option(
         True, "--incremental/--full", help="Only index new/changed files"
     ),
+    quiet: bool = typer.Option(
+        False, "--quiet", "-q", help="Quiet mode for hooks (minimal output)"
+    ),
+    background: bool = typer.Option(
+        False, "--background", "-b", help="Run indexing in background (for hooks)"
+    ),
 ):
     """Index a repository's codebase for semantic search."""
+    import subprocess
+    import sys
+
     from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
     # Determine repo path
     start_path = path or Path.cwd()
     repo_path = find_git_root(start_path)
 
+    # Background mode: spawn subprocess and return immediately
+    if background:
+        cmd = [sys.executable, "-m", "contextfs.cli", "index", "--quiet"]
+        if force:
+            cmd.append("--force")
+        if not incremental:
+            cmd.append("--full")
+        if repo_path:
+            cmd.append(str(repo_path))
+
+        # Start detached subprocess
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        if not quiet:
+            console.print("[cyan]Indexing started in background[/cyan]")
+        return
+
     if not repo_path:
         # Not in a git repo, use the provided path or cwd
         repo_path = start_path.resolve()
-        console.print(f"[yellow]Not a git repository, indexing: {repo_path}[/yellow]")
+        if not quiet:
+            console.print(f"[yellow]Not a git repository, indexing: {repo_path}[/yellow]")
     else:
-        console.print(f"[cyan]Found git repository: {repo_path}[/cyan]")
+        if not quiet:
+            console.print(f"[cyan]Found git repository: {repo_path}[/cyan]")
 
     if not repo_path.exists():
-        console.print(f"[red]Path does not exist: {repo_path}[/red]")
+        if not quiet:
+            console.print(f"[red]Path does not exist: {repo_path}[/red]")
         raise typer.Exit(1)
 
     ctx = get_ctx()
 
     # Check if already indexed
     status = ctx.get_index_status()
-    if status and status.indexed and not force:
-        console.print("\n[yellow]Repository already indexed:[/yellow]")
-        console.print(f"  Files: {status.files_indexed}")
-        console.print(f"  Memories: {status.memories_created}")
-        console.print(f"  Indexed at: {status.indexed_at}")
-        console.print("\n[dim]Use --force to re-index[/dim]")
-        return
+    already_indexed = status and status.indexed
 
     if force:
-        console.print("[yellow]Force re-indexing...[/yellow]")
+        if not quiet:
+            console.print("[yellow]Force re-indexing (full)...[/yellow]")
         ctx.clear_index()
+        incremental = False  # Force means full re-index
+    elif already_indexed:
+        if not quiet:
+            console.print(
+                f"[cyan]Running incremental index (previously indexed {status.files_indexed} files)[/cyan]"
+            )
+        # Continue with incremental=True (default)
 
     # Index with progress
-    console.print(f"\n[bold]Indexing {repo_path.name}...[/bold]\n")
+    if not quiet:
+        console.print(f"\n[bold]Indexing {repo_path.name}...[/bold]\n")
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Discovering files...", total=None)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Discovering files...", total=None)
 
-        def on_progress(current: int, total: int, filename: str):
-            progress.update(
-                task, total=total, completed=current, description=f"[cyan]{filename[:50]}[/cyan]"
+            def on_progress(current: int, total: int, filename: str):
+                progress.update(
+                    task,
+                    total=total,
+                    completed=current,
+                    description=f"[cyan]{filename[:50]}[/cyan]",
+                )
+
+            result = ctx.index_repository(
+                repo_path=repo_path,
+                on_progress=on_progress,
+                incremental=incremental,
             )
-
+    else:
+        # Quiet mode - no progress output
         result = ctx.index_repository(
             repo_path=repo_path,
-            on_progress=on_progress,
             incremental=incremental,
         )
 
     # Display results
-    console.print("\n[green]✅ Indexing complete![/green]\n")
+    if not quiet:
+        console.print("\n[green]✅ Indexing complete![/green]\n")
 
-    table = Table(title="Indexing Results")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Count", style="green", justify="right")
+        table = Table(title="Indexing Results")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", style="green", justify="right")
 
-    table.add_row("Files discovered", str(result.get("files_discovered", 0)))
-    table.add_row("Files indexed", str(result.get("files_indexed", 0)))
-    table.add_row("Commits indexed", str(result.get("commits_indexed", 0)))
-    table.add_row("Memories created", str(result.get("memories_created", 0)))
-    table.add_row("Skipped (unchanged)", str(result.get("skipped", 0)))
+        table.add_row("Files discovered", str(result.get("files_discovered", 0)))
+        table.add_row("Files indexed", str(result.get("files_indexed", 0)))
+        table.add_row("Commits indexed", str(result.get("commits_indexed", 0)))
+        table.add_row("Memories created", str(result.get("memories_created", 0)))
+        table.add_row("Skipped (unchanged)", str(result.get("skipped", 0)))
 
-    console.print(table)
+        console.print(table)
 
-    if result.get("errors"):
-        console.print(f"\n[yellow]Warnings: {len(result['errors'])} files had errors[/yellow]")
+        if result.get("errors"):
+            console.print(f"\n[yellow]Warnings: {len(result['errors'])} files had errors[/yellow]")
 
 
 @app.command()
@@ -427,7 +629,7 @@ def serve():
     """Start the MCP server."""
     from contextfs.mcp_server import main as mcp_main
 
-    console.print("[green]Starting ContextFS MCP server...[/green]")
+    # MCP uses stdout for JSON-RPC - no printing allowed
     mcp_main()
 
 
