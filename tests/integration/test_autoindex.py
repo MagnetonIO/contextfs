@@ -305,6 +305,46 @@ class TestAutoIndexer:
         indexer.clear_index("test-namespace")
         assert indexer.is_indexed("test-namespace") is False
 
+    def test_list_all_indexes(self, temp_dir: Path, rag_backend, sample_python_code: str):
+        """Test listing all indexed repositories."""
+        from contextfs.autoindex import AutoIndexer
+
+        (temp_dir / "app.py").write_text(sample_python_code)
+
+        indexer = AutoIndexer(db_path=temp_dir / "test.db")
+
+        # No indexes initially
+        indexes = indexer.list_all_indexes()
+        assert indexes == []
+
+        # Index a repository
+        indexer.index_repository(
+            repo_path=temp_dir,
+            namespace_id="test-namespace-1",
+            rag_backend=rag_backend,
+        )
+
+        # Should have one index
+        indexes = indexer.list_all_indexes()
+        assert len(indexes) == 1
+        assert indexes[0].namespace_id == "test-namespace-1"
+        assert indexes[0].indexed is True
+        assert indexes[0].files_indexed >= 1
+
+        # Index another "repository" (same dir, different namespace)
+        indexer.index_repository(
+            repo_path=temp_dir,
+            namespace_id="test-namespace-2",
+            rag_backend=rag_backend,
+        )
+
+        # Should have two indexes
+        indexes = indexer.list_all_indexes()
+        assert len(indexes) == 2
+        namespace_ids = {idx.namespace_id for idx in indexes}
+        assert "test-namespace-1" in namespace_ids
+        assert "test-namespace-2" in namespace_ids
+
 
 class TestCodebaseSummary:
     """Tests for codebase summary generation."""

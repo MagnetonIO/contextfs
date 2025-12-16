@@ -316,6 +316,10 @@ class ContextFS:
         self._get_auto_indexer().clear_index(self.namespace_id)
         self._indexing_triggered = False
 
+    def list_indexes(self) -> list:
+        """List all indexed repositories."""
+        return self._get_auto_indexer().list_all_indexes()
+
     # ==================== Memory Operations ====================
 
     def save(

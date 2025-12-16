@@ -774,13 +774,30 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         elif name == "contextfs_list_repos":
             repos = ctx.list_repos()
+            indexes = ctx.list_indexes()
 
-            if not repos:
-                return [TextContent(type="text", text="No repositories found.")]
+            output = []
 
-            output = ["Repositories with memories:"]
-            for r in repos:
-                output.append(f"  • {r['source_repo']} ({r['memory_count']} memories)")
+            # Repos with memories
+            if repos:
+                output.append("Repositories with memories:")
+                for r in repos:
+                    output.append(f"  • {r['source_repo']} ({r['memory_count']} memories)")
+            else:
+                output.append("No repositories with memories found.")
+
+            output.append("")
+
+            # Indexed repositories
+            if indexes:
+                output.append("Indexed repositories:")
+                for idx in indexes:
+                    repo_name = idx.repo_path.split("/")[-1] if idx.repo_path else idx.namespace_id
+                    output.append(
+                        f"  • {repo_name} ({idx.files_indexed} files, {idx.memories_created} code chunks)"
+                    )
+            else:
+                output.append("No indexed repositories found.")
 
             return [TextContent(type="text", text="\n".join(output))]
 
