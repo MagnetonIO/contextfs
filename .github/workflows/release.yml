@@ -87,6 +87,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -94,11 +96,56 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "tag=${PREV_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          if [ -n "${{ steps.prev_tag.outputs.tag }}" ]; then
+            CHANGELOG=$(git log ${{ steps.prev_tag.outputs.tag }}..HEAD --pretty=format:"- %s" --no-merges | head -50)
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s" --no-merges -10)
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          generate_release_notes: false
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
           make_latest: true
+          body: |
+            ## ContextFS v${{ steps.version.outputs.version }}
+
+            ### Installation
+
+            ```bash
+            pip install contextfs==${{ steps.version.outputs.version }}
+            ```
+
+            Or with uvx:
+            ```bash
+            uvx contextfs --version
+            ```
+
+            ### What's Changed
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ### Links
+
+            - [Documentation](https://magnetonio.github.io/contextfs/)
+            - [PyPI](https://pypi.org/project/contextfs/${{ steps.version.outputs.version }}/)
+            - [Changelog](https://github.com/MagnetonIO/contextfs/commits/v${{ steps.version.outputs.version }})
