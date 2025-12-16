@@ -307,6 +307,34 @@ class AutoIndexer:
             commit_hash=row[6],
         )
 
+    def list_all_indexes(self) -> list[IndexStatus]:
+        """List all indexed repositories."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT namespace_id, indexed, indexed_at, files_indexed,
+                   memories_created, repo_path, commit_hash
+            FROM index_status
+            WHERE indexed = 1
+            ORDER BY indexed_at DESC
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            IndexStatus(
+                namespace_id=row[0],
+                indexed=bool(row[1]),
+                indexed_at=datetime.fromisoformat(row[2]) if row[2] else None,
+                files_indexed=row[3],
+                memories_created=row[4],
+                repo_path=row[5],
+                commit_hash=row[6],
+            )
+            for row in rows
+        ]
+
     def should_index(self, namespace_id: str, repo_path: Path | None = None) -> bool:
         """
         Determine if indexing should occur.
