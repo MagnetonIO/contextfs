@@ -204,6 +204,62 @@ def sessions(
     console.print(table)
 
 
+@app.command("save-session")
+def save_session(
+    label: str = typer.Option(None, "--label", "-l", help="Session label"),
+    transcript: Path | None = typer.Option(None, "--transcript", "-t", help="Path to transcript JSONL file"),
+):
+    """Save the current session to memory (for use with hooks)."""
+    import json
+    import sys
+
+    ctx = get_ctx()
+
+    # Try to read hook input from stdin for transcript path
+    transcript_path = transcript
+    if not transcript_path and not sys.stdin.isatty():
+        try:
+            hook_input = json.load(sys.stdin)
+            if "transcript_path" in hook_input:
+                transcript_path = Path(hook_input["transcript_path"]).expanduser()
+        except Exception:
+            pass
+
+    # Get or create session
+    session = ctx.get_current_session()
+    if not session:
+        session = ctx.start_session(tool="claude-code", label=label)
+    elif label:
+        session.label = label
+
+    # If we have a transcript path, read and save messages
+    if transcript_path and transcript_path.exists():
+        try:
+            with open(transcript_path) as f:
+                for line in f:
+                    if line.strip():
+                        entry = json.loads(line)
+                        if entry.get("type") == "human":
+                            ctx.log_message("user", entry.get("message", {}).get("content", ""))
+                        elif entry.get("type") == "assistant":
+                            content = entry.get("message", {}).get("content", "")
+                            if isinstance(content, list):
+                                # Handle content blocks
+                                text_parts = [c.get("text", "") for c in content if c.get("type") == "text"]
+                                content = "\n".join(text_parts)
+                            ctx.log_message("assistant", content)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not read transcript: {e}[/yellow]")
+
+    # End session to save it
+    ctx.end_session(summary=f"Auto-saved session: {label or 'unnamed'}")
+
+    console.print(f"[green]Session saved[/green]")
+    console.print(f"ID: {session.id}")
+    if label:
+        console.print(f"Label: {label}")
+
+
 @app.command()
 def status():
     """Show ContextFS status."""
