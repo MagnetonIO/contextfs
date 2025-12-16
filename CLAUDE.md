@@ -4,8 +4,15 @@
 Always follow GitFlow for changes:
 1. Create a new branch for changes (feature/*, bugfix/*, hotfix/*)
 2. Make changes on the feature branch
-3. Create PR to merge into main
-4. Never commit directly to main
+3. **Validate work before committing** (run relevant tests, verify functionality)
+4. Create PR to merge into main
+5. Never commit directly to main
+
+## Validation Before Commit
+Before committing any changes:
+1. Run relevant tests: `pytest tests/` or specific test files
+2. Verify the fix/feature works as expected
+3. Check for regressions in related functionality
 
 ## Search Strategy
 Always search contextfs memories FIRST before searching code directly:
