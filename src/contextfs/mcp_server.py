@@ -41,6 +41,7 @@ def get_ctx() -> ContextFS:
 def get_source_tool() -> str:
     """Get source tool name."""
     import os
+
     # Allow override via environment
     return os.environ.get("CONTEXTFS_SOURCE_TOOL", _source_tool)
 
@@ -48,6 +49,7 @@ def get_source_tool() -> str:
 def detect_current_repo() -> str | None:
     """Detect repo name from current working directory at runtime."""
     from pathlib import Path
+
     cwd = Path.cwd()
     # Walk up to find .git
     for parent in [cwd] + list(cwd.parents):
@@ -157,7 +159,7 @@ This ensures your insights and decisions are preserved for future conversations.
                         text=f"""Please save this conversation session to ContextFS:
 
 Summary: {summary}
-Label: {label or '(auto-generated)'}
+Label: {label or "(auto-generated)"}
 
 Use the `contextfs_save` tool with:
 - `save_session`: "current"
@@ -195,7 +197,7 @@ First, determine the appropriate memory type:
                         text=f"""Please save this information to ContextFS memory:
 
 Content: {content}
-{f'Type: {mem_type}' if mem_type else ''}
+{f"Type: {mem_type}" if mem_type else ""}
 {type_guidance}
 Use the `contextfs_save` tool with:
 - `content`: A clear, searchable description of the information

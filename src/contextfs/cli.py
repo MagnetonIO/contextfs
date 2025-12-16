@@ -207,7 +207,9 @@ def sessions(
 @app.command("save-session")
 def save_session(
     label: str = typer.Option(None, "--label", "-l", help="Session label"),
-    transcript: Path | None = typer.Option(None, "--transcript", "-t", help="Path to transcript JSONL file"),
+    transcript: Path | None = typer.Option(
+        None, "--transcript", "-t", help="Path to transcript JSONL file"
+    ),
 ):
     """Save the current session to memory (for use with hooks)."""
     import json
@@ -245,7 +247,9 @@ def save_session(
                             content = entry.get("message", {}).get("content", "")
                             if isinstance(content, list):
                                 # Handle content blocks
-                                text_parts = [c.get("text", "") for c in content if c.get("type") == "text"]
+                                text_parts = [
+                                    c.get("text", "") for c in content if c.get("type") == "text"
+                                ]
                                 content = "\n".join(text_parts)
                             ctx.log_message("assistant", content)
         except Exception as e:
@@ -254,7 +258,7 @@ def save_session(
     # End session to save it
     ctx.end_session(summary=f"Auto-saved session: {label or 'unnamed'}")
 
-    console.print(f"[green]Session saved[/green]")
+    console.print("[green]Session saved[/green]")
     console.print(f"ID: {session.id}")
     if label:
         console.print(f"Label: {label}")
@@ -310,11 +314,15 @@ def find_git_root(start_path: Path) -> Path | None:
 @app.command()
 def index(
     path: Path | None = typer.Argument(None, help="Repository path (auto-detects git root)"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force re-index even if already indexed"),
-    incremental: bool = typer.Option(True, "--incremental/--full", help="Only index new/changed files"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force re-index even if already indexed"
+    ),
+    incremental: bool = typer.Option(
+        True, "--incremental/--full", help="Only index new/changed files"
+    ),
 ):
     """Index a repository's codebase for semantic search."""
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
     # Determine repo path
     start_path = path or Path.cwd()
@@ -336,11 +344,11 @@ def index(
     # Check if already indexed
     status = ctx.get_index_status()
     if status and status.indexed and not force:
-        console.print(f"\n[yellow]Repository already indexed:[/yellow]")
+        console.print("\n[yellow]Repository already indexed:[/yellow]")
         console.print(f"  Files: {status.files_indexed}")
         console.print(f"  Memories: {status.memories_created}")
         console.print(f"  Indexed at: {status.indexed_at}")
-        console.print(f"\n[dim]Use --force to re-index[/dim]")
+        console.print("\n[dim]Use --force to re-index[/dim]")
         return
 
     if force:
@@ -360,7 +368,9 @@ def index(
         task = progress.add_task("Discovering files...", total=None)
 
         def on_progress(current: int, total: int, filename: str):
-            progress.update(task, total=total, completed=current, description=f"[cyan]{filename[:50]}[/cyan]")
+            progress.update(
+                task, total=total, completed=current, description=f"[cyan]{filename[:50]}[/cyan]"
+            )
 
         result = ctx.index_repository(
             repo_path=repo_path,
@@ -369,7 +379,7 @@ def index(
         )
 
     # Display results
-    console.print(f"\n[green]✅ Indexing complete![/green]\n")
+    console.print("\n[green]✅ Indexing complete![/green]\n")
 
     table = Table(title="Indexing Results")
     table.add_column("Metric", style="cyan")
@@ -450,7 +460,13 @@ def install_claude_desktop(
     def get_claude_desktop_config_path() -> Path:
         system = platform.system()
         if system == "Darwin":
-            return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+            return (
+                Path.home()
+                / "Library"
+                / "Application Support"
+                / "Claude"
+                / "claude_desktop_config.json"
+            )
         elif system == "Windows":
             return Path(os.environ.get("APPDATA", "")) / "Claude" / "claude_desktop_config.json"
         else:
@@ -505,13 +521,13 @@ def install_claude_desktop(
     if find_contextfs_mcp_path():
         config["mcpServers"]["contextfs"] = {
             "command": contextfs_path,
-            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"}
+            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"},
         }
     else:
         config["mcpServers"]["contextfs"] = {
             "command": sys.executable,
             "args": ["-m", "contextfs.mcp_server"],
-            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"}
+            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"},
         }
 
     with open(config_path, "w") as f:

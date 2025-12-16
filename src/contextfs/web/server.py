@@ -255,7 +255,7 @@ def create_app(
                 )
 
             # Apply offset pagination
-            paginated_results = results[offset:offset + limit]
+            paginated_results = results[offset : offset + limit]
 
             return APIResponse(
                 success=True,

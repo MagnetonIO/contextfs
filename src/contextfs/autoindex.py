@@ -5,13 +5,12 @@ Automatically indexes repository files on first memory save,
 creating a searchable knowledge base of the codebase.
 """
 
-import json
 import logging
 import sqlite3
 import subprocess
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from contextfs.config import Config
 from contextfs.filetypes.integration import SmartDocumentProcessor
@@ -85,31 +84,90 @@ DEFAULT_IGNORE_PATTERNS = {
 # Extensions to index by default
 DEFAULT_INDEX_EXTENSIONS = {
     # Programming languages
-    ".py", ".js", ".ts", ".tsx", ".jsx",
-    ".java", ".kt", ".scala",
-    ".go", ".rs", ".cpp", ".c", ".h", ".hpp",
-    ".cs", ".fs", ".vb",
-    ".rb", ".php", ".swift", ".m", ".mm",
-    ".lua", ".pl", ".pm", ".r", ".R",
-    ".ex", ".exs", ".erl", ".hrl",
-    ".clj", ".cljs", ".cljc",
-    ".hs", ".ml", ".mli",
-    ".jl", ".nim", ".zig", ".d",
-    ".v", ".sv", ".vhd", ".vhdl",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".java",
+    ".kt",
+    ".scala",
+    ".go",
+    ".rs",
+    ".cpp",
+    ".c",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".fs",
+    ".vb",
+    ".rb",
+    ".php",
+    ".swift",
+    ".m",
+    ".mm",
+    ".lua",
+    ".pl",
+    ".pm",
+    ".r",
+    ".R",
+    ".ex",
+    ".exs",
+    ".erl",
+    ".hrl",
+    ".clj",
+    ".cljs",
+    ".cljc",
+    ".hs",
+    ".ml",
+    ".mli",
+    ".jl",
+    ".nim",
+    ".zig",
+    ".d",
+    ".v",
+    ".sv",
+    ".vhd",
+    ".vhdl",
     # Web
-    ".html", ".htm", ".css", ".scss", ".sass", ".less",
-    ".vue", ".svelte",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".sass",
+    ".less",
+    ".vue",
+    ".svelte",
     # Config
-    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-    ".xml", ".plist",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".xml",
+    ".plist",
     # Documentation
-    ".md", ".rst", ".txt", ".adoc",
+    ".md",
+    ".rst",
+    ".txt",
+    ".adoc",
     # Data
-    ".sql", ".graphql", ".gql",
+    ".sql",
+    ".graphql",
+    ".gql",
     # Shell
-    ".sh", ".bash", ".zsh", ".fish", ".ps1",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".fish",
+    ".ps1",
     # Templates
-    ".jinja", ".j2", ".ejs", ".hbs", ".pug",
+    ".jinja",
+    ".j2",
+    ".ejs",
+    ".hbs",
+    ".pug",
 }
 
 
@@ -210,10 +268,7 @@ class AutoIndexer:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT indexed FROM index_status WHERE namespace_id = ?",
-            (namespace_id,)
-        )
+        cursor.execute("SELECT indexed FROM index_status WHERE namespace_id = ?", (namespace_id,))
         row = cursor.fetchone()
         conn.close()
 
@@ -224,10 +279,7 @@ class AutoIndexer:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT * FROM index_status WHERE namespace_id = ?",
-            (namespace_id,)
-        )
+        cursor.execute("SELECT * FROM index_status WHERE namespace_id = ?", (namespace_id,))
         row = cursor.fetchone()
         conn.close()
 
@@ -368,6 +420,7 @@ class AutoIndexer:
     def _file_hash(self, file_path: Path) -> str:
         """Get simple hash of file for change detection."""
         import hashlib
+
         try:
             content = file_path.read_bytes()
             return hashlib.md5(content).hexdigest()[:16]
@@ -417,7 +470,7 @@ class AutoIndexer:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT file_path, file_hash FROM indexed_files WHERE namespace_id = ?",
-                (namespace_id,)
+                (namespace_id,),
             )
             indexed_hashes = {row[0]: row[1] for row in cursor.fetchall()}
             conn.close()
@@ -562,17 +615,20 @@ class AutoIndexer:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT OR REPLACE INTO indexed_files
             (namespace_id, file_path, file_hash, indexed_at, memories_created)
             VALUES (?, ?, ?, ?, ?)
-        """, (
-            namespace_id,
-            file_path,
-            file_hash,
-            datetime.now().isoformat(),
-            memories_created,
-        ))
+        """,
+            (
+                namespace_id,
+                file_path,
+                file_hash,
+                datetime.now().isoformat(),
+                memories_created,
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -611,13 +667,13 @@ class AutoIndexer:
                 on_progress(idx + 1, len(commits), commit["hash"][:8])
 
             # Create memory for each commit
-            content = f"""Git Commit: {commit['hash'][:8]}
-Author: {commit['author']}
-Date: {commit['date']}
+            content = f"""Git Commit: {commit["hash"][:8]}
+Author: {commit["author"]}
+Date: {commit["date"]}
 
-{commit['message']}
+{commit["message"]}
 
-Files changed: {', '.join(commit['files'][:10])}{'...' if len(commit['files']) > 10 else ''}
+Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) > 10 else ""}
 """
 
             memory = Memory(
@@ -654,7 +710,8 @@ Files changed: {', '.join(commit['files'][:10])}{'...' if len(commit['files']) >
             # Get commit log with format: hash|author|date|message
             result = subprocess.run(
                 [
-                    "git", "log",
+                    "git",
+                    "log",
                     f"-{max_commits}",
                     "--format=%H|%an|%ad|%s",
                     "--date=short",
@@ -687,15 +744,19 @@ Files changed: {', '.join(commit['files'][:10])}{'...' if len(commit['files']) >
                     text=True,
                     timeout=10,
                 )
-                files = files_result.stdout.strip().split("\n") if files_result.returncode == 0 else []
+                files = (
+                    files_result.stdout.strip().split("\n") if files_result.returncode == 0 else []
+                )
 
-                commits.append({
-                    "hash": commit_hash,
-                    "author": author,
-                    "date": date,
-                    "message": message,
-                    "files": [f for f in files if f],
-                })
+                commits.append(
+                    {
+                        "hash": commit_hash,
+                        "author": author,
+                        "date": date,
+                        "message": message,
+                        "files": [f for f in files if f],
+                    }
+                )
 
             return commits
 
@@ -748,18 +809,21 @@ Files changed: {', '.join(commit['files'][:10])}{'...' if len(commit['files']) >
 
         commit_hash = self._get_commit_hash(repo_path)
 
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT OR REPLACE INTO index_status
             (namespace_id, indexed, indexed_at, files_indexed, memories_created, repo_path, commit_hash)
             VALUES (?, 1, ?, ?, ?, ?, ?)
-        """, (
-            namespace_id,
-            datetime.now().isoformat(),
-            files_indexed,
-            memories_created,
-            str(repo_path),
-            commit_hash,
-        ))
+        """,
+            (
+                namespace_id,
+                datetime.now().isoformat(),
+                files_indexed,
+                memories_created,
+                str(repo_path),
+                commit_hash,
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -769,14 +833,8 @@ Files changed: {', '.join(commit['files'][:10])}{'...' if len(commit['files']) >
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute(
-            "DELETE FROM index_status WHERE namespace_id = ?",
-            (namespace_id,)
-        )
-        cursor.execute(
-            "DELETE FROM indexed_files WHERE namespace_id = ?",
-            (namespace_id,)
-        )
+        cursor.execute("DELETE FROM index_status WHERE namespace_id = ?", (namespace_id,))
+        cursor.execute("DELETE FROM indexed_files WHERE namespace_id = ?", (namespace_id,))
 
         conn.commit()
         conn.close()
@@ -830,13 +888,13 @@ def create_codebase_summary(repo_path: Path) -> Memory:
     summary_content = f"""Codebase Summary for {repo_path.name}
 
 Structure:
-- Top-level directories: {', '.join(top_dirs[:10])}
+- Top-level directories: {", ".join(top_dirs[:10])}
 - Total indexable files: {total_files}
 - Estimated lines of code: {total_lines}
 
 File types: {ext_summary}
 
-This codebase was auto-indexed on {datetime.now().strftime('%Y-%m-%d %H:%M')}.
+This codebase was auto-indexed on {datetime.now().strftime("%Y-%m-%d %H:%M")}.
 Search for specific files, functions, or patterns to explore the code."""
 
     return Memory(

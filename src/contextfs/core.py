@@ -5,9 +5,9 @@ Core ContextFS class - main interface for memory operations.
 import json
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from contextfs.config import get_config
 from contextfs.rag import RAGBackend
@@ -225,6 +225,7 @@ class ContextFS:
         """Lazy-load the auto-indexer."""
         if self._auto_indexer is None:
             from contextfs.autoindex import AutoIndexer
+
             self._auto_indexer = AutoIndexer(
                 config=self.config,
                 db_path=self._db_path,
@@ -443,18 +444,28 @@ class ContextFS:
             List of SearchResult objects
         """
         # For cross-repo or project search, don't filter by namespace
-        effective_namespace = None if (cross_repo or project) else (namespace_id or self.namespace_id)
+        effective_namespace = (
+            None if (cross_repo or project) else (namespace_id or self.namespace_id)
+        )
 
         if use_semantic:
             results = self.rag.search(
                 query=query,
-                limit=limit * 2 if (source_tool or source_repo or project) else limit,  # Over-fetch for filtering
+                limit=limit * 2
+                if (source_tool or source_repo or project)
+                else limit,  # Over-fetch for filtering
                 type=type,
                 tags=tags,
                 namespace_id=effective_namespace,
             )
         else:
-            results = self._fts_search(query, limit * 2 if (source_tool or source_repo or project) else limit, type, tags, effective_namespace)
+            results = self._fts_search(
+                query,
+                limit * 2 if (source_tool or source_repo or project) else limit,
+                type,
+                tags,
+                effective_namespace,
+            )
 
         # Post-filter by source_tool, source_repo, and project if specified
         if source_tool or source_repo or project:
@@ -521,11 +532,13 @@ class ContextFS:
 
         repos = []
         for row in cursor.fetchall():
-            repos.append({
-                "source_repo": row[0],
-                "namespace_id": row[1],
-                "memory_count": row[2],
-            })
+            repos.append(
+                {
+                    "source_repo": row[0],
+                    "namespace_id": row[1],
+                    "memory_count": row[2],
+                }
+            )
 
         conn.close()
         return repos
@@ -550,10 +563,12 @@ class ContextFS:
 
         tools = []
         for row in cursor.fetchall():
-            tools.append({
-                "source_tool": row[0],
-                "memory_count": row[1],
-            })
+            tools.append(
+                {
+                    "source_tool": row[0],
+                    "memory_count": row[1],
+                }
+            )
 
         conn.close()
         return tools
@@ -578,11 +593,13 @@ class ContextFS:
 
         projects = []
         for row in cursor.fetchall():
-            projects.append({
-                "project": row[0],
-                "repos": row[1].split(",") if row[1] else [],
-                "memory_count": row[2],
-            })
+            projects.append(
+                {
+                    "project": row[0],
+                    "repos": row[1].split(",") if row[1] else [],
+                    "memory_count": row[2],
+                }
+            )
 
         conn.close()
         return projects
@@ -632,10 +649,7 @@ class ContextFS:
             rows = cursor.fetchall()
             conn.close()
 
-            return [
-                SearchResult(memory=self._row_to_memory(row), score=1.0)
-                for row in rows
-            ]
+            return [SearchResult(memory=self._row_to_memory(row), score=1.0) for row in rows]
 
     def _fts_search(
         self,

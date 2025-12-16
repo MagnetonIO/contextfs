@@ -20,12 +20,10 @@ class TestMCPServerTools:
         # Initialize git
         subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
         subprocess.run(
-            ["git", "config", "user.email", "test@test.com"],
-            cwd=repo_dir, capture_output=True
+            ["git", "config", "user.email", "test@test.com"], cwd=repo_dir, capture_output=True
         )
         subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=repo_dir, capture_output=True
+            ["git", "config", "user.name", "Test User"], cwd=repo_dir, capture_output=True
         )
 
         # Add sample files
@@ -33,10 +31,7 @@ class TestMCPServerTools:
         (repo_dir / "utils.py").write_text("def helper(): return 42")
 
         subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True)
-        subprocess.run(
-            ["git", "commit", "-m", "Initial commit"],
-            cwd=repo_dir, capture_output=True
-        )
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo_dir, capture_output=True)
 
         return repo_dir
 
@@ -102,8 +97,7 @@ class TestMCPServerTools:
         from contextfs.mcp_server import get_prompt
 
         result = await get_prompt(
-            "contextfs-save-memory",
-            {"content": "Test content", "type": "fact"}
+            "contextfs-save-memory", {"content": "Test content", "type": "fact"}
         )
 
         assert result.description == "Save Memory to ContextFS"
@@ -164,6 +158,7 @@ class TestMCPServerTools:
 
         import contextfs.mcp_server as mcp_module
         from contextfs.mcp_server import call_tool
+
         mcp_module._ctx = None
 
         non_git_dir = temp_dir / "not-a-repo"

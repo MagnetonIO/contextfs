@@ -21,7 +21,13 @@ def get_claude_desktop_config_path() -> Path:
     system = platform.system()
 
     if system == "Darwin":  # macOS
-        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Claude"
+            / "claude_desktop_config.json"
+        )
     elif system == "Windows":
         return Path(os.environ.get("APPDATA", "")) / "Claude" / "claude_desktop_config.json"
     else:  # Linux
@@ -40,6 +46,7 @@ def find_contextfs_mcp_path() -> str:
 
     # Try finding via pip
     import subprocess
+
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "show", "-f", "contextfs"],
@@ -74,20 +81,13 @@ def get_mcp_config(contextfs_path: str | None) -> dict:
     """Generate MCP server config."""
     if contextfs_path:
         # Use the direct executable path
-        return {
-            "command": contextfs_path,
-            "env": {
-                "CONTEXTFS_SOURCE_TOOL": "claude-desktop"
-            }
-        }
+        return {"command": contextfs_path, "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"}}
     else:
         # Fallback to python -m (requires python in PATH)
         return {
             "command": sys.executable,
             "args": ["-m", "contextfs.mcp_server"],
-            "env": {
-                "CONTEXTFS_SOURCE_TOOL": "claude-desktop"
-            }
+            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"},
         }
 
 

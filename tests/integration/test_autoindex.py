@@ -18,21 +18,17 @@ class TestAutoIndexer:
         from contextfs.autoindex import AutoIndexer
 
         db_path = temp_dir / "test.db"
-        indexer = AutoIndexer(db_path=db_path)
+        AutoIndexer(db_path=db_path)  # Creates tables on init
 
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
         # Check index_status table
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='index_status'"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='index_status'")
         assert cursor.fetchone() is not None
 
         # Check indexed_files table
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='indexed_files'"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='indexed_files'")
         assert cursor.fetchone() is not None
 
         conn.close()
@@ -51,9 +47,7 @@ class TestAutoIndexer:
         indexer = AutoIndexer(db_path=temp_dir / "test.db")
         assert indexer.should_index("test-namespace") is True
 
-    def test_discover_files_finds_python(
-        self, temp_dir: Path, sample_python_code: str
-    ):
+    def test_discover_files_finds_python(self, temp_dir: Path, sample_python_code: str):
         """Test that discover_files finds Python files."""
         from contextfs.autoindex import AutoIndexer
 
@@ -67,9 +61,7 @@ class TestAutoIndexer:
         assert len(files) == 1
         assert files[0].name == "app.py"
 
-    def test_discover_files_respects_ignore_patterns(
-        self, temp_dir: Path, sample_python_code: str
-    ):
+    def test_discover_files_respects_ignore_patterns(self, temp_dir: Path, sample_python_code: str):
         """Test that discover_files ignores node_modules, etc."""
         from contextfs.autoindex import AutoIndexer
 
@@ -88,9 +80,7 @@ class TestAutoIndexer:
         assert len(files) == 1
         assert files[0].name == "app.py"
 
-    def test_discover_files_respects_gitignore(
-        self, temp_dir: Path, sample_python_code: str
-    ):
+    def test_discover_files_respects_gitignore(self, temp_dir: Path, sample_python_code: str):
         """Test that discover_files respects .gitignore patterns."""
         from contextfs.autoindex import AutoIndexer
 
@@ -134,9 +124,7 @@ class TestAutoIndexer:
         extensions = {f.suffix for f in files}
         assert extensions == {".py", ".ts", ".go"}
 
-    def test_discover_files_skips_large_files(
-        self, temp_dir: Path
-    ):
+    def test_discover_files_skips_large_files(self, temp_dir: Path):
         """Test that files over 1MB are skipped."""
         from contextfs.autoindex import AutoIndexer
 
@@ -155,9 +143,7 @@ class TestAutoIndexer:
         assert files[0].name == "small.py"
 
     @pytest.mark.slow
-    def test_index_repository(
-        self, temp_dir: Path, rag_backend, sample_python_code: str
-    ):
+    def test_index_repository(self, temp_dir: Path, rag_backend, sample_python_code: str):
         """Test full repository indexing."""
         from contextfs.autoindex import AutoIndexer
 
@@ -229,6 +215,7 @@ class TestAutoIndexer:
 
         # Reset index status but keep file tracking
         import sqlite3
+
         conn = sqlite3.connect(temp_dir / "test.db")
         cursor = conn.cursor()
         cursor.execute("UPDATE index_status SET indexed = 0")
@@ -270,6 +257,7 @@ class TestAutoIndexer:
 
         # Reset index status
         import sqlite3
+
         conn = sqlite3.connect(temp_dir / "test.db")
         cursor = conn.cursor()
         cursor.execute("UPDATE index_status SET indexed = 0")
@@ -354,9 +342,7 @@ class TestContextFSAutoIndex:
     """Tests for auto-indexing integration with ContextFS."""
 
     @pytest.mark.slow
-    def test_auto_index_on_first_save(
-        self, temp_dir: Path, sample_python_code: str
-    ):
+    def test_auto_index_on_first_save(self, temp_dir: Path, sample_python_code: str):
         """Test that first save triggers auto-indexing."""
         from contextfs.core import ContextFS
         from contextfs.schemas import MemoryType
@@ -371,6 +357,7 @@ class TestContextFSAutoIndex:
 
         # Create ContextFS with custom data dir
         import os
+
         original_cwd = os.getcwd()
         os.chdir(repo_dir)
 
@@ -396,9 +383,7 @@ class TestContextFSAutoIndex:
             ctx.close()
 
     @pytest.mark.slow
-    def test_auto_index_disabled(
-        self, temp_dir: Path, sample_python_code: str
-    ):
+    def test_auto_index_disabled(self, temp_dir: Path, sample_python_code: str):
         """Test that auto_index=False disables auto-indexing."""
         from contextfs.core import ContextFS
         from contextfs.schemas import MemoryType
@@ -409,6 +394,7 @@ class TestContextFSAutoIndex:
         subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
 
         import os
+
         original_cwd = os.getcwd()
         os.chdir(repo_dir)
 
@@ -432,9 +418,7 @@ class TestContextFSAutoIndex:
             ctx.close()
 
     @pytest.mark.slow
-    def test_manual_index_repository(
-        self, temp_dir: Path, sample_python_code: str
-    ):
+    def test_manual_index_repository(self, temp_dir: Path, sample_python_code: str):
         """Test manual index_repository method."""
         from contextfs.core import ContextFS
 
@@ -445,6 +429,7 @@ class TestContextFSAutoIndex:
         subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
 
         import os
+
         original_cwd = os.getcwd()
         os.chdir(repo_dir)
 
@@ -482,27 +467,23 @@ class TestGitHistoryIndexing:
 
         subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
         subprocess.run(
-            ["git", "config", "user.email", "test@test.com"],
-            cwd=repo_dir, capture_output=True
+            ["git", "config", "user.email", "test@test.com"], cwd=repo_dir, capture_output=True
         )
         subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=repo_dir, capture_output=True
+            ["git", "config", "user.name", "Test User"], cwd=repo_dir, capture_output=True
         )
 
         # Create files and commits
         (repo_dir / "app.py").write_text("print('hello')")
         subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True)
         subprocess.run(
-            ["git", "commit", "-m", "feat: Initial commit"],
-            cwd=repo_dir, capture_output=True
+            ["git", "commit", "-m", "feat: Initial commit"], cwd=repo_dir, capture_output=True
         )
 
         (repo_dir / "utils.py").write_text("def helper(): pass")
         subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True)
         subprocess.run(
-            ["git", "commit", "-m", "fix: Add helper function"],
-            cwd=repo_dir, capture_output=True
+            ["git", "commit", "-m", "fix: Add helper function"], cwd=repo_dir, capture_output=True
         )
 
         indexer = AutoIndexer(db_path=temp_dir / "test.db")
@@ -524,23 +505,27 @@ class TestGitHistoryIndexing:
         indexer = AutoIndexer(db_path=temp_dir / "test.db")
 
         # Feature commit
-        tags = indexer._extract_commit_tags({
-            "hash": "abc123",
-            "author": "Test",
-            "date": "2024-01-01",
-            "message": "feat: Add new feature",
-            "files": ["app.py"],
-        })
+        tags = indexer._extract_commit_tags(
+            {
+                "hash": "abc123",
+                "author": "Test",
+                "date": "2024-01-01",
+                "message": "feat: Add new feature",
+                "files": ["app.py"],
+            }
+        )
         assert "feature" in tags
 
         # Bugfix commit
-        tags = indexer._extract_commit_tags({
-            "hash": "def456",
-            "author": "Test",
-            "date": "2024-01-01",
-            "message": "fix: Fix bug",
-            "files": ["utils.ts"],
-        })
+        tags = indexer._extract_commit_tags(
+            {
+                "hash": "def456",
+                "author": "Test",
+                "date": "2024-01-01",
+                "message": "fix: Fix bug",
+                "files": ["utils.ts"],
+            }
+        )
         assert "bugfix" in tags
 
     def test_git_history_with_file_changes(self, temp_dir: Path, rag_backend):
@@ -552,21 +537,16 @@ class TestGitHistoryIndexing:
 
         subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
         subprocess.run(
-            ["git", "config", "user.email", "test@test.com"],
-            cwd=repo_dir, capture_output=True
+            ["git", "config", "user.email", "test@test.com"], cwd=repo_dir, capture_output=True
         )
         subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=repo_dir, capture_output=True
+            ["git", "config", "user.name", "Test User"], cwd=repo_dir, capture_output=True
         )
 
         # Create initial commit first
         (repo_dir / "init.py").write_text("# Init")
         subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True)
-        subprocess.run(
-            ["git", "commit", "-m", "Initial commit"],
-            cwd=repo_dir, capture_output=True
-        )
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo_dir, capture_output=True)
 
         # Create multiple files in second commit (so diff-tree works)
         (repo_dir / "main.py").write_text("# Main")
@@ -574,8 +554,7 @@ class TestGitHistoryIndexing:
         (repo_dir / "config.json").write_text("{}")
         subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True)
         subprocess.run(
-            ["git", "commit", "-m", "chore: Add multiple files"],
-            cwd=repo_dir, capture_output=True
+            ["git", "commit", "-m", "chore: Add multiple files"], cwd=repo_dir, capture_output=True
         )
 
         indexer = AutoIndexer(db_path=temp_dir / "test.db")
@@ -597,19 +576,18 @@ class TestGitHistoryIndexing:
 
         subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
         subprocess.run(
-            ["git", "config", "user.email", "test@test.com"],
-            cwd=repo_dir, capture_output=True
+            ["git", "config", "user.email", "test@test.com"], cwd=repo_dir, capture_output=True
         )
         subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=repo_dir, capture_output=True
+            ["git", "config", "user.name", "Test User"], cwd=repo_dir, capture_output=True
         )
 
         (repo_dir / "app.py").write_text(sample_python_code)
         subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True)
         subprocess.run(
             ["git", "commit", "-m", "feat: Initial implementation"],
-            cwd=repo_dir, capture_output=True
+            cwd=repo_dir,
+            capture_output=True,
         )
 
         indexer = AutoIndexer(db_path=temp_dir / "test.db")
@@ -641,9 +619,7 @@ class TestLanguageDetection:
         assert len(files) == 2
         assert all(f.suffix == ".py" for f in files)
 
-    def test_detects_web_files(
-        self, temp_dir: Path, sample_typescript_code: str
-    ):
+    def test_detects_web_files(self, temp_dir: Path, sample_typescript_code: str):
         """Test web technology file detection."""
         from contextfs.autoindex import AutoIndexer
 
