@@ -31,10 +31,26 @@ uvx contextfs-mcp  # Start MCP server
 # Or install with pip
 pip install contextfs
 
+# Or install with uv
+uv pip install contextfs
+
 # Or install from source
 git clone https://github.com/MagnetonIO/contextfs.git
 cd contextfs
 pip install -e .
+```
+
+## Upgrading
+
+```bash
+# Upgrade with pip
+pip install --upgrade contextfs
+
+# Upgrade with uv
+uv pip install --upgrade contextfs
+
+# Upgrade with uvx (automatic on next run)
+uvx --upgrade contextfs --help
 ```
 
 ## Usage
@@ -119,12 +135,19 @@ Or with Python directly:
 | `contextfs_search` | Semantic search with cross-repo support |
 | `contextfs_recall` | Get specific memory by ID |
 | `contextfs_list` | List recent memories |
+| `contextfs_update` | Update existing memory content, type, tags, or project |
+| `contextfs_delete` | Delete a memory by ID |
 | `contextfs_index` | Index current repository for code search |
+| `contextfs_index_status` | Check or cancel background indexing progress |
 | `contextfs_list_repos` | List all repositories with memories |
+| `contextfs_list_tools` | List source tools (claude-code, claude-desktop, etc.) |
 | `contextfs_list_projects` | List all projects |
 | `contextfs_sessions` | List sessions |
 | `contextfs_load_session` | Load session messages |
 | `contextfs_message` | Add message to current session |
+| `contextfs_update_session` | Update session label or summary |
+| `contextfs_delete_session` | Delete a session and its messages |
+| `contextfs_import_conversation` | Import JSON conversation as episodic memory |
 
 **MCP Prompts:**
 
@@ -241,6 +264,64 @@ results = ctx.search("CORS issues", type=MemoryType.ERROR)
 - **Team**: Shared namespace, collective knowledge base
 
 See the full **[Developer Memory Workflow Guide](DMW.md)** for detailed patterns.
+
+### Session & Memory Event Workflow
+
+ContextFS tracks sessions and provides CRUD operations for managing your memory lifecycle:
+
+```python
+# Start a labeled session
+ctx = ContextFS()
+session = ctx.start_session(tool="claude-code", label="feature-auth")
+
+# Log important exchanges during conversation
+ctx.add_message("user", "Implement OAuth2 login")
+ctx.add_message("assistant", "Created OAuth2 flow in auth/oauth.py")
+
+# Save memories as decisions are made
+memory = ctx.save(
+    "Use PKCE flow for OAuth2 - more secure for SPAs",
+    type=MemoryType.DECISION,
+    tags=["auth", "oauth", "security"]
+)
+
+# Update memory if context changes
+ctx.update(memory.id, tags=["auth", "oauth", "security", "production"])
+
+# End session with auto-generated summary
+ctx.end_session(generate_summary=True)
+```
+
+**Session Events via MCP:**
+
+```
+# During conversation - log key exchanges
+contextfs_message(role="user", content="How should we handle auth?")
+contextfs_message(role="assistant", content="Implementing JWT with refresh tokens")
+
+# Save decisions with context
+contextfs_save(content="...", type="decision", tags=["auth"])
+
+# Update existing memories
+contextfs_update(id="abc123", tags=["auth", "jwt", "v2"])
+
+# Import external conversations (from Claude Desktop JSON exports)
+contextfs_import_conversation(json_content="...", summary="Auth discussion")
+
+# Manage sessions
+contextfs_update_session(session_id="xyz", label="auth-feature-complete")
+contextfs_delete_session(session_id="old-session")
+
+# End of session - save for future reference
+contextfs_save(save_session="current", label="auth-implementation")
+```
+
+**Source Tool Detection:**
+
+ContextFS automatically detects whether it's running under Claude Code or Claude Desktop:
+- `claude-code`: Terminal environment (has `TERM`, `SHELL` env vars)
+- `claude-desktop`: GUI environment (no terminal indicators)
+- Override with `CONTEXTFS_SOURCE_TOOL` environment variable
 
 ## Web UI
 

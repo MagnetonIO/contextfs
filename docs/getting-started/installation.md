@@ -33,6 +33,33 @@
     pip install -e .
     ```
 
+## Upgrading
+
+=== "pip"
+
+    ```bash
+    pip install --upgrade contextfs
+    ```
+
+=== "uv"
+
+    ```bash
+    uv pip install --upgrade contextfs
+    ```
+
+=== "uvx"
+
+    ```bash
+    # uvx auto-upgrades, or force upgrade:
+    uvx --upgrade contextfs --help
+    ```
+
+=== "pipx"
+
+    ```bash
+    pipx upgrade contextfs
+    ```
+
 ## Optional Dependencies
 
 ```bash

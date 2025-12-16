@@ -45,13 +45,17 @@ Or use the Python module directly:
 | `contextfs_search` | Semantic search over memories |
 | `contextfs_list` | List recent memories |
 | `contextfs_recall` | Recall by ID |
+| `contextfs_update` | Update existing memory content, type, tags, or project |
+| `contextfs_delete` | Delete a memory by ID |
 
 ### Repository Operations
 
 | Tool | Description |
 |------|-------------|
 | `contextfs_index` | Index codebase for search |
+| `contextfs_index_status` | Check or cancel background indexing |
 | `contextfs_list_repos` | List indexed repositories |
+| `contextfs_list_tools` | List source tools (claude-code, claude-desktop, etc.) |
 | `contextfs_list_projects` | List project groupings |
 
 ### Session Operations
@@ -61,6 +65,9 @@ Or use the Python module directly:
 | `contextfs_sessions` | List sessions |
 | `contextfs_load_session` | Load session context |
 | `contextfs_message` | Log session message |
+| `contextfs_update_session` | Update session label or summary |
+| `contextfs_delete_session` | Delete session and its messages |
+| `contextfs_import_conversation` | Import JSON conversation as episodic memory |
 
 ## Auto-Save Hooks
 
@@ -195,9 +202,11 @@ Save this with project="my-saas" so it's findable from other repos
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CONTEXTFS_SOURCE_TOOL` | Tool identifier | `claude-code` |
+| `CONTEXTFS_SOURCE_TOOL` | Tool identifier | auto-detected |
 | `CONTEXTFS_DATA_DIR` | Data directory | `~/.contextfs` |
 | `CONTEXTFS_PROJECT` | Default project | auto-detect |
+
+**Note:** ContextFS automatically detects whether it's running under Claude Code or Claude Desktop based on terminal environment indicators (`TERM`, `SHELL`). You only need to set `CONTEXTFS_SOURCE_TOOL` to override auto-detection.
 
 ## Troubleshooting
 

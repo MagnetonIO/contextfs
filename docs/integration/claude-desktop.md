@@ -22,10 +22,7 @@ If automatic installation doesn't work, add to your Claude Desktop config:
     {
       "mcpServers": {
         "contextfs": {
-          "command": "/path/to/contextfs-mcp",
-          "env": {
-            "CONTEXTFS_SOURCE_TOOL": "claude-desktop"
-          }
+          "command": "/path/to/contextfs-mcp"
         }
       }
     }
@@ -39,10 +36,7 @@ If automatic installation doesn't work, add to your Claude Desktop config:
     {
       "mcpServers": {
         "contextfs": {
-          "command": "C:\\path\\to\\contextfs-mcp.exe",
-          "env": {
-            "CONTEXTFS_SOURCE_TOOL": "claude-desktop"
-          }
+          "command": "C:\\path\\to\\contextfs-mcp.exe"
         }
       }
     }
@@ -56,14 +50,13 @@ If automatic installation doesn't work, add to your Claude Desktop config:
     {
       "mcpServers": {
         "contextfs": {
-          "command": "/path/to/contextfs-mcp",
-          "env": {
-            "CONTEXTFS_SOURCE_TOOL": "claude-desktop"
-          }
+          "command": "/path/to/contextfs-mcp"
         }
       }
     }
     ```
+
+**Note:** ContextFS auto-detects the source tool (`claude-desktop` vs `claude-code`) based on environment. No manual configuration needed.
 
 ## Available Tools
 
@@ -104,6 +97,22 @@ Recall a specific memory by ID.
 Recall memory abc123
 ```
 
+### `contextfs_update`
+
+Update an existing memory.
+
+```
+Update memory abc123 with new tags: auth, jwt, production
+```
+
+### `contextfs_delete`
+
+Delete a memory by ID.
+
+```
+Delete memory abc123
+```
+
 ### `contextfs_index`
 
 Index the current repository.
@@ -112,12 +121,52 @@ Index the current repository.
 Index this codebase for search
 ```
 
+### `contextfs_index_status`
+
+Check or cancel background indexing.
+
+```
+Check indexing progress
+```
+
 ### `contextfs_sessions`
 
 List conversation sessions.
 
 ```
 Show recent sessions
+```
+
+### `contextfs_update_session`
+
+Update session label or summary.
+
+```
+Update session xyz with label "feature-complete"
+```
+
+### `contextfs_delete_session`
+
+Delete a session and its messages.
+
+```
+Delete session xyz
+```
+
+### `contextfs_import_conversation`
+
+Import a JSON conversation export as episodic memory.
+
+```
+Import this conversation JSON to memory
+```
+
+### `contextfs_list_tools`
+
+List source tools that have created memories.
+
+```
+Show which tools have saved memories
 ```
 
 ## Usage Examples
