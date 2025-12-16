@@ -230,6 +230,6 @@ Task: Implement OAuth login following our established patterns.
 
 ## Further Reading
 
-- [Full Paper (PDF)](https://github.com/MagnetonIO/typesafe-context/paper/pdf/TypeSafe_Context_Engineering.pdf)
+- [Full Paper (PDF)](https://github.com/MagnetonIO/typesafe-context/tree/main/paper/pdf)
 - [TypeSafe Context Library](https://github.com/MagnetonIO/typesafe-context)
 - [Theoretical Foundations](theory.md)
