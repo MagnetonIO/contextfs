@@ -21,7 +21,7 @@ Example:
     ctx.recall("abc123")
 """
 
-__version__ = "0.1.11"
+__version__ = "0.1.13"
 
 from contextfs.core import ContextFS
 from contextfs.schemas import Memory, MemoryType, Namespace, Session
