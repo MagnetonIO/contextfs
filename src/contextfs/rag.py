@@ -121,6 +121,10 @@ class RAGBackend:
                     "namespace_id": memory.namespace_id,
                     "summary": memory.summary or "",
                     "created_at": memory.created_at.isoformat(),
+                    "source_repo": memory.source_repo or "",
+                    "project": memory.project or "",
+                    "source_tool": memory.source_tool or "",
+                    "source_file": memory.source_file or "",
                 }
             ],
         )
@@ -161,6 +165,10 @@ class RAGBackend:
                 "namespace_id": m.namespace_id,
                 "summary": m.summary or "",
                 "created_at": m.created_at.isoformat(),
+                "source_repo": m.source_repo or "",
+                "project": m.project or "",
+                "source_tool": m.source_tool or "",
+                "source_file": m.source_file or "",
             }
             for m in memories
         ]
@@ -183,6 +191,33 @@ class RAGBackend:
             self._collection.delete(ids=[memory_id])
         except Exception:
             pass  # Ignore if not found
+
+    def delete_by_namespace(self, namespace_id: str) -> int:
+        """
+        Delete all memories in a namespace.
+
+        Args:
+            namespace_id: Namespace to clear
+
+        Returns:
+            Number of memories deleted
+        """
+        self._ensure_initialized()
+
+        try:
+            # Get all memory IDs in this namespace
+            results = self._collection.get(
+                where={"namespace_id": namespace_id},
+                include=[],  # Don't need documents/embeddings, just IDs
+            )
+
+            ids_to_delete = results.get("ids", [])
+            if ids_to_delete:
+                self._collection.delete(ids=ids_to_delete)
+                return len(ids_to_delete)
+            return 0
+        except Exception:
+            return 0
 
     def search(
         self,
@@ -269,6 +304,10 @@ class RAGBackend:
                     created_at=datetime.fromisoformat(
                         metadata.get("created_at", datetime.now().isoformat())
                     ),
+                    source_repo=metadata.get("source_repo") or None,
+                    project=metadata.get("project") or None,
+                    source_tool=metadata.get("source_tool") or None,
+                    source_file=metadata.get("source_file") or None,
                 )
 
                 search_results.append(

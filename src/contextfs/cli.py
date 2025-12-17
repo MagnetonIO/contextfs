@@ -599,6 +599,207 @@ def index(
             console.print(f"\n[yellow]Warnings: {len(result['errors'])} files had errors[/yellow]")
 
 
+@app.command("index-dir")
+def index_directory(
+    path: Path = typer.Argument(..., help="Root directory to scan for git repositories"),
+    max_depth: int = typer.Option(5, "--depth", "-d", help="Maximum directory depth to search"),
+    project: str | None = typer.Option(
+        None, "--project", "-p", help="Override project name for all repos"
+    ),
+    incremental: bool = typer.Option(
+        True, "--incremental/--full", help="Only index new/changed files"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Discover repos without indexing"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+):
+    """Recursively scan a directory for git repos and index each.
+
+    Automatically detects:
+    - Project groupings from directory structure
+    - Programming languages and frameworks
+    - CI/CD configurations and project types
+
+    Examples:
+        contextfs index-dir ~/Development
+        contextfs index-dir ~/work/haven --project haven
+        contextfs index-dir . --dry-run  # Preview without indexing
+    """
+
+    if not path.exists():
+        console.print(f"[red]Path does not exist: {path}[/red]")
+        raise typer.Exit(1)
+
+    path = path.resolve()
+    ctx = get_ctx()
+
+    if dry_run:
+        # Discovery mode only
+        console.print(f"\n[bold]Discovering git repositories in {path}...[/bold]\n")
+
+        repos = ctx.discover_repos(path, max_depth=max_depth)
+
+        if not repos:
+            console.print("[yellow]No git repositories found[/yellow]")
+            return
+
+        from rich.table import Table
+
+        table = Table(title=f"Found {len(repos)} repositories")
+        table.add_column("Repository", style="cyan")
+        table.add_column("Project", style="magenta")
+        table.add_column("Tags", style="blue")
+        table.add_column("Path", style="dim")
+
+        for repo in repos:
+            table.add_row(
+                repo["name"],
+                repo["project"] or "-",
+                ", ".join(repo["suggested_tags"][:4]) or "-",
+                repo["relative_path"],
+            )
+
+        console.print(table)
+        console.print("\n[dim]Run without --dry-run to index these repositories[/dim]")
+        return
+
+    # Full indexing mode
+    if not quiet:
+        console.print(f"\n[bold]Scanning {path} for git repositories...[/bold]\n")
+
+    current_repo = {"name": "", "project": ""}
+
+    def on_repo_start(repo_name: str, project_name: str | None) -> None:
+        current_repo["name"] = repo_name
+        current_repo["project"] = project_name or ""
+        if not quiet:
+            proj_str = f" (project: {project_name})" if project_name else ""
+            console.print(f"\n[cyan]Indexing {repo_name}{proj_str}...[/cyan]")
+
+    def on_repo_complete(repo_name: str, stats: dict) -> None:
+        if not quiet and "error" not in stats:
+            console.print(
+                f"  [green]✓[/green] {stats['files_indexed']} files, "
+                f"{stats.get('commits_indexed', 0)} commits, "
+                f"{stats['memories_created']} memories"
+            )
+        elif not quiet and "error" in stats:
+            console.print(f"  [red]✗ Error: {stats['error']}[/red]")
+
+    result = ctx.index_directory(
+        root_dir=path,
+        max_depth=max_depth,
+        on_repo_start=on_repo_start,
+        on_repo_complete=on_repo_complete,
+        incremental=incremental,
+        project_override=project,
+    )
+
+    # Summary
+    if not quiet:
+        console.print("\n[green]✅ Directory indexing complete![/green]\n")
+
+        from rich.table import Table
+
+        table = Table(title="Summary")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+
+        table.add_row("Repositories found", str(result["repos_found"]))
+        table.add_row("Repositories indexed", str(result["repos_indexed"]))
+        table.add_row("Total files", str(result["total_files"]))
+        table.add_row("Total commits", str(result.get("total_commits", 0)))
+        table.add_row("Total memories", str(result["total_memories"]))
+
+        console.print(table)
+
+        # Show per-repo breakdown
+        if result["repos"]:
+            console.print("\n[bold]Per-repository breakdown:[/bold]")
+            repo_table = Table()
+            repo_table.add_column("Repository", style="cyan")
+            repo_table.add_column("Project", style="magenta")
+            repo_table.add_column("Files", justify="right")
+            repo_table.add_column("Memories", justify="right")
+            repo_table.add_column("Status", style="green")
+
+            for repo in result["repos"]:
+                status = "[red]Error[/red]" if "error" in repo else "[green]✓[/green]"
+                repo_table.add_row(
+                    repo["name"],
+                    repo.get("project") or "-",
+                    str(repo.get("files_indexed", 0)),
+                    str(repo.get("memories_created", 0)),
+                    status,
+                )
+
+            console.print(repo_table)
+
+
+@app.command("discover")
+def discover_repos(
+    path: Path = typer.Argument(None, help="Root directory to scan (default: current directory)"),
+    max_depth: int = typer.Option(5, "--depth", "-d", help="Maximum directory depth"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+):
+    """Discover git repositories without indexing.
+
+    Useful for previewing what would be indexed.
+    """
+    import json as json_mod
+
+    target = (path or Path.cwd()).resolve()
+
+    if not target.exists():
+        console.print(f"[red]Path does not exist: {target}[/red]")
+        raise typer.Exit(1)
+
+    ctx = get_ctx()
+    repos = ctx.discover_repos(target, max_depth=max_depth)
+
+    if json_output:
+        # Convert Path objects to strings for JSON
+        output = []
+        for repo in repos:
+            output.append(
+                {
+                    "name": repo["name"],
+                    "path": str(repo["path"]),
+                    "project": repo["project"],
+                    "tags": repo["suggested_tags"],
+                    "remote_url": repo.get("remote_url"),
+                }
+            )
+        console.print(json_mod.dumps(output, indent=2))
+        return
+
+    if not repos:
+        console.print("[yellow]No git repositories found[/yellow]")
+        return
+
+    from rich.table import Table
+
+    table = Table(title=f"Found {len(repos)} repositories in {target}")
+    table.add_column("Repository", style="cyan")
+    table.add_column("Project", style="magenta")
+    table.add_column("Languages/Frameworks", style="blue")
+    table.add_column("Path", style="dim")
+
+    for repo in repos:
+        # Separate language and framework tags
+        lang_tags = [t for t in repo["suggested_tags"] if t.startswith("lang:")]
+        fw_tags = [t for t in repo["suggested_tags"] if t.startswith("framework:")]
+        tags_str = ", ".join([t.split(":")[1] for t in lang_tags + fw_tags][:3])
+
+        table.add_row(
+            repo["name"],
+            repo["project"] or "-",
+            tags_str or "-",
+            repo["relative_path"],
+        )
+
+    console.print(table)
+
+
 @app.command()
 def init(
     path: Path | None = typer.Argument(None, help="Directory to initialize"),

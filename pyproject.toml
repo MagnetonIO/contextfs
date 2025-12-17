@@ -1,11 +1,11 @@
 [project]
 name = "contextfs"
-version = "0.1.11"
+version = "0.1.12"
 description = "Universal AI memory layer - cross-client, cross-repo context management with RAG"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
-    { name = "Matthew Long", email = "matt@magnetonio.com" },
+    { name = "Matthew Long", email = "mlong@contextfs.ai" },
     { name = "The YonedaAI Collaboration" }
 ]
 requires-python = ">=3.10"

@@ -288,6 +288,8 @@ class ContextFS:
         repo_path: Path | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
         incremental: bool = True,
+        project: str | None = None,
+        source_repo: str | None = None,
     ) -> dict:
         """
         Manually index a repository to ChromaDB.
@@ -296,6 +298,8 @@ class ContextFS:
             repo_path: Repository path (default: current repo)
             on_progress: Progress callback (current, total, file)
             incremental: Only index new/changed files
+            project: Project name for grouping memories across repos
+            source_repo: Repository name (default: repo directory name)
 
         Returns:
             Indexing statistics
@@ -307,6 +311,10 @@ class ContextFS:
         # Use namespace derived from the repo being indexed, not ctx's namespace
         namespace_id = self._namespace_for_path(Path(path))
 
+        # Default source_repo to directory name
+        if source_repo is None:
+            source_repo = Path(path).name
+
         indexer = self._get_auto_indexer()
         return indexer.index_repository(
             repo_path=path,
@@ -314,6 +322,8 @@ class ContextFS:
             rag_backend=self.rag,
             on_progress=on_progress,
             incremental=incremental,
+            project=project,
+            source_repo=source_repo,
         )
 
     def get_index_status(self, repo_path: Path | None = None):
@@ -345,6 +355,58 @@ class ContextFS:
     def list_indexes(self) -> list:
         """List all indexed repositories."""
         return self._get_auto_indexer().list_all_indexes()
+
+    def index_directory(
+        self,
+        root_dir: Path,
+        max_depth: int = 5,
+        on_progress: Callable[[int, int, str], None] | None = None,
+        on_repo_start: Callable[[str, str | None], None] | None = None,
+        on_repo_complete: Callable[[str, dict], None] | None = None,
+        incremental: bool = True,
+        project_override: str | None = None,
+    ) -> dict:
+        """
+        Recursively scan a directory for git repos and index each.
+
+        Args:
+            root_dir: Root directory to scan for git repositories
+            max_depth: Maximum directory depth to search (default: 5)
+            on_progress: Progress callback for file indexing (current, total, file)
+            on_repo_start: Callback when starting a repo (repo_name, project)
+            on_repo_complete: Callback when repo completes (repo_name, stats)
+            incremental: Only index new/changed files
+            project_override: Override auto-detected project name for all repos
+
+        Returns:
+            Summary statistics including repos found, files indexed, etc.
+        """
+        indexer = self._get_auto_indexer()
+        return indexer.index_directory(
+            root_dir=root_dir,
+            rag_backend=self.rag,
+            max_depth=max_depth,
+            on_progress=on_progress,
+            on_repo_start=on_repo_start,
+            on_repo_complete=on_repo_complete,
+            incremental=incremental,
+            project_override=project_override,
+        )
+
+    def discover_repos(self, root_dir: Path, max_depth: int = 5) -> list[dict]:
+        """
+        Discover git repositories without indexing them.
+
+        Args:
+            root_dir: Root directory to scan
+            max_depth: Maximum directory depth to search
+
+        Returns:
+            List of repo info dicts with path, name, project, suggested_tags
+        """
+        from contextfs.autoindex import discover_git_repos
+
+        return discover_git_repos(root_dir, max_depth=max_depth)
 
     # ==================== Memory Operations ====================
 

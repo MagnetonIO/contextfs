@@ -696,6 +696,52 @@ async def list_tools() -> list[Tool]:
                 "required": ["json_content"],
             },
         ),
+        Tool(
+            name="contextfs_discover_repos",
+            description="Discover git repositories in a directory without indexing. Shows detected project groupings, languages, and frameworks.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Root directory to scan (default: current working directory)",
+                    },
+                    "max_depth": {
+                        "type": "number",
+                        "description": "Maximum directory depth to search",
+                        "default": 5,
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_index_directory",
+            description="Recursively scan a directory for git repos and index each. Auto-detects project groupings and tags.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Root directory to scan for git repositories",
+                    },
+                    "max_depth": {
+                        "type": "number",
+                        "description": "Maximum directory depth to search",
+                        "default": 5,
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Override auto-detected project name for all repos",
+                    },
+                    "incremental": {
+                        "type": "boolean",
+                        "description": "Only index new/changed files (default: true)",
+                        "default": True,
+                    },
+                },
+                "required": ["path"],
+            },
+        ),
     ]
 
 
@@ -1359,6 +1405,113 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     text=f"Conversation imported successfully.\nID: {memory.id}\nMessages: {msg_count}\nSummary: {summary}",
                 )
             ]
+
+        elif name == "contextfs_discover_repos":
+            from pathlib import Path
+
+            path_str = arguments.get("path")
+            max_depth = arguments.get("max_depth", 5)
+
+            # Default to current working directory
+            target_path = Path(path_str).resolve() if path_str else Path.cwd()
+
+            if not target_path.exists():
+                return [TextContent(type="text", text=f"Error: Path does not exist: {target_path}")]
+
+            repos = ctx.discover_repos(target_path, max_depth=max_depth)
+
+            if not repos:
+                return [
+                    TextContent(type="text", text=f"No git repositories found in {target_path}")
+                ]
+
+            output = [f"Found {len(repos)} repositories in {target_path}:\n"]
+
+            for repo in repos:
+                line = f"• {repo['name']}"
+                if repo["project"]:
+                    line += f" (project: {repo['project']})"
+                output.append(line)
+
+                # Show detected tags
+                lang_tags = [t for t in repo["suggested_tags"] if t.startswith("lang:")]
+                fw_tags = [t for t in repo["suggested_tags"] if t.startswith("framework:")]
+                other_tags = [
+                    t
+                    for t in repo["suggested_tags"]
+                    if not t.startswith("lang:") and not t.startswith("framework:")
+                ]
+
+                if lang_tags or fw_tags:
+                    tags_str = ", ".join([t.split(":")[1] for t in lang_tags + fw_tags])
+                    output.append(f"  Languages/Frameworks: {tags_str}")
+                if other_tags:
+                    output.append(f"  Tags: {', '.join(other_tags)}")
+                output.append(f"  Path: {repo['relative_path']}")
+                output.append("")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_index_directory":
+            from pathlib import Path
+
+            path_str = arguments.get("path")
+            max_depth = arguments.get("max_depth", 5)
+            project_override = arguments.get("project")
+            incremental = arguments.get("incremental", True)
+
+            if not path_str:
+                return [TextContent(type="text", text="Error: path is required")]
+
+            target_path = Path(path_str).resolve()
+
+            if not target_path.exists():
+                return [TextContent(type="text", text=f"Error: Path does not exist: {target_path}")]
+
+            # First discover repos
+            repos = ctx.discover_repos(target_path, max_depth=max_depth)
+
+            if not repos:
+                return [
+                    TextContent(type="text", text=f"No git repositories found in {target_path}")
+                ]
+
+            # Run indexing
+            result = ctx.index_directory(
+                root_dir=target_path,
+                max_depth=max_depth,
+                incremental=incremental,
+                project_override=project_override,
+            )
+
+            # Build response
+            output = [
+                f"Directory indexing complete for {target_path}:\n",
+                f"Repositories found: {result['repos_found']}",
+                f"Repositories indexed: {result['repos_indexed']}",
+                f"Total files: {result['total_files']}",
+                f"Total commits: {result.get('total_commits', 0)}",
+                f"Total memories: {result['total_memories']}",
+                "",
+            ]
+
+            # Per-repo details
+            if result["repos"]:
+                output.append("Per-repository breakdown:")
+                for repo in result["repos"]:
+                    status = "Error" if "error" in repo else "OK"
+                    line = f"  • {repo['name']}"
+                    if repo.get("project"):
+                        line += f" [{repo['project']}]"
+                    if "error" in repo:
+                        output.append(f"{line} - {status}: {repo['error']}")
+                    else:
+                        output.append(
+                            f"{line} - {repo.get('files_indexed', 0)} files, "
+                            f"{repo.get('memories_created', 0)} memories"
+                        )
+
+            return [TextContent(type="text", text="\n".join(output))]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

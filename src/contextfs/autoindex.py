@@ -9,8 +9,10 @@ import logging
 import sqlite3
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import TypedDict
 
 from contextfs.config import Config
 from contextfs.filetypes.integration import SmartDocumentProcessor
@@ -491,6 +493,8 @@ class AutoIndexer:
         rag_backend: RAGBackend,
         on_progress: Callable[[int, int, str], None] | None = None,
         incremental: bool = True,
+        project: str | None = None,
+        source_repo: str | None = None,
     ) -> dict:
         """
         Index all files in repository to ChromaDB (vector store).
@@ -501,10 +505,15 @@ class AutoIndexer:
             rag_backend: RAG backend (ChromaDB) for vector storage
             on_progress: Callback for progress updates (current, total, file)
             incremental: Only index new/changed files
+            project: Project name for grouping memories across repos
+            source_repo: Repository name (default: repo_path.name)
 
         Returns:
             Indexing statistics
         """
+        # Default source_repo to directory name
+        if source_repo is None:
+            source_repo = repo_path.name
         logger.info(f"Starting indexing for {repo_path} (namespace: {namespace_id})")
 
         # Discover files
@@ -569,6 +578,8 @@ class AutoIndexer:
                         summary=chunk["metadata"].get("summary") or f"Code from {rel_path}",
                         namespace_id=namespace_id,
                         source_file=rel_path,
+                        source_repo=source_repo,
+                        project=project,
                         metadata={
                             "chunk_index": chunk["metadata"].get("chunk_index"),
                             "total_chunks": chunk["metadata"].get("total_chunks"),
@@ -621,6 +632,8 @@ class AutoIndexer:
             max_commits=100,
             on_progress=on_progress,
             incremental=incremental,
+            project=project,
+            source_repo=source_repo,
         )
         memories_created += git_stats["memories_created"]
         commits_indexed = git_stats["commits_indexed"]
@@ -719,6 +732,8 @@ class AutoIndexer:
         max_commits: int = 100,
         on_progress: Callable[[int, int, str], None] | None = None,
         incremental: bool = True,
+        project: str | None = None,
+        source_repo: str | None = None,
     ) -> dict:
         """
         Index git commit history to RAG backend.
@@ -730,10 +745,15 @@ class AutoIndexer:
             max_commits: Maximum commits to index
             on_progress: Progress callback
             incremental: Only index new commits
+            project: Project name for grouping memories
+            source_repo: Repository name
 
         Returns:
             Indexing statistics
         """
+        # Default source_repo to directory name
+        if source_repo is None:
+            source_repo = repo_path.name
         logger.info(f"Indexing git history for {repo_path} (incremental={incremental})")
 
         commits = self._get_git_commits(repo_path, max_commits)
@@ -782,6 +802,8 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
                 tags=["git-history", "commit", *self._extract_commit_tags(commit)],
                 summary=commit["message"].split("\n")[0][:100],
                 namespace_id=namespace_id,
+                source_repo=source_repo,
+                project=project,
                 metadata={
                     "commit_hash": commit["hash"],
                     "author": commit["author"],
@@ -962,6 +984,445 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
         conn.close()
 
         logger.info(f"Cleared index for namespace: {namespace_id}")
+
+    def index_directory(
+        self,
+        root_dir: Path,
+        rag_backend: RAGBackend,
+        max_depth: int = 5,
+        on_progress: Callable[[int, int, str], None] | None = None,
+        on_repo_start: Callable[[str, str | None], None] | None = None,
+        on_repo_complete: Callable[[str, dict], None] | None = None,
+        incremental: bool = True,
+        project_override: str | None = None,
+    ) -> dict:
+        """
+        Recursively scan a directory for git repos and index each.
+
+        Args:
+            root_dir: Root directory to scan
+            rag_backend: RAG backend for vector storage
+            max_depth: Maximum depth to search for repos
+            on_progress: Progress callback for file indexing (current, total, file)
+            on_repo_start: Callback when starting a repo (repo_name, project)
+            on_repo_complete: Callback when repo completes (repo_name, stats)
+            incremental: Only index new/changed files
+            project_override: Override detected project name for all repos
+
+        Returns:
+            Summary statistics for all repos indexed
+        """
+        logger.info(f"Scanning {root_dir} for git repositories (max_depth={max_depth})")
+
+        # Discover all repos
+        repos = discover_git_repos(root_dir, max_depth=max_depth)
+
+        if not repos:
+            logger.info("No git repositories found")
+            return {
+                "repos_found": 0,
+                "repos_indexed": 0,
+                "total_files": 0,
+                "total_memories": 0,
+                "repos": [],
+            }
+
+        logger.info(f"Found {len(repos)} git repositories")
+
+        total_stats = {
+            "repos_found": len(repos),
+            "repos_indexed": 0,
+            "total_files": 0,
+            "total_memories": 0,
+            "total_commits": 0,
+            "repos": [],
+        }
+
+        for repo_info in repos:
+            repo_path = repo_info["path"]
+            repo_name = repo_info["name"]
+            project = project_override or repo_info["project"]
+            suggested_tags = repo_info["suggested_tags"]
+
+            if on_repo_start:
+                on_repo_start(repo_name, project)
+
+            # Get namespace for this repo
+            from contextfs.schemas import Namespace
+
+            namespace_id = Namespace.for_repo(str(repo_path)).id
+
+            logger.info(f"Indexing {repo_name} (project={project}, namespace={namespace_id[:12]})")
+
+            try:
+                # Clear existing memories for this namespace when doing full re-index
+                if not incremental:
+                    deleted = rag_backend.delete_by_namespace(namespace_id)
+                    if deleted > 0:
+                        logger.info(f"Cleared {deleted} existing memories for {repo_name}")
+                    self.clear_index(namespace_id)
+
+                # Index the repository
+                stats = self.index_repository(
+                    repo_path=repo_path,
+                    namespace_id=namespace_id,
+                    rag_backend=rag_backend,
+                    on_progress=on_progress,
+                    incremental=incremental,
+                    project=project,
+                    source_repo=repo_name,
+                )
+
+                # Create a summary memory with project and auto-detected tags
+                if stats["files_indexed"] > 0 or stats["commits_indexed"] > 0:
+                    summary_memory = Memory(
+                        content=f"Repository {repo_name} indexed with {stats['files_indexed']} files and {stats['commits_indexed']} commits.",
+                        type=MemoryType.FACT,
+                        tags=["repo-index", *suggested_tags],
+                        summary=f"Indexed repository: {repo_name}",
+                        namespace_id=namespace_id,
+                        source_repo=repo_name,
+                        project=project,
+                        metadata={
+                            "auto_indexed": True,
+                            "files_indexed": stats["files_indexed"],
+                            "commits_indexed": stats["commits_indexed"],
+                            "remote_url": repo_info.get("remote_url"),
+                        },
+                    )
+                    rag_backend.add_memory(summary_memory)
+
+                repo_result = {
+                    "name": repo_name,
+                    "path": str(repo_path),
+                    "project": project,
+                    "tags": suggested_tags,
+                    "files_indexed": stats["files_indexed"],
+                    "commits_indexed": stats.get("commits_indexed", 0),
+                    "memories_created": stats["memories_created"],
+                }
+
+                total_stats["repos_indexed"] += 1
+                total_stats["total_files"] += stats["files_indexed"]
+                total_stats["total_memories"] += stats["memories_created"]
+                total_stats["total_commits"] += stats.get("commits_indexed", 0)
+                total_stats["repos"].append(repo_result)
+
+                if on_repo_complete:
+                    on_repo_complete(repo_name, repo_result)
+
+            except Exception as e:
+                logger.warning(f"Failed to index {repo_name}: {e}")
+                total_stats["repos"].append(
+                    {
+                        "name": repo_name,
+                        "path": str(repo_path),
+                        "error": str(e),
+                    }
+                )
+
+        logger.info(
+            f"Directory indexing complete: {total_stats['repos_indexed']} repos, "
+            f"{total_stats['total_files']} files, {total_stats['total_memories']} memories"
+        )
+
+        return total_stats
+
+
+class RepoInfo(TypedDict):
+    """Information about a discovered git repository."""
+
+    path: Path
+    name: str
+    project: str | None
+    suggested_tags: list[str]
+    remote_url: str | None
+    relative_path: str
+
+
+@dataclass
+class LanguageDetector:
+    """Detects programming languages based on indicator files."""
+
+    language: str
+    indicators: list[str]
+
+    def matches(self, repo_path: Path) -> bool:
+        """Check if any indicator file exists in the repo."""
+        for indicator in self.indicators:
+            if "*" in indicator:
+                if list(repo_path.glob(indicator)):
+                    return True
+            elif (repo_path / indicator).exists():
+                return True
+        return False
+
+
+@dataclass
+class FrameworkDetector:
+    """Detects frameworks from package dependencies or config files."""
+
+    framework: str
+    config_files: list[str] = field(default_factory=list)
+    npm_packages: list[str] = field(default_factory=list)
+    pip_packages: list[str] = field(default_factory=list)
+
+    def matches(self, repo_path: Path, npm_deps: set[str], pip_content: str) -> bool:
+        """Check if framework is detected."""
+        # Check config files
+        for cf in self.config_files:
+            if (repo_path / cf).exists():
+                return True
+        # Check npm packages
+        for pkg in self.npm_packages:
+            if pkg in npm_deps:
+                return True
+        # Check pip packages
+        return any(pkg in pip_content for pkg in self.pip_packages)
+
+
+@dataclass
+class TypeIndicator:
+    """Detects project type based on file/directory presence."""
+
+    tag: str
+    paths: list[str]
+
+    def matches(self, repo_path: Path) -> bool:
+        """Check if any path exists."""
+        return any((repo_path / p).exists() for p in self.paths)
+
+
+# Registry of language detectors
+LANGUAGE_DETECTORS = [
+    LanguageDetector("python", ["setup.py", "pyproject.toml", "requirements.txt", "Pipfile"]),
+    LanguageDetector("javascript", ["package.json"]),
+    LanguageDetector("typescript", ["tsconfig.json"]),
+    LanguageDetector("rust", ["Cargo.toml"]),
+    LanguageDetector("go", ["go.mod"]),
+    LanguageDetector("java", ["pom.xml", "build.gradle"]),
+    LanguageDetector("ruby", ["Gemfile"]),
+    LanguageDetector("php", ["composer.json"]),
+    LanguageDetector("swift", ["Package.swift"]),
+    LanguageDetector("csharp", ["*.csproj", "*.sln"]),
+]
+
+# Registry of framework detectors
+FRAMEWORK_DETECTORS = [
+    FrameworkDetector("react", npm_packages=["react"]),
+    FrameworkDetector(
+        "vue", config_files=["vue.config.js", "nuxt.config.js"], npm_packages=["vue"]
+    ),
+    FrameworkDetector("angular", config_files=["angular.json"], npm_packages=["@angular/core"]),
+    FrameworkDetector(
+        "nextjs", config_files=["next.config.js", "next.config.mjs"], npm_packages=["next"]
+    ),
+    FrameworkDetector("express", npm_packages=["express"]),
+    FrameworkDetector("fastify", npm_packages=["fastify"]),
+    FrameworkDetector("django", pip_packages=["django"]),
+    FrameworkDetector("flask", pip_packages=["flask"]),
+    FrameworkDetector("fastapi", pip_packages=["fastapi"]),
+    FrameworkDetector("rails", config_files=["config/routes.rb"]),
+]
+
+# Registry of project type indicators
+TYPE_INDICATORS = [
+    TypeIndicator("type:containerized", ["Dockerfile"]),
+    TypeIndicator("type:docker-compose", ["docker-compose.yml", "docker-compose.yaml"]),
+    TypeIndicator("ci:github-actions", [".github/workflows"]),
+    TypeIndicator("ci:gitlab", [".gitlab-ci.yml"]),
+    TypeIndicator("has-tests", ["tests", "test"]),
+]
+
+# Directories that indicate a project container
+PROJECT_CONTAINER_NAMES = {"projects", "repos", "work", "workspace", "dev", "development"}
+
+# Workspace config files that indicate a project container
+WORKSPACE_CONFIG_FILES = [
+    "pnpm-workspace.yaml",
+    "lerna.json",
+    ".workspace",
+    "Cargo.toml",  # Rust workspace
+    "go.work",  # Go workspace
+]
+
+
+def discover_git_repos(
+    root_dir: Path,
+    max_depth: int = 5,
+    ignore_patterns: set[str] | None = None,
+) -> list[RepoInfo]:
+    """
+    Recursively discover all git repositories under a directory.
+
+    Args:
+        root_dir: Root directory to scan
+        max_depth: Maximum depth to search (default: 5)
+        ignore_patterns: Directory names to skip (default: common ignores)
+
+    Returns:
+        List of RepoInfo dicts with repo metadata
+    """
+    if ignore_patterns is None:
+        ignore_patterns = {
+            "node_modules",
+            ".git",
+            "vendor",
+            "__pycache__",
+            "venv",
+            ".venv",
+            "dist",
+            "build",
+            ".cache",
+        }
+
+    repos: list[RepoInfo] = []
+    root_dir = root_dir.resolve()
+
+    def _scan(current: Path, depth: int, parent_project: str | None = None) -> None:
+        if depth > max_depth:
+            return
+
+        try:
+            entries = list(current.iterdir())
+        except PermissionError:
+            return
+
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+
+            if entry.name in ignore_patterns:
+                continue
+
+            if entry.name.startswith(".") and entry.name != ".git":
+                continue
+
+            # Check if this is a git repo
+            if (entry / ".git").exists():
+                repo_info = _analyze_repo(entry, root_dir, parent_project)
+                repos.append(repo_info)
+                # Don't recurse into git repos (they're self-contained)
+                continue
+
+            # If current dir looks like a project container, use it as project name
+            project_name = parent_project
+            if _is_project_container(entry):
+                project_name = entry.name
+
+            # Recurse into subdirectory
+            _scan(entry, depth + 1, project_name)
+
+    _scan(root_dir, 0)
+    return repos
+
+
+def _is_project_container(path: Path) -> bool:
+    """
+    Check if a directory looks like a project container (monorepo parent).
+
+    Uses PROJECT_CONTAINER_NAMES and WORKSPACE_CONFIG_FILES registries.
+    """
+    if path.name.lower() in PROJECT_CONTAINER_NAMES:
+        return True
+
+    return any((path / wf).exists() for wf in WORKSPACE_CONFIG_FILES)
+
+
+def _analyze_repo(repo_path: Path, root_dir: Path, parent_project: str | None) -> RepoInfo:
+    """
+    Analyze a git repository and extract metadata.
+
+    Returns:
+        RepoInfo with path, name, project, suggested_tags, etc.
+    """
+    import subprocess
+
+    name = repo_path.name
+    rel_path = repo_path.relative_to(root_dir)
+
+    # Determine project name
+    project = parent_project
+    if project is None and len(rel_path.parts) > 1:
+        potential_project = rel_path.parts[0]
+        if _is_project_container(root_dir / potential_project):
+            project = potential_project
+
+    # Detect tags based on repo contents
+    suggested_tags = _detect_repo_tags(repo_path)
+
+    # Get remote URL
+    remote_url = None
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            remote_url = result.stdout.strip()
+    except Exception:
+        pass
+
+    return RepoInfo(
+        path=repo_path,
+        name=name,
+        project=project,
+        suggested_tags=suggested_tags,
+        remote_url=remote_url,
+        relative_path=str(rel_path),
+    )
+
+
+def _detect_repo_tags(repo_path: Path) -> list[str]:
+    """
+    Detect tags using registered detectors.
+
+    Uses LANGUAGE_DETECTORS, FRAMEWORK_DETECTORS, and TYPE_INDICATORS.
+    """
+    tags: list[str] = []
+
+    # Detect languages
+    for detector in LANGUAGE_DETECTORS:
+        if detector.matches(repo_path):
+            tags.append(f"lang:{detector.language}")
+
+    # Load npm dependencies once (if package.json exists)
+    npm_deps: set[str] = set()
+    pkg_json = repo_path / "package.json"
+    if pkg_json.exists():
+        try:
+            import json
+
+            pkg = json.loads(pkg_json.read_text())
+            npm_deps = set(pkg.get("dependencies", {}).keys())
+            npm_deps.update(pkg.get("devDependencies", {}).keys())
+        except Exception:
+            pass
+
+    # Load pip content once (requirements.txt or pyproject.toml)
+    pip_content = ""
+    for pyfile in [repo_path / "requirements.txt", repo_path / "pyproject.toml"]:
+        if pyfile.exists():
+            try:
+                pip_content = pyfile.read_text().lower()
+            except Exception:
+                pass
+            break
+
+    # Detect frameworks
+    for detector in FRAMEWORK_DETECTORS:
+        if detector.matches(repo_path, npm_deps, pip_content):
+            tags.append(f"framework:{detector.framework}")
+
+    # Detect project types
+    for indicator in TYPE_INDICATORS:
+        if indicator.matches(repo_path):
+            tags.append(indicator.tag)
+
+    return list(set(tags))  # Deduplicate
 
 
 def create_codebase_summary(repo_path: Path) -> Memory:
