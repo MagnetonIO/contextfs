@@ -2,7 +2,7 @@
 Unified Storage Router for ContextFS.
 
 Provides a single interface for all memory storage operations,
-ensuring SQLite and ChromaDB stay synchronized.
+ensuring SQLite, ChromaDB, and optional graph backend stay synchronized.
 
 This solves the mismatch where:
 - Auto-indexed memories were only in ChromaDB (search worked, recall failed)
@@ -11,6 +11,7 @@ This solves the mismatch where:
 Now all operations go through this router to maintain consistency.
 
 Implements the StorageBackend protocol for type-safe pluggability.
+Optionally integrates GraphBackend for memory lineage and relationships.
 """
 
 import json
@@ -18,12 +19,18 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 from contextfs.rag import RAGBackend
 from contextfs.schemas import Memory, MemoryType, SearchResult
 from contextfs.storage_protocol import (
     UNIFIED_CAPABILITIES,
+    UNIFIED_WITH_GRAPH_CAPABILITIES,
+    EdgeRelation,
+    GraphBackend,
+    GraphPath,
+    GraphTraversalResult,
+    MemoryEdge,
     StorageBackend,
     StorageCapabilities,
 )
@@ -36,25 +43,27 @@ logger = logging.getLogger(__name__)
 
 class StorageRouter(StorageBackend):
     """
-    Unified storage router for SQLite and ChromaDB.
+    Unified storage router for SQLite, ChromaDB, and optional graph backend.
 
     Implements the StorageBackend protocol, ensuring type-safe
     pluggability with other storage implementations.
 
-    Ensures all memory operations keep both backends in sync:
-    - SQLite: Persistent storage, FTS, structured queries
+    Ensures all memory operations keep backends in sync:
+    - SQLite: Persistent storage (authoritative), FTS, structured queries
     - ChromaDB: Semantic search, vector embeddings
+    - GraphBackend: Memory relationships, lineage tracking (optional)
 
     Provides unified search that queries the appropriate backend.
     """
 
-    # Class-level capabilities descriptor
+    # Class-level capabilities descriptor (updated in __init__ if graph available)
     capabilities: StorageCapabilities = UNIFIED_CAPABILITIES
 
     def __init__(
         self,
         db_path: Path,
         rag_backend: RAGBackend,
+        graph_backend: GraphBackend | None = None,
     ) -> None:
         """
         Initialize storage router.
@@ -62,15 +71,24 @@ class StorageRouter(StorageBackend):
         Args:
             db_path: Path to SQLite database
             rag_backend: RAGBackend instance for vector storage
+            graph_backend: Optional GraphBackend for relationships/lineage
         """
         self._db_path = db_path
         self._rag = rag_backend
+        self._graph = graph_backend
+
+        # Update capabilities based on available backends
+        if graph_backend:
+            self.capabilities = UNIFIED_WITH_GRAPH_CAPABILITIES
+            logger.info("StorageRouter initialized with graph backend")
+        else:
+            self.capabilities = UNIFIED_CAPABILITIES
 
     # ==================== Write Operations ====================
 
     def save(self, memory: Memory) -> Memory:
         """
-        Save a memory to both SQLite and ChromaDB.
+        Save a memory to SQLite, ChromaDB, and graph backend.
 
         Args:
             memory: Memory object to save
@@ -78,7 +96,7 @@ class StorageRouter(StorageBackend):
         Returns:
             Saved Memory object
         """
-        # Save to SQLite first (always succeeds)
+        # Save to SQLite first (authoritative, always succeeds)
         self._save_to_sqlite(memory)
 
         # Save to ChromaDB (may fail if corrupted)
@@ -87,11 +105,18 @@ class StorageRouter(StorageBackend):
         except Exception as e:
             logger.warning(f"ChromaDB save failed (memory saved to SQLite): {e}")
 
+        # Sync to graph backend (may fail gracefully)
+        if self._graph:
+            try:
+                self._graph.sync_node(memory)
+            except Exception as e:
+                logger.warning(f"Graph sync failed (memory saved to SQLite): {e}")
+
         return memory
 
     def save_batch(self, memories: list[Memory]) -> int:
         """
-        Save multiple memories to both SQLite and ChromaDB.
+        Save multiple memories to SQLite, ChromaDB, and graph backend.
 
         Much faster than individual saves for auto-indexing.
 
@@ -104,7 +129,7 @@ class StorageRouter(StorageBackend):
         if not memories:
             return 0
 
-        # Batch save to SQLite first (always succeeds)
+        # Batch save to SQLite first (authoritative, always succeeds)
         self._save_batch_to_sqlite(memories)
 
         # Batch save to ChromaDB (may fail if corrupted)
@@ -112,6 +137,14 @@ class StorageRouter(StorageBackend):
             self._rag.add_memories_batch(memories)
         except Exception as e:
             logger.warning(f"ChromaDB batch save failed (memories saved to SQLite): {e}")
+
+        # Sync to graph backend (may fail gracefully)
+        if self._graph:
+            for memory in memories:
+                try:
+                    self._graph.sync_node(memory)
+                except Exception as e:
+                    logger.debug(f"Graph sync failed for {memory.id}: {e}")
 
         # Return count of memories saved to SQLite (the authoritative store)
         return len(memories)
@@ -477,7 +510,7 @@ class StorageRouter(StorageBackend):
 
     def delete(self, memory_id: str) -> bool:
         """
-        Delete a memory from both SQLite and ChromaDB.
+        Delete a memory from SQLite, ChromaDB, and graph backend.
 
         Args:
             memory_id: Memory ID (can be partial)
@@ -487,6 +520,13 @@ class StorageRouter(StorageBackend):
         """
         deleted_sqlite = self._delete_from_sqlite(memory_id)
         deleted_chromadb = self._delete_from_chromadb(memory_id)
+
+        # Delete from graph backend
+        if self._graph:
+            try:
+                self._graph.delete_node(memory_id)
+            except Exception as e:
+                logger.debug(f"Graph delete failed for {memory_id}: {e}")
 
         return deleted_sqlite or deleted_chromadb
 
@@ -769,3 +809,723 @@ class StorageRouter(StorageBackend):
 
         finally:
             conn.close()
+
+    # ==================== Graph Operations ====================
+    #
+    # Graph operations work in two modes:
+    # 1. With FalkorDB backend: Uses FalkorDB for graph operations (faster, more features)
+    # 2. SQLite fallback: Stores edges in memory_edges table, uses recursive CTEs
+    #
+    # This ensures lineage works out-of-the-box without requiring FalkorDB.
+
+    def has_graph(self) -> bool:
+        """Check if graph backend is available (FalkorDB or SQLite fallback)."""
+        # Always True - we have SQLite fallback
+        return True
+
+    def _has_dedicated_graph(self) -> bool:
+        """Check if dedicated graph backend (FalkorDB) is available."""
+        return self._graph is not None
+
+    # ==================== SQLite Edge Storage ====================
+
+    def _save_edge_to_sqlite(
+        self,
+        from_id: str,
+        to_id: str,
+        relation: str,
+        weight: float = 1.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Store an edge in SQLite memory_edges table."""
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO memory_edges
+                (from_id, to_id, relation, weight, created_at, created_by, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    from_id,
+                    to_id,
+                    relation,
+                    weight,
+                    datetime.now().isoformat(),
+                    "contextfs",
+                    json.dumps(metadata or {}),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _delete_edge_from_sqlite(
+        self,
+        from_id: str,
+        to_id: str,
+        relation: str | None = None,
+    ) -> bool:
+        """Delete edge(s) from SQLite."""
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        try:
+            if relation:
+                cursor.execute(
+                    "DELETE FROM memory_edges WHERE from_id = ? AND to_id = ? AND relation = ?",
+                    (from_id, to_id, relation),
+                )
+            else:
+                cursor.execute(
+                    "DELETE FROM memory_edges WHERE from_id = ? AND to_id = ?",
+                    (from_id, to_id),
+                )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def _get_edges_from_sqlite(
+        self,
+        memory_id: str,
+        direction: Literal["outgoing", "incoming", "both"] = "both",
+        relation: str | None = None,
+    ) -> list[MemoryEdge]:
+        """Query edges from SQLite."""
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        try:
+            if direction == "outgoing":
+                sql = "SELECT from_id, to_id, relation, weight, created_at, metadata FROM memory_edges WHERE from_id = ?"
+                params: list = [memory_id]
+            elif direction == "incoming":
+                sql = "SELECT from_id, to_id, relation, weight, created_at, metadata FROM memory_edges WHERE to_id = ?"
+                params = [memory_id]
+            else:  # both
+                sql = "SELECT from_id, to_id, relation, weight, created_at, metadata FROM memory_edges WHERE from_id = ? OR to_id = ?"
+                params = [memory_id, memory_id]
+
+            if relation:
+                sql += " AND relation = ?"
+                params.append(relation)
+
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+
+            edges = []
+            for row in rows:
+                edges.append(
+                    MemoryEdge(
+                        from_id=row[0],
+                        to_id=row[1],
+                        relation=EdgeRelation(row[2]),
+                        weight=row[3],
+                        created_at=datetime.fromisoformat(row[4]) if row[4] else datetime.now(),
+                        metadata=json.loads(row[5]) if row[5] else {},
+                    )
+                )
+            return edges
+        finally:
+            conn.close()
+
+    def _get_related_from_sqlite(
+        self,
+        memory_id: str,
+        relation: str | None = None,
+        direction: Literal["outgoing", "incoming", "both"] = "outgoing",
+        max_depth: int = 1,
+        min_weight: float = 0.0,
+    ) -> list[GraphTraversalResult]:
+        """Get related memories using SQLite recursive CTE."""
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        try:
+            # Build relation filter
+            relation_filter = f"AND e.relation = '{relation}'" if relation else ""
+
+            # Use recursive CTE for multi-hop traversal
+            cursor.execute(
+                f"""
+                WITH RECURSIVE traversal AS (
+                    -- Base case: direct neighbors
+                    SELECT
+                        e.to_id AS memory_id,
+                        e.relation,
+                        1 AS depth,
+                        e.weight AS path_weight
+                    FROM memory_edges e
+                    WHERE e.from_id = ?
+                      AND e.weight >= ?
+                      {relation_filter}
+
+                    UNION ALL
+
+                    -- Recursive case: neighbors of neighbors
+                    SELECT
+                        e.to_id,
+                        e.relation,
+                        t.depth + 1,
+                        t.path_weight * e.weight
+                    FROM memory_edges e
+                    JOIN traversal t ON e.from_id = t.memory_id
+                    WHERE t.depth < ?
+                      AND e.weight >= ?
+                      {relation_filter}
+                )
+                SELECT DISTINCT
+                    t.memory_id,
+                    t.relation,
+                    MIN(t.depth) as depth,
+                    MAX(t.path_weight) as path_weight
+                FROM traversal t
+                GROUP BY t.memory_id, t.relation
+                ORDER BY depth, path_weight DESC
+                """,
+                (memory_id, min_weight, max_depth, min_weight),
+            )
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                # Fetch the memory for each result
+                memory = self.recall(row[0])
+                if memory:
+                    results.append(
+                        GraphTraversalResult(
+                            memory=memory,
+                            relation=EdgeRelation(row[1]),
+                            depth=row[2],
+                            path_weight=row[3],
+                        )
+                    )
+            return results
+        finally:
+            conn.close()
+
+    def _get_lineage_from_sqlite(
+        self,
+        memory_id: str,
+        direction: Literal["ancestors", "descendants", "both"] = "both",
+    ) -> dict[str, Any]:
+        """Get memory lineage using SQLite recursive CTEs."""
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        result: dict[str, Any] = {
+            "root": memory_id,
+            "ancestors": [],
+            "descendants": [],
+        }
+
+        try:
+            # Get ancestors (traverse evolved_from, merged_from, split_from edges)
+            if direction in ("ancestors", "both"):
+                cursor.execute(
+                    """
+                    WITH RECURSIVE lineage AS (
+                        SELECT
+                            e.to_id AS ancestor_id,
+                            e.relation,
+                            1 AS depth
+                        FROM memory_edges e
+                        WHERE e.from_id = ?
+                          AND e.relation IN ('evolved_from', 'merged_from', 'split_from')
+
+                        UNION ALL
+
+                        SELECT
+                            e.to_id,
+                            e.relation,
+                            l.depth + 1
+                        FROM memory_edges e
+                        JOIN lineage l ON e.from_id = l.ancestor_id
+                        WHERE e.relation IN ('evolved_from', 'merged_from', 'split_from')
+                          AND l.depth < 10
+                    )
+                    SELECT ancestor_id, relation, depth FROM lineage ORDER BY depth
+                    """,
+                    (memory_id,),
+                )
+                for row in cursor.fetchall():
+                    result["ancestors"].append(
+                        {
+                            "id": row[0],
+                            "relation": row[1],
+                            "depth": row[2],
+                        }
+                    )
+
+                # Find root (oldest ancestor)
+                if result["ancestors"]:
+                    result["root"] = result["ancestors"][-1]["id"]
+
+            # Get descendants (traverse edges where we're the target of lineage relations)
+            if direction in ("descendants", "both"):
+                cursor.execute(
+                    """
+                    WITH RECURSIVE lineage AS (
+                        SELECT
+                            e.from_id AS descendant_id,
+                            e.relation,
+                            1 AS depth
+                        FROM memory_edges e
+                        WHERE e.to_id = ?
+                          AND e.relation IN ('evolved_from', 'merged_from', 'split_from')
+
+                        UNION ALL
+
+                        SELECT
+                            e.from_id,
+                            e.relation,
+                            l.depth + 1
+                        FROM memory_edges e
+                        JOIN lineage l ON e.to_id = l.descendant_id
+                        WHERE e.relation IN ('evolved_from', 'merged_from', 'split_from')
+                          AND l.depth < 10
+                    )
+                    SELECT descendant_id, relation, depth FROM lineage ORDER BY depth
+                    """,
+                    (memory_id,),
+                )
+                for row in cursor.fetchall():
+                    result["descendants"].append(
+                        {
+                            "id": row[0],
+                            "relation": row[1],
+                            "depth": row[2],
+                        }
+                    )
+
+            return result
+        finally:
+            conn.close()
+
+    # ==================== Public Graph API ====================
+
+    def add_edge(
+        self,
+        from_id: str,
+        to_id: str,
+        relation: EdgeRelation,
+        weight: float = 1.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryEdge | None:
+        """
+        Create a relationship between two memories.
+
+        Stores in both SQLite (always) and FalkorDB (if available).
+
+        Args:
+            from_id: Source memory ID
+            to_id: Target memory ID
+            relation: Type of relationship
+            weight: Relationship strength (0.0-1.0)
+            metadata: Additional edge properties
+
+        Returns:
+            Created MemoryEdge
+        """
+        # Always store in SQLite for persistence
+        self._save_edge_to_sqlite(
+            from_id=from_id,
+            to_id=to_id,
+            relation=relation.value,
+            weight=weight,
+            metadata=metadata,
+        )
+
+        # Also store in FalkorDB if available (for faster graph queries)
+        if self._graph:
+            try:
+                return self._graph.add_edge(
+                    from_id=from_id,
+                    to_id=to_id,
+                    relation=relation,
+                    weight=weight,
+                    metadata=metadata,
+                )
+            except Exception as e:
+                logger.debug(f"FalkorDB add_edge failed (SQLite succeeded): {e}")
+
+        # Return edge from SQLite
+        return MemoryEdge(
+            from_id=from_id,
+            to_id=to_id,
+            relation=relation,
+            weight=weight,
+            created_at=datetime.now(),
+            metadata=metadata or {},
+        )
+
+    def remove_edge(
+        self,
+        from_id: str,
+        to_id: str,
+        relation: EdgeRelation | None = None,
+    ) -> bool:
+        """
+        Remove relationship(s) between two memories.
+
+        Args:
+            from_id: Source memory ID
+            to_id: Target memory ID
+            relation: Specific relation to remove (None = all)
+
+        Returns:
+            True if any edges removed
+        """
+        # Remove from SQLite
+        sqlite_removed = self._delete_edge_from_sqlite(
+            from_id=from_id,
+            to_id=to_id,
+            relation=relation.value if relation else None,
+        )
+
+        # Also remove from FalkorDB if available
+        if self._graph:
+            try:
+                self._graph.remove_edge(from_id, to_id, relation)
+            except Exception as e:
+                logger.debug(f"FalkorDB remove_edge failed: {e}")
+
+        return sqlite_removed
+
+    def get_edges(
+        self,
+        memory_id: str,
+        direction: Literal["outgoing", "incoming", "both"] = "both",
+        relation: EdgeRelation | None = None,
+    ) -> list[MemoryEdge]:
+        """
+        Get all edges connected to a memory.
+
+        Args:
+            memory_id: Memory ID to query
+            direction: Edge direction filter
+            relation: Filter by relation type
+
+        Returns:
+            List of MemoryEdge objects
+        """
+        # Use FalkorDB if available (faster for large graphs)
+        if self._graph:
+            try:
+                return self._graph.get_edges(memory_id, direction, relation)
+            except Exception as e:
+                logger.debug(f"FalkorDB get_edges failed, using SQLite: {e}")
+
+        # Fallback to SQLite
+        return self._get_edges_from_sqlite(
+            memory_id=memory_id,
+            direction=direction,
+            relation=relation.value if relation else None,
+        )
+
+    def get_related(
+        self,
+        memory_id: str,
+        relation: EdgeRelation | None = None,
+        direction: Literal["outgoing", "incoming", "both"] = "outgoing",
+        max_depth: int = 1,
+        min_weight: float = 0.0,
+    ) -> list[GraphTraversalResult]:
+        """
+        Get memories related to a given memory via graph traversal.
+
+        Args:
+            memory_id: Starting memory ID
+            relation: Filter by relation type (None = all)
+            direction: Traversal direction
+            max_depth: Maximum hops from origin
+            min_weight: Minimum edge weight to traverse
+
+        Returns:
+            List of GraphTraversalResult objects
+        """
+        # Use FalkorDB if available (faster for deep traversals)
+        if self._graph:
+            try:
+                return self._graph.get_related(
+                    memory_id=memory_id,
+                    relation=relation,
+                    direction=direction,
+                    max_depth=max_depth,
+                    min_weight=min_weight,
+                )
+            except Exception as e:
+                logger.debug(f"FalkorDB get_related failed, using SQLite: {e}")
+
+        # Fallback to SQLite recursive CTE
+        return self._get_related_from_sqlite(
+            memory_id=memory_id,
+            relation=relation.value if relation else None,
+            direction=direction,
+            max_depth=max_depth,
+            min_weight=min_weight,
+        )
+
+    def find_path(
+        self,
+        from_id: str,
+        to_id: str,
+        max_depth: int = 5,
+        relation: EdgeRelation | None = None,
+    ) -> GraphPath | None:
+        """
+        Find shortest path between two memories.
+
+        Args:
+            from_id: Starting memory ID
+            to_id: Target memory ID
+            max_depth: Maximum path length
+            relation: Restrict to specific relation type
+
+        Returns:
+            GraphPath if found, None otherwise
+        """
+        # Use FalkorDB if available (much more efficient for pathfinding)
+        if self._graph:
+            try:
+                return self._graph.find_path(from_id, to_id, max_depth, relation)
+            except Exception as e:
+                logger.debug(f"FalkorDB find_path failed: {e}")
+
+        # SQLite pathfinding is expensive - use BFS
+        return self._find_path_sqlite(from_id, to_id, max_depth, relation)
+
+    def _find_path_sqlite(
+        self,
+        from_id: str,
+        to_id: str,
+        max_depth: int,
+        relation: EdgeRelation | None,
+    ) -> GraphPath | None:
+        """Find path using SQLite BFS (slower but works)."""
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        try:
+            relation_filter = f"AND relation = '{relation.value}'" if relation else ""
+
+            cursor.execute(
+                f"""
+                WITH RECURSIVE paths AS (
+                    SELECT
+                        from_id,
+                        to_id,
+                        relation,
+                        weight,
+                        from_id || ',' || to_id AS path,
+                        1 AS depth,
+                        weight AS total_weight
+                    FROM memory_edges
+                    WHERE from_id = ?
+                      {relation_filter}
+
+                    UNION ALL
+
+                    SELECT
+                        e.from_id,
+                        e.to_id,
+                        e.relation,
+                        e.weight,
+                        p.path || ',' || e.to_id,
+                        p.depth + 1,
+                        p.total_weight * e.weight
+                    FROM memory_edges e
+                    JOIN paths p ON e.from_id = p.to_id
+                    WHERE p.depth < ?
+                      AND p.path NOT LIKE '%' || e.to_id || '%'
+                      {relation_filter}
+                )
+                SELECT path, total_weight
+                FROM paths
+                WHERE to_id = ?
+                ORDER BY depth, total_weight DESC
+                LIMIT 1
+                """,
+                (from_id, max_depth, to_id),
+            )
+            row = cursor.fetchone()
+
+            if not row:
+                return None
+
+            path_ids = row[0].split(",")
+            return GraphPath(
+                nodes=path_ids,
+                edges=[],  # Could populate but expensive
+                total_weight=row[1],
+                length=len(path_ids) - 1,
+            )
+        finally:
+            conn.close()
+
+    def get_subgraph(
+        self,
+        root_id: str,
+        max_depth: int = 2,
+        relation: EdgeRelation | None = None,
+    ) -> dict[str, Any]:
+        """
+        Extract a subgraph rooted at a memory.
+
+        Args:
+            root_id: Root memory ID
+            max_depth: Maximum depth to traverse
+            relation: Filter by relation type
+
+        Returns:
+            Dict with 'nodes' and 'edges'
+        """
+        # Use FalkorDB if available
+        if self._graph:
+            try:
+                return self._graph.get_subgraph(root_id, max_depth, relation)
+            except Exception as e:
+                logger.debug(f"FalkorDB get_subgraph failed, using SQLite: {e}")
+
+        # SQLite fallback
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        try:
+            relation_filter = f"AND e.relation = '{relation.value}'" if relation else ""
+
+            cursor.execute(
+                f"""
+                WITH RECURSIVE subgraph AS (
+                    SELECT from_id, to_id, relation, weight, 0 AS depth
+                    FROM memory_edges
+                    WHERE from_id = ?
+                      {relation_filter}
+
+                    UNION ALL
+
+                    SELECT e.from_id, e.to_id, e.relation, e.weight, s.depth + 1
+                    FROM memory_edges e
+                    JOIN subgraph s ON e.from_id = s.to_id
+                    WHERE s.depth < ?
+                      {relation_filter}
+                )
+                SELECT DISTINCT from_id, to_id, relation, weight FROM subgraph
+                """,
+                (root_id, max_depth),
+            )
+            rows = cursor.fetchall()
+
+            # Collect unique nodes and edges
+            nodes = {root_id}
+            edges = []
+            for row in rows:
+                nodes.add(row[0])
+                nodes.add(row[1])
+                edges.append(
+                    {
+                        "from_id": row[0],
+                        "to_id": row[1],
+                        "relation": row[2],
+                        "weight": row[3],
+                    }
+                )
+
+            return {
+                "nodes": list(nodes),
+                "edges": edges,
+            }
+        finally:
+            conn.close()
+
+    def get_lineage(
+        self,
+        memory_id: str,
+        direction: Literal["ancestors", "descendants", "both"] = "both",
+    ) -> dict[str, Any]:
+        """
+        Get the evolution lineage of a memory.
+
+        Uses SQLite recursive CTEs for lineage traversal.
+        Falls back to memory metadata if no edges exist.
+
+        Args:
+            memory_id: Memory to trace
+            direction: Which direction to trace
+
+        Returns:
+            Dict with lineage information
+        """
+        # Use FalkorDB if available
+        if self._graph:
+            try:
+                return self._graph.get_lineage(memory_id, direction)
+            except Exception as e:
+                logger.debug(f"FalkorDB get_lineage failed, using SQLite: {e}")
+
+        # Try SQLite edge table first
+        result = self._get_lineage_from_sqlite(memory_id, direction)
+
+        # If no edges found, fallback to metadata
+        if not result["ancestors"] and not result["descendants"]:
+            memory = self.recall(memory_id)
+            if memory:
+                if memory.metadata.get("evolved_from"):
+                    result["ancestors"].append(
+                        {
+                            "id": memory.metadata["evolved_from"],
+                            "relation": "evolved_from",
+                            "depth": 1,
+                        }
+                    )
+                if memory.metadata.get("merged_from"):
+                    for mid in memory.metadata["merged_from"]:
+                        result["ancestors"].append(
+                            {
+                                "id": mid,
+                                "relation": "merged_from",
+                                "depth": 1,
+                            }
+                        )
+                if memory.metadata.get("split_from"):
+                    result["ancestors"].append(
+                        {
+                            "id": memory.metadata["split_from"],
+                            "relation": "split_from",
+                            "depth": 1,
+                        }
+                    )
+
+                if result["ancestors"]:
+                    result["root"] = result["ancestors"][-1]["id"]
+
+        return result
+
+    def get_graph_stats(self) -> dict[str, Any]:
+        """Get graph backend statistics."""
+        stats: dict[str, Any] = {"available": True, "backend": "sqlite"}
+
+        # Count SQLite edges
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT COUNT(*) FROM memory_edges")
+            stats["sqlite_edges"] = cursor.fetchone()[0]
+        except Exception:
+            stats["sqlite_edges"] = 0
+        finally:
+            conn.close()
+
+        # Add FalkorDB stats if available
+        if self._graph:
+            try:
+                falkor_stats = self._graph.get_stats()
+                stats["backend"] = "falkordb+sqlite"
+                stats["falkordb"] = falkor_stats
+            except Exception as e:
+                stats["falkordb_error"] = str(e)
+
+        return stats

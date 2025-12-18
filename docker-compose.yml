@@ -1,9 +1,12 @@
-version: "3.8"
+# ContextFS Development & Testing Environment
+# Usage: docker-compose up -d
 
 services:
-  # PostgreSQL for global memory sync
+  # ==========================================================================
+  # PostgreSQL with pgvector (for unified backend)
+  # ==========================================================================
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: contextfs-postgres
     environment:
       POSTGRES_USER: contextfs
@@ -13,7 +16,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U contextfs -d contextfs"]
       interval: 10s
@@ -21,14 +24,53 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ==========================================================================
+  # FalkorDB (Graph Database for Memory Lineage)
+  # ==========================================================================
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: contextfs-falkordb
+    ports:
+      - "6379:6379"
+    volumes:
+      - falkordb_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ==========================================================================
+  # ChromaDB Server (Optional - for remote vector search)
+  # ==========================================================================
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: contextfs-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+    profiles:
+      - with-chromadb
+
+  # ==========================================================================
   # ContextFS API server (optional - for remote access)
+  # ==========================================================================
   api:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: contextfs-api
     environment:
+      CONTEXTFS_BACKEND: postgres+falkordb
       CONTEXTFS_POSTGRES_URL: postgresql://contextfs:contextfs@postgres:5432/contextfs
+      CONTEXTFS_FALKORDB_ENABLED: "true"
+      CONTEXTFS_FALKORDB_HOST: falkordb
       CONTEXTFS_DATA_DIR: /data
     ports:
       - "8765:8765"
@@ -37,11 +79,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      falkordb:
+        condition: service_healthy
     restart: unless-stopped
     profiles:
       - with-api
 
+  # ==========================================================================
   # pgAdmin for database management (optional)
+  # ==========================================================================
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: contextfs-pgadmin
@@ -59,11 +105,73 @@ services:
     profiles:
       - with-admin
 
+  # ==========================================================================
+  # RedisInsight for FalkorDB management (optional)
+  # ==========================================================================
+  redisinsight:
+    image: redislabs/redisinsight:latest
+    container_name: contextfs-redisinsight
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight_data:/data
+    depends_on:
+      - falkordb
+    restart: unless-stopped
+    profiles:
+      - with-admin
+
 volumes:
   postgres_data:
+  falkordb_data:
+  chroma_data:
   contextfs_data:
   pgadmin_data:
+  redisinsight_data:
 
 networks:
   default:
     name: contextfs-network
+
+# ==========================================================================
+# Usage Examples
+# ==========================================================================
+# Start core services (Postgres + FalkorDB):
+#   docker-compose up -d postgres falkordb
+#
+# Start with admin tools:
+#   docker-compose --profile with-admin up -d
+#
+# Start everything:
+#   docker-compose --profile with-admin --profile with-api up -d
+#
+# View logs:
+#   docker-compose logs -f postgres falkordb
+#
+# Stop all:
+#   docker-compose down
+#
+# Reset all data:
+#   docker-compose down -v
+#
+# ==========================================================================
+# .env Configuration
+# ==========================================================================
+# For SQLite (default - no docker needed):
+#   CONTEXTFS_BACKEND=sqlite
+#
+# For SQLite + FalkorDB:
+#   CONTEXTFS_BACKEND=sqlite+falkordb
+#   CONTEXTFS_FALKORDB_ENABLED=true
+#   docker-compose up -d falkordb
+#
+# For PostgreSQL unified:
+#   CONTEXTFS_BACKEND=postgres
+#   CONTEXTFS_POSTGRES_URL=postgresql://contextfs:contextfs@localhost:5432/contextfs
+#   docker-compose up -d postgres
+#
+# For PostgreSQL + FalkorDB (full features):
+#   CONTEXTFS_BACKEND=postgres+falkordb
+#   CONTEXTFS_POSTGRES_URL=postgresql://contextfs:contextfs@localhost:5432/contextfs
+#   CONTEXTFS_FALKORDB_ENABLED=true
+#   docker-compose up -d postgres falkordb

@@ -742,6 +742,214 @@ async def list_tools() -> list[Tool]:
                 "required": ["path"],
             },
         ),
+        # =========================================================================
+        # Memory Lineage Tools
+        # =========================================================================
+        Tool(
+            name="contextfs_evolve",
+            description="Update a memory with history tracking. Creates a new version while preserving the original. Use when knowledge evolves or needs correction.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory to evolve (can be partial, at least 8 chars)",
+                    },
+                    "new_content": {
+                        "type": "string",
+                        "description": "Updated content for the new version",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Optional summary for the new version",
+                    },
+                    "preserve_tags": {
+                        "type": "boolean",
+                        "description": "Whether to preserve original tags (default: true)",
+                        "default": True,
+                    },
+                    "additional_tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional tags to add to the new version",
+                    },
+                },
+                "required": ["memory_id", "new_content"],
+            },
+        ),
+        Tool(
+            name="contextfs_merge",
+            description="Merge multiple memories into one. Combines knowledge from multiple sources with configurable strategies. Use when consolidating related information.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of memory IDs to merge (can be partial, at least 8 chars each)",
+                    },
+                    "merged_content": {
+                        "type": "string",
+                        "description": "Optional custom content for the merged memory. If not provided, content is auto-combined.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Summary for the merged memory",
+                    },
+                    "strategy": {
+                        "type": "string",
+                        "enum": ["union", "intersection", "latest", "oldest"],
+                        "description": "Tag merge strategy: union (all tags), intersection (common tags), latest (from newest), oldest (from oldest)",
+                        "default": "union",
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "fact",
+                            "decision",
+                            "procedural",
+                            "episodic",
+                            "user",
+                            "code",
+                            "error",
+                        ],
+                        "description": "Type for merged memory (defaults to first memory's type)",
+                    },
+                },
+                "required": ["memory_ids"],
+            },
+        ),
+        Tool(
+            name="contextfs_split",
+            description="Split a memory into multiple parts. Use when a memory contains distinct topics that should be separate.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory to split (can be partial, at least 8 chars)",
+                    },
+                    "parts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Content for each split part",
+                    },
+                    "summaries": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional summaries for each part (same length as parts)",
+                    },
+                    "preserve_tags": {
+                        "type": "boolean",
+                        "description": "Whether to preserve original tags on all parts (default: true)",
+                        "default": True,
+                    },
+                },
+                "required": ["memory_id", "parts"],
+            },
+        ),
+        Tool(
+            name="contextfs_lineage",
+            description="Get the lineage (history) of a memory. Shows ancestors (what it evolved from) and descendants (what evolved from it).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory to get lineage for (can be partial, at least 8 chars)",
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["ancestors", "descendants", "both"],
+                        "description": "Which direction to traverse: ancestors (history), descendants (evolutions), or both",
+                        "default": "both",
+                    },
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        Tool(
+            name="contextfs_link",
+            description="Create a relationship between two memories. Use for references, dependencies, contradictions, and other relationships.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "from_id": {
+                        "type": "string",
+                        "description": "ID of the source memory (can be partial, at least 8 chars)",
+                    },
+                    "to_id": {
+                        "type": "string",
+                        "description": "ID of the target memory (can be partial, at least 8 chars)",
+                    },
+                    "relation": {
+                        "type": "string",
+                        "enum": [
+                            "references",
+                            "depends_on",
+                            "contradicts",
+                            "supports",
+                            "supersedes",
+                            "related_to",
+                            "derived_from",
+                            "example_of",
+                            "part_of",
+                            "implements",
+                        ],
+                        "description": "Type of relationship between the memories",
+                    },
+                    "weight": {
+                        "type": "number",
+                        "description": "Relationship strength (0.0-1.0, default: 1.0)",
+                        "default": 1.0,
+                    },
+                    "bidirectional": {
+                        "type": "boolean",
+                        "description": "Create link in both directions (default: false)",
+                        "default": False,
+                    },
+                },
+                "required": ["from_id", "to_id", "relation"],
+            },
+        ),
+        Tool(
+            name="contextfs_related",
+            description="Get memories related to a given memory through graph relationships.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory to find relationships for (can be partial, at least 8 chars)",
+                    },
+                    "relation": {
+                        "type": "string",
+                        "enum": [
+                            "references",
+                            "depends_on",
+                            "contradicts",
+                            "supports",
+                            "supersedes",
+                            "related_to",
+                            "derived_from",
+                            "example_of",
+                            "part_of",
+                            "implements",
+                            "evolved_from",
+                            "merged_from",
+                            "split_from",
+                        ],
+                        "description": "Filter by specific relation type (optional)",
+                    },
+                    "max_depth": {
+                        "type": "number",
+                        "description": "Maximum traversal depth (default: 1)",
+                        "default": 1,
+                    },
+                },
+                "required": ["memory_id"],
+            },
+        ),
     ]
 
 
@@ -1510,6 +1718,259 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                             f"{line} - {repo.get('files_indexed', 0)} files, "
                             f"{repo.get('memories_created', 0)} memories"
                         )
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        # =====================================================================
+        # Memory Lineage Tool Handlers
+        # =====================================================================
+        elif name == "contextfs_evolve":
+            memory_id = arguments.get("memory_id", "")
+            new_content = arguments.get("new_content", "")
+
+            if not memory_id:
+                return [TextContent(type="text", text="Error: memory_id is required")]
+            if not new_content:
+                return [TextContent(type="text", text="Error: new_content is required")]
+
+            summary = arguments.get("summary")
+            preserve_tags = arguments.get("preserve_tags", True)
+            additional_tags = arguments.get("additional_tags")
+
+            new_memory = ctx.evolve(
+                memory_id=memory_id,
+                new_content=new_content,
+                summary=summary,
+                preserve_tags=preserve_tags,
+                additional_tags=additional_tags,
+            )
+
+            if not new_memory:
+                return [TextContent(type="text", text=f"Memory not found: {memory_id}")]
+
+            output = [
+                "Memory evolved successfully.",
+                f"Original: {memory_id[:12]}...",
+                f"New ID: {new_memory.id}",
+                f"Type: {new_memory.type.value}",
+            ]
+            if new_memory.summary:
+                output.append(f"Summary: {new_memory.summary}")
+            if new_memory.tags:
+                output.append(f"Tags: {', '.join(new_memory.tags)}")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_merge":
+            memory_ids = arguments.get("memory_ids", [])
+
+            if not memory_ids or len(memory_ids) < 2:
+                return [TextContent(type="text", text="Error: At least 2 memory_ids are required")]
+
+            merged_content = arguments.get("merged_content")
+            summary = arguments.get("summary")
+            strategy = arguments.get("strategy", "union")
+            memory_type = MemoryType(arguments["type"]) if arguments.get("type") else None
+
+            merged_memory = ctx.merge(
+                memory_ids=memory_ids,
+                merged_content=merged_content,
+                summary=summary,
+                strategy=strategy,
+                memory_type=memory_type,
+            )
+
+            if not merged_memory:
+                return [
+                    TextContent(
+                        type="text", text="Error: Failed to merge memories. Some IDs may not exist."
+                    )
+                ]
+
+            output = [
+                "Memories merged successfully.",
+                f"Merged {len(memory_ids)} memories:",
+            ]
+            for mid in memory_ids:
+                output.append(f"  • {mid[:12]}...")
+            output.append(f"New ID: {merged_memory.id}")
+            output.append(f"Type: {merged_memory.type.value}")
+            output.append(f"Strategy: {strategy}")
+            if merged_memory.summary:
+                output.append(f"Summary: {merged_memory.summary}")
+            if merged_memory.tags:
+                output.append(f"Tags: {', '.join(merged_memory.tags)}")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_split":
+            memory_id = arguments.get("memory_id", "")
+            parts = arguments.get("parts", [])
+
+            if not memory_id:
+                return [TextContent(type="text", text="Error: memory_id is required")]
+            if not parts or len(parts) < 2:
+                return [TextContent(type="text", text="Error: At least 2 parts are required")]
+
+            summaries = arguments.get("summaries")
+            preserve_tags = arguments.get("preserve_tags", True)
+
+            split_memories = ctx.split(
+                memory_id=memory_id,
+                parts=parts,
+                summaries=summaries,
+                preserve_tags=preserve_tags,
+            )
+
+            if not split_memories:
+                return [TextContent(type="text", text=f"Memory not found: {memory_id}")]
+
+            output = [
+                "Memory split successfully.",
+                f"Original: {memory_id[:12]}...",
+                f"Created {len(split_memories)} new memories:",
+            ]
+            for i, mem in enumerate(split_memories):
+                line = f"  {i + 1}. {mem.id}"
+                if mem.summary:
+                    line += f" - {mem.summary}"
+                output.append(line)
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_lineage":
+            memory_id = arguments.get("memory_id", "")
+
+            if not memory_id:
+                return [TextContent(type="text", text="Error: memory_id is required")]
+
+            direction = arguments.get("direction", "both")
+
+            lineage = ctx.get_lineage(memory_id=memory_id, direction=direction)
+
+            if not lineage:
+                return [
+                    TextContent(type="text", text=f"Memory not found or no lineage: {memory_id}")
+                ]
+
+            output = [f"Lineage for {memory_id[:12]}..."]
+
+            # Show ancestors (history)
+            ancestors = lineage.get("ancestors", [])
+            if ancestors:
+                output.append(f"\nAncestors ({len(ancestors)}):")
+                for anc in ancestors:
+                    rel = anc.get("relation", "unknown")
+                    aid = anc.get("id", "")[:12]
+                    depth = anc.get("depth", 1)
+                    output.append(f"  {'  ' * (depth - 1)}↑ [{rel}] {aid}...")
+            elif direction in ("ancestors", "both"):
+                output.append("\nNo ancestors (this is the original).")
+
+            # Show descendants (evolutions)
+            descendants = lineage.get("descendants", [])
+            if descendants:
+                output.append(f"\nDescendants ({len(descendants)}):")
+                for desc in descendants:
+                    rel = desc.get("relation", "unknown")
+                    did = desc.get("id", "")[:12]
+                    depth = desc.get("depth", 1)
+                    output.append(f"  {'  ' * (depth - 1)}↓ [{rel}] {did}...")
+            elif direction in ("descendants", "both"):
+                output.append("\nNo descendants (not evolved yet).")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_link":
+            from_id = arguments.get("from_id", "")
+            to_id = arguments.get("to_id", "")
+            relation = arguments.get("relation", "")
+
+            if not from_id:
+                return [TextContent(type="text", text="Error: from_id is required")]
+            if not to_id:
+                return [TextContent(type="text", text="Error: to_id is required")]
+            if not relation:
+                return [TextContent(type="text", text="Error: relation is required")]
+
+            weight = arguments.get("weight", 1.0)
+            bidirectional = arguments.get("bidirectional", False)
+
+            success = ctx.link(
+                from_memory_id=from_id,
+                to_memory_id=to_id,
+                relation=relation,
+                weight=weight,
+                bidirectional=bidirectional,
+            )
+
+            if not success:
+                return [
+                    TextContent(
+                        type="text", text="Error: Failed to create link. Memories may not exist."
+                    )
+                ]
+
+            output = [
+                "Link created successfully.",
+                f"From: {from_id[:12]}...",
+                f"To: {to_id[:12]}...",
+                f"Relation: {relation}",
+                f"Weight: {weight}",
+            ]
+            if bidirectional:
+                output.append("Bidirectional: Yes")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_related":
+            memory_id = arguments.get("memory_id", "")
+
+            if not memory_id:
+                return [TextContent(type="text", text="Error: memory_id is required")]
+
+            relation = arguments.get("relation")
+            max_depth = arguments.get("max_depth", 1)
+
+            related = ctx.get_related(
+                memory_id=memory_id,
+                relation=relation,
+                max_depth=max_depth,
+            )
+
+            if not related:
+                msg = f"No related memories found for {memory_id[:12]}..."
+                if relation:
+                    msg += f" with relation '{relation}'"
+                return [TextContent(type="text", text=msg)]
+
+            output = [f"Related memories for {memory_id[:12]}..."]
+            if relation:
+                output[0] += f" (relation: {relation})"
+            output.append("")
+
+            for item in related:
+                rel = item.get("relation", "unknown")
+                rid = item.get("id", "")[:12]
+                depth = item.get("depth", 1)
+                direction = item.get("direction", "outgoing")
+                arrow = "→" if direction == "outgoing" else "←"
+
+                line = f"  {arrow} [{rel}] {rid}..."
+                if depth > 1:
+                    line += f" (depth: {depth})"
+                output.append(line)
+
+                # Show preview of related memory content if available
+                if item.get("summary"):
+                    output.append(f"    {item['summary']}")
+                elif item.get("content"):
+                    content_preview = (
+                        item["content"][:60] + "..."
+                        if len(item.get("content", "")) > 60
+                        else item.get("content", "")
+                    )
+                    output.append(f"    {content_preview}")
 
             return [TextContent(type="text", text="\n".join(output))]
 

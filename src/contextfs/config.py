@@ -2,10 +2,29 @@
 Configuration for ContextFS.
 """
 
+from enum import Enum
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+
+class BackendType(str, Enum):
+    """Storage backend types."""
+
+    SQLITE = "sqlite"  # SQLite + ChromaDB (default)
+    POSTGRES = "postgres"  # PostgreSQL with pgvector + AGE
+    SQLITE_FALKORDB = "sqlite+falkordb"  # SQLite + ChromaDB + FalkorDB
+    POSTGRES_FALKORDB = "postgres+falkordb"  # PostgreSQL + FalkorDB
+
+
+class MergeStrategyType(str, Enum):
+    """Default merge strategy for lineage operations."""
+
+    UNION = "union"
+    INTERSECTION = "intersection"
+    LATEST = "latest"
+    OLDEST = "oldest"
 
 
 class Config(BaseSettings):
@@ -15,26 +34,70 @@ class Config(BaseSettings):
     Loaded from environment variables with CONTEXTFS_ prefix.
     """
 
-    # Data directory
+    # =================================================================
+    # Backend Selection
+    # =================================================================
+    backend: BackendType = BackendType.SQLITE
+
+    # Data directory (for sqlite/chromadb backends)
     data_dir: Path = Field(default=Path.home() / ".contextfs")
 
-    # Embedding model
+    # =================================================================
+    # SQLite Configuration
+    # =================================================================
+    sqlite_filename: str = "context.db"
+
+    # =================================================================
+    # PostgreSQL Configuration
+    # =================================================================
+    postgres_url: str = "postgresql://contextfs:contextfs@localhost:5432/contextfs"
+    postgres_pgvector: bool = True  # Enable pgvector extension
+    postgres_age: bool = True  # Enable Apache AGE extension
+
+    # =================================================================
+    # ChromaDB Configuration
+    # =================================================================
     embedding_model: str = "all-MiniLM-L6-v2"
+    chroma_collection: str = "contextfs_memories"
+    chroma_host: str | None = None  # None = embedded mode
+    chroma_port: int = 8000
+
+    # =================================================================
+    # FalkorDB Configuration
+    # =================================================================
+    falkordb_enabled: bool = False
+    falkordb_host: str = "localhost"
+    falkordb_port: int = 6379
+    falkordb_password: str | None = None
+    falkordb_graph_name: str = "contextfs_memory"
+
+    # =================================================================
+    # Memory Lineage Settings (CORE FEATURE)
+    # =================================================================
+    lineage_auto_track: bool = True  # Auto-track evolution on updates
+    lineage_merge_strategy: MergeStrategyType = MergeStrategyType.UNION
+    lineage_preserve_tags: bool = True  # Preserve tags when evolving
+
+    # =================================================================
+    # Search Settings
+    # =================================================================
+    default_search_limit: int = 10
+    min_similarity_score: float = 0.3
 
     # Chunking
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
-    # Search
-    default_search_limit: int = 10
-    min_similarity_score: float = 0.3
-
-    # Session
+    # =================================================================
+    # Session Settings
+    # =================================================================
     auto_save_sessions: bool = True
     auto_load_on_startup: bool = True
     session_timeout_minutes: int = 60
 
-    # API keys (optional, for LLM features)
+    # =================================================================
+    # API Keys (optional, for LLM features)
+    # =================================================================
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
 
@@ -42,6 +105,24 @@ class Config(BaseSettings):
     default_ai_model: str = "claude"  # or "openai"
     claude_model: str = "claude-3-sonnet-20240229"
     openai_model: str = "gpt-3.5-turbo"
+
+    # =================================================================
+    # MCP Server Settings
+    # =================================================================
+    mcp_enabled: bool = True
+    mcp_port: int = 3000
+
+    # =================================================================
+    # Logging
+    # =================================================================
+    log_level: str = "INFO"
+    log_file: str | None = None
+
+    # =================================================================
+    # Development
+    # =================================================================
+    debug: bool = False
+    test_mode: bool = False
 
     # Top 20 programming languages + extras
     supported_extensions: list[str] = Field(

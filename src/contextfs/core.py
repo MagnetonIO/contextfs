@@ -1,5 +1,8 @@
 """
 Core ContextFS class - main interface for memory operations.
+
+Memory lineage (evolve, merge, split) is a CORE FEATURE that works
+automatically based on .env configuration. No user code required.
 """
 
 import json
@@ -8,8 +11,10 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from contextfs.config import get_config
+from contextfs.memory_lineage import MemoryLineage, MergeStrategy
 from contextfs.rag import RAGBackend
 from contextfs.schemas import (
     Memory,
@@ -19,6 +24,7 @@ from contextfs.schemas import (
     Session,
     SessionMessage,
 )
+from contextfs.storage_protocol import EdgeRelation
 from contextfs.storage_router import StorageRouter
 
 logger = logging.getLogger(__name__)
@@ -33,6 +39,10 @@ class ContextFS:
     - Cross-repo namespace isolation
     - Session management
     - Git-aware context
+    - Memory lineage (evolve, merge, split) - CORE FEATURE
+
+    Memory lineage works automatically based on .env configuration.
+    Configure CONTEXTFS_BACKEND to select storage backend.
     """
 
     def __init__(
@@ -61,8 +71,8 @@ class ContextFS:
             namespace_id, self._repo_path = self._detect_namespace_and_repo()
         self.namespace_id = namespace_id
 
-        # Initialize storage
-        self._db_path = self.data_dir / "context.db"
+        # Initialize storage using backend factory
+        self._db_path = self.data_dir / self.config.sqlite_filename
         self._init_db()
 
         # Initialize RAG backend
@@ -71,11 +81,21 @@ class ContextFS:
             embedding_model=self.config.embedding_model,
         )
 
-        # Initialize unified storage router (keeps SQLite + ChromaDB in sync)
-        self.storage = StorageRouter(
+        # Initialize graph backend if configured
+        self._graph = self._init_graph_backend()
+
+        # Initialize unified storage router (keeps all backends in sync)
+        self._storage = StorageRouter(
             db_path=self._db_path,
             rag_backend=self.rag,
+            graph_backend=self._graph,
         )
+
+        # Alias for backwards compatibility
+        self.storage = self._storage
+
+        # Initialize memory lineage (CORE FEATURE)
+        self._lineage = MemoryLineage(self._storage, self._graph)
 
         # Auto-indexing
         self._auto_index = auto_index
@@ -88,6 +108,31 @@ class ContextFS:
         # Auto-load memories
         if auto_load and self.config.auto_load_on_startup:
             self._load_startup_context()
+
+    def _init_graph_backend(self):
+        """Initialize graph backend based on configuration."""
+        if not self.config.falkordb_enabled:
+            return None
+
+        try:
+            from contextfs.graph_backend import FalkorDBBackend
+
+            graph = FalkorDBBackend(
+                host=self.config.falkordb_host,
+                port=self.config.falkordb_port,
+                password=self.config.falkordb_password,
+                graph_name=self.config.falkordb_graph_name,
+            )
+            logger.info(
+                f"FalkorDB graph backend enabled: {self.config.falkordb_host}:{self.config.falkordb_port}"
+            )
+            return graph
+        except ImportError:
+            logger.warning("FalkorDB not installed. Graph features using SQLite fallback.")
+            return None
+        except Exception as e:
+            logger.warning(f"FalkorDB connection failed: {e}. Using SQLite fallback.")
+            return None
 
     def _detect_namespace(self) -> str:
         """Detect namespace from current git repo or use global."""
@@ -984,6 +1029,295 @@ class ContextFS:
             updated_at=datetime.fromisoformat(row[12]),
             metadata=json.loads(row[13]) if row[13] else {},
         )
+
+    # ==================== Memory Lineage Operations (CORE FEATURE) ====================
+
+    def evolve(
+        self,
+        memory_id: str,
+        new_content: str,
+        summary: str | None = None,
+        preserve_tags: bool | None = None,
+        additional_tags: list[str] | None = None,
+    ) -> Memory:
+        """
+        Evolve a memory by creating an updated version while preserving history.
+
+        The original memory remains unchanged. A new memory is created with
+        an EVOLVED_FROM relationship to the original. This is a CORE FEATURE
+        that tracks memory changes over time.
+
+        Args:
+            memory_id: ID of memory to evolve
+            new_content: Updated content for new memory
+            summary: Optional new summary
+            preserve_tags: Whether to copy tags (default from config)
+            additional_tags: Additional tags for new memory
+
+        Returns:
+            New evolved Memory object
+
+        Example:
+            >>> mem = ctx.save("Initial documentation")
+            >>> evolved = ctx.evolve(mem.id, "Updated documentation with examples")
+            >>> # Original still exists, evolved has EVOLVED_FROM relationship
+        """
+        if preserve_tags is None:
+            preserve_tags = self.config.lineage_preserve_tags
+
+        return self._lineage.evolve(
+            memory_id=memory_id,
+            new_content=new_content,
+            summary=summary,
+            preserve_tags=preserve_tags,
+            additional_tags=additional_tags,
+        )
+
+    def merge(
+        self,
+        memory_ids: list[str],
+        merged_content: str | None = None,
+        summary: str | None = None,
+        strategy: str | MergeStrategy | None = None,
+        memory_type: MemoryType | None = None,
+    ) -> Memory:
+        """
+        Merge multiple memories into a single memory.
+
+        Creates a new memory with MERGED_FROM relationships to all originals.
+        Original memories are not modified. This is a CORE FEATURE for
+        consolidating related information.
+
+        Args:
+            memory_ids: List of memory IDs to merge (minimum 2)
+            merged_content: Content for merged memory (auto-generated if None)
+            summary: Summary for merged memory
+            strategy: Merge strategy (union, intersection, latest, oldest)
+            memory_type: Type for merged memory
+
+        Returns:
+            New merged Memory object
+
+        Example:
+            >>> m1 = ctx.save("Auth uses JWT")
+            >>> m2 = ctx.save("Auth requires 2FA")
+            >>> merged = ctx.merge([m1.id, m2.id], summary="Auth documentation")
+        """
+        # Convert string strategy to enum
+        if strategy is None:
+            strategy = MergeStrategy(self.config.lineage_merge_strategy.value)
+        elif isinstance(strategy, str):
+            strategy = MergeStrategy(strategy)
+
+        return self._lineage.merge(
+            memory_ids=memory_ids,
+            merged_content=merged_content,
+            summary=summary,
+            strategy=strategy,
+            memory_type=memory_type,
+        )
+
+    def split(
+        self,
+        memory_id: str,
+        parts: list[str],
+        summaries: list[str] | None = None,
+        preserve_tags: bool | None = None,
+    ) -> list[Memory]:
+        """
+        Split a memory into multiple parts.
+
+        Creates new memories with SPLIT_FROM relationships to the original.
+        Original memory is not modified. This is a CORE FEATURE for
+        breaking down complex information.
+
+        Args:
+            memory_id: ID of memory to split
+            parts: List of content strings for each part (minimum 2)
+            summaries: Optional summaries for each part
+            preserve_tags: Whether to copy tags from original
+
+        Returns:
+            List of new Memory objects
+
+        Example:
+            >>> mem = ctx.save("Auth: JWT tokens. Sessions expire in 1h. 2FA required.")
+            >>> parts = ctx.split(mem.id, [
+            ...     "Auth uses JWT tokens",
+            ...     "Sessions expire in 1 hour",
+            ...     "2FA is required",
+            ... ])
+        """
+        if preserve_tags is None:
+            preserve_tags = self.config.lineage_preserve_tags
+
+        return self._lineage.split(
+            memory_id=memory_id,
+            parts=parts,
+            summaries=summaries,
+            preserve_tags=preserve_tags,
+        )
+
+    def get_lineage(
+        self,
+        memory_id: str,
+        direction: str = "both",
+    ) -> dict[str, Any]:
+        """
+        Get the evolution lineage of a memory.
+
+        Traces EVOLVED_FROM, MERGED_FROM, SPLIT_FROM relationships to
+        find ancestors and descendants. This is a CORE FEATURE for
+        understanding memory history.
+
+        Args:
+            memory_id: Memory ID to trace
+            direction: "ancestors", "descendants", or "both"
+
+        Returns:
+            Dict with:
+                - root: ID of original ancestor
+                - memory: Current memory object
+                - ancestors: List of ancestor memories with depths
+                - descendants: List of descendant memories with depths
+                - timeline: Chronologically ordered history
+
+        Example:
+            >>> lineage = ctx.get_lineage("abc123")
+            >>> print(f"Root: {lineage['root']}")
+            >>> for a in lineage['ancestors']:
+            ...     print(f"  <- {a['memory_id']} ({a['relation']})")
+        """
+        return self._lineage.get_history(memory_id)
+
+    def link(
+        self,
+        from_memory_id: str,
+        to_memory_id: str,
+        relation: str | EdgeRelation = EdgeRelation.REFERENCES,
+        weight: float = 1.0,
+        bidirectional: bool = False,
+    ) -> bool:
+        """
+        Create a relationship link between two memories.
+
+        Args:
+            from_memory_id: Source memory ID
+            to_memory_id: Target memory ID
+            relation: Type of relationship (default: REFERENCES)
+            weight: Relationship strength (0.0-1.0)
+            bidirectional: Whether to create inverse edge
+
+        Returns:
+            True if link created successfully
+
+        Example:
+            >>> ctx.link("mem1", "mem2", relation="references")
+            >>> ctx.link("auth_doc", "login_doc", relation="related_to", bidirectional=True)
+        """
+        if isinstance(relation, str):
+            relation = EdgeRelation(relation)
+
+        # Resolve partial IDs
+        from_mem = self._storage.recall(from_memory_id)
+        to_mem = self._storage.recall(to_memory_id)
+
+        if not from_mem or not to_mem:
+            return False
+
+        # Use storage router directly (has SQLite fallback)
+        edge = self._storage.add_edge(
+            from_id=from_mem.id,
+            to_id=to_mem.id,
+            relation=relation,
+            weight=weight,
+        )
+
+        # Create bidirectional edge if requested
+        if bidirectional and edge:
+            inverse_relation = self._get_inverse_relation(relation)
+            self._storage.add_edge(
+                from_id=to_mem.id,
+                to_id=from_mem.id,
+                relation=inverse_relation,
+                weight=weight,
+            )
+
+        return edge is not None
+
+    def _get_inverse_relation(self, relation: EdgeRelation) -> EdgeRelation:
+        """Get inverse relation for bidirectional links."""
+        inverses = {
+            EdgeRelation.REFERENCES: EdgeRelation.REFERENCED_BY,
+            EdgeRelation.REFERENCED_BY: EdgeRelation.REFERENCES,
+            EdgeRelation.RELATED_TO: EdgeRelation.RELATED_TO,
+            EdgeRelation.CONTRADICTS: EdgeRelation.CONTRADICTS,
+            EdgeRelation.SUPERSEDES: EdgeRelation.SUPERSEDED_BY,
+            EdgeRelation.SUPERSEDED_BY: EdgeRelation.SUPERSEDES,
+            EdgeRelation.PARENT_OF: EdgeRelation.CHILD_OF,
+            EdgeRelation.CHILD_OF: EdgeRelation.PARENT_OF,
+            EdgeRelation.PART_OF: EdgeRelation.CONTAINS,
+            EdgeRelation.CONTAINS: EdgeRelation.PART_OF,
+            EdgeRelation.CAUSED_BY: EdgeRelation.CAUSES,
+            EdgeRelation.CAUSES: EdgeRelation.CAUSED_BY,
+        }
+        return inverses.get(relation, relation)
+
+    def get_related(
+        self,
+        memory_id: str,
+        relation: str | EdgeRelation | None = None,
+        max_depth: int = 1,
+    ) -> list[dict[str, Any]]:
+        """
+        Find memories related to a given memory.
+
+        Uses graph traversal to find connected memories.
+
+        Args:
+            memory_id: Starting memory ID
+            relation: Filter by relation type (None = all)
+            max_depth: Maximum traversal depth
+
+        Returns:
+            List of related memories with relationship info
+
+        Example:
+            >>> related = ctx.get_related("auth_doc", max_depth=2)
+            >>> for r in related:
+            ...     print(f"{r['memory'].id}: {r['relation']} (depth {r['depth']})")
+        """
+        if isinstance(relation, str):
+            relation = EdgeRelation(relation)
+
+        # Resolve partial ID
+        mem = self._storage.recall(memory_id)
+        if not mem:
+            return []
+
+        # Use storage router directly (has SQLite fallback)
+        results = self._storage.get_related(
+            memory_id=mem.id,
+            relation=relation,
+            max_depth=max_depth,
+        )
+
+        # Convert GraphTraversalResult to dict format
+        return [
+            {
+                "id": r.memory.id,
+                "memory": r.memory,
+                "relation": r.relation.value,
+                "depth": r.depth,
+                "content": r.memory.content,
+                "summary": r.memory.summary,
+            }
+            for r in results
+        ]
+
+    def has_graph(self) -> bool:
+        """Check if graph backend is available for advanced lineage operations."""
+        return self._graph is not None or self._storage.has_graph()
 
     # ==================== Session Operations ====================
 

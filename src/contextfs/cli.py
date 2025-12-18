@@ -1075,9 +1075,403 @@ def install_claude_desktop(
         ("contextfs_list_projects", "List projects"),
         ("contextfs_list_tools", "List source tools"),
         ("contextfs_recall", "Recall by ID"),
+        ("contextfs_evolve", "Evolve a memory with history tracking"),
+        ("contextfs_merge", "Merge multiple memories"),
+        ("contextfs_split", "Split a memory into parts"),
+        ("contextfs_lineage", "Get memory lineage (history)"),
+        ("contextfs_link", "Create relationships between memories"),
+        ("contextfs_related", "Find related memories"),
     ]
     for name, desc in tools:
         console.print(f"  • [cyan]{name}[/cyan] - {desc}")
+
+
+# =============================================================================
+# Memory Lineage Commands
+# =============================================================================
+
+
+@app.command()
+def evolve(
+    memory_id: str = typer.Argument(..., help="Memory ID to evolve (can be partial)"),
+    content: str = typer.Argument(..., help="New content for the evolved memory"),
+    summary: str | None = typer.Option(None, "--summary", "-s", help="Summary for new version"),
+    no_preserve_tags: bool = typer.Option(False, "--no-tags", help="Don't preserve original tags"),
+    tags: str | None = typer.Option(None, "--tags", "-t", help="Additional comma-separated tags"),
+):
+    """Evolve a memory to a new version with history tracking.
+
+    Creates a new memory linked to the original, preserving the history
+    of how knowledge evolved over time.
+
+    Examples:
+        contextfs evolve abc123 "Updated API endpoint is /v2/users"
+        contextfs evolve abc123 "New content" --summary "Updated for v2"
+        contextfs evolve abc123 "Content" --tags "v2,api-change"
+    """
+    ctx = get_ctx()
+
+    additional_tags = [t.strip() for t in tags.split(",")] if tags else None
+
+    new_memory = ctx.evolve(
+        memory_id=memory_id,
+        new_content=content,
+        summary=summary,
+        preserve_tags=not no_preserve_tags,
+        additional_tags=additional_tags,
+    )
+
+    if not new_memory:
+        console.print(f"[red]Memory not found: {memory_id}[/red]")
+        raise typer.Exit(1)
+
+    console.print("[green]Memory evolved successfully[/green]")
+    console.print(f"Original: {memory_id[:12]}...")
+    console.print(f"New ID: {new_memory.id}")
+    console.print(f"Type: {new_memory.type.value}")
+    if new_memory.summary:
+        console.print(f"Summary: {new_memory.summary}")
+    if new_memory.tags:
+        console.print(f"Tags: {', '.join(new_memory.tags)}")
+
+
+@app.command()
+def merge(
+    memory_ids: list[str] = typer.Argument(..., help="Memory IDs to merge (at least 2)"),
+    content: str | None = typer.Option(
+        None, "--content", "-c", help="Custom merged content (auto-combined if not provided)"
+    ),
+    summary: str | None = typer.Option(None, "--summary", "-s", help="Summary for merged memory"),
+    strategy: str = typer.Option(
+        "union",
+        "--strategy",
+        help="Tag merge strategy: union, intersection, latest, oldest",
+    ),
+    type: str | None = typer.Option(None, "--type", "-t", help="Memory type for result"),
+):
+    """Merge multiple memories into one.
+
+    Combines knowledge from multiple memories with configurable tag strategies.
+    The original memories remain unchanged; a new merged memory is created.
+
+    Strategies:
+        union: All tags from all memories (default)
+        intersection: Only common tags
+        latest: Tags from the newest memory
+        oldest: Tags from the oldest memory
+
+    Examples:
+        contextfs merge abc123 def456
+        contextfs merge abc123 def456 ghi789 --strategy intersection
+        contextfs merge abc123 def456 --content "Combined knowledge"
+    """
+    if len(memory_ids) < 2:
+        console.print("[red]At least 2 memory IDs are required[/red]")
+        raise typer.Exit(1)
+
+    ctx = get_ctx()
+
+    memory_type = MemoryType(type) if type else None
+
+    merged_memory = ctx.merge(
+        memory_ids=memory_ids,
+        merged_content=content,
+        summary=summary,
+        strategy=strategy,
+        memory_type=memory_type,
+    )
+
+    if not merged_memory:
+        console.print("[red]Failed to merge memories. Some IDs may not exist.[/red]")
+        raise typer.Exit(1)
+
+    console.print("[green]Memories merged successfully[/green]")
+    console.print(f"Merged {len(memory_ids)} memories:")
+    for mid in memory_ids:
+        console.print(f"  • {mid[:12]}...")
+    console.print(f"New ID: {merged_memory.id}")
+    console.print(f"Type: {merged_memory.type.value}")
+    console.print(f"Strategy: {strategy}")
+    if merged_memory.summary:
+        console.print(f"Summary: {merged_memory.summary}")
+    if merged_memory.tags:
+        console.print(f"Tags: {', '.join(merged_memory.tags)}")
+
+
+@app.command()
+def split(
+    memory_id: str = typer.Argument(..., help="Memory ID to split"),
+    parts: list[str] = typer.Argument(..., help="Content for each split part"),
+    summaries: str | None = typer.Option(
+        None, "--summaries", help="Pipe-separated summaries for each part"
+    ),
+    no_preserve_tags: bool = typer.Option(
+        False, "--no-tags", help="Don't preserve original tags on parts"
+    ),
+):
+    """Split a memory into multiple parts.
+
+    Use when a memory contains distinct topics that should be separate.
+    Each part creates a new memory linked back to the original.
+
+    Examples:
+        contextfs split abc123 "Part 1 content" "Part 2 content"
+        contextfs split abc123 "Part 1" "Part 2" --summaries "Summary 1|Summary 2"
+    """
+    if len(parts) < 2:
+        console.print("[red]At least 2 parts are required[/red]")
+        raise typer.Exit(1)
+
+    ctx = get_ctx()
+
+    summary_list = [s.strip() for s in summaries.split("|")] if summaries else None
+
+    split_memories = ctx.split(
+        memory_id=memory_id,
+        parts=parts,
+        summaries=summary_list,
+        preserve_tags=not no_preserve_tags,
+    )
+
+    if not split_memories:
+        console.print(f"[red]Memory not found: {memory_id}[/red]")
+        raise typer.Exit(1)
+
+    console.print("[green]Memory split successfully[/green]")
+    console.print(f"Original: {memory_id[:12]}...")
+    console.print(f"Created {len(split_memories)} new memories:")
+
+    table = Table()
+    table.add_column("#", style="cyan")
+    table.add_column("ID", style="green")
+    table.add_column("Summary/Content")
+
+    for i, mem in enumerate(split_memories):
+        preview = mem.summary or (
+            mem.content[:50] + "..." if len(mem.content) > 50 else mem.content
+        )
+        table.add_row(str(i + 1), mem.id[:12], preview)
+
+    console.print(table)
+
+
+@app.command()
+def lineage(
+    memory_id: str = typer.Argument(..., help="Memory ID to get lineage for"),
+    direction: str = typer.Option(
+        "both",
+        "--direction",
+        "-d",
+        help="Direction: ancestors, descendants, or both",
+    ),
+):
+    """Show the lineage (history) of a memory.
+
+    Displays:
+        - Ancestors: What this memory evolved from (history)
+        - Descendants: What evolved from this memory (future versions)
+
+    Examples:
+        contextfs lineage abc123
+        contextfs lineage abc123 --direction ancestors
+    """
+    ctx = get_ctx()
+
+    result = ctx.get_lineage(memory_id=memory_id, direction=direction)
+
+    if not result:
+        console.print(f"[red]Memory not found or no lineage: {memory_id}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Lineage for {memory_id[:12]}...[/bold]\n")
+
+    # Show ancestors
+    ancestors = result.get("ancestors", [])
+    if ancestors:
+        console.print(f"[cyan]Ancestors ({len(ancestors)}):[/cyan]")
+        for anc in ancestors:
+            rel = anc.get("relation", "unknown")
+            aid = anc.get("id", "")[:12]
+            depth = anc.get("depth", 1)
+            indent = "  " * depth
+            console.print(f"{indent}↑ [{rel}] {aid}...")
+    elif direction in ("ancestors", "both"):
+        console.print("[dim]No ancestors (this is the original)[/dim]")
+
+    console.print()
+
+    # Show descendants
+    descendants = result.get("descendants", [])
+    if descendants:
+        console.print(f"[cyan]Descendants ({len(descendants)}):[/cyan]")
+        for desc in descendants:
+            rel = desc.get("relation", "unknown")
+            did = desc.get("id", "")[:12]
+            depth = desc.get("depth", 1)
+            indent = "  " * depth
+            console.print(f"{indent}↓ [{rel}] {did}...")
+    elif direction in ("descendants", "both"):
+        console.print("[dim]No descendants (not evolved yet)[/dim]")
+
+
+@app.command()
+def link(
+    from_id: str = typer.Argument(..., help="Source memory ID"),
+    to_id: str = typer.Argument(..., help="Target memory ID"),
+    relation: str = typer.Argument(
+        ...,
+        help="Relation type: references, depends_on, contradicts, supports, supersedes, related_to, derived_from, example_of, part_of, implements",
+    ),
+    weight: float = typer.Option(1.0, "--weight", "-w", help="Relationship strength (0.0-1.0)"),
+    bidirectional: bool = typer.Option(
+        False, "--bidirectional", "-b", help="Create link in both directions"
+    ),
+):
+    """Create a relationship between two memories.
+
+    Relationships help connect related knowledge across your memory graph.
+
+    Relation types:
+        references: One memory references another
+        depends_on: One memory depends on another
+        contradicts: Memories contain conflicting info
+        supports: One memory supports/validates another
+        supersedes: One memory replaces/updates another
+        related_to: General relationship
+        derived_from: One is derived from another
+        example_of: One is an example of another
+        part_of: One is part of another
+        implements: One implements another
+
+    Examples:
+        contextfs link abc123 def456 references
+        contextfs link abc123 def456 depends_on --bidirectional
+        contextfs link abc123 def456 contradicts --weight 0.8
+    """
+    ctx = get_ctx()
+
+    success = ctx.link(
+        from_memory_id=from_id,
+        to_memory_id=to_id,
+        relation=relation,
+        weight=weight,
+        bidirectional=bidirectional,
+    )
+
+    if not success:
+        console.print("[red]Failed to create link. Memories may not exist.[/red]")
+        raise typer.Exit(1)
+
+    console.print("[green]Link created successfully[/green]")
+    console.print(f"From: {from_id[:12]}...")
+    console.print(f"To: {to_id[:12]}...")
+    console.print(f"Relation: {relation}")
+    console.print(f"Weight: {weight}")
+    if bidirectional:
+        console.print("Bidirectional: Yes")
+
+
+@app.command()
+def related(
+    memory_id: str = typer.Argument(..., help="Memory ID to find relationships for"),
+    relation: str | None = typer.Option(None, "--relation", "-r", help="Filter by relation type"),
+    max_depth: int = typer.Option(1, "--depth", "-d", help="Maximum traversal depth"),
+):
+    """Find memories related to a given memory.
+
+    Shows all memories connected through graph relationships.
+
+    Examples:
+        contextfs related abc123
+        contextfs related abc123 --relation references
+        contextfs related abc123 --depth 2
+    """
+    ctx = get_ctx()
+
+    results = ctx.get_related(
+        memory_id=memory_id,
+        relation=relation,
+        max_depth=max_depth,
+    )
+
+    if not results:
+        msg = f"No related memories found for {memory_id[:12]}..."
+        if relation:
+            msg += f" with relation '{relation}'"
+        console.print(f"[yellow]{msg}[/yellow]")
+        return
+
+    console.print(f"[bold]Related memories for {memory_id[:12]}...[/bold]")
+    if relation:
+        console.print(f"[dim]Filtered by relation: {relation}[/dim]")
+    console.print()
+
+    table = Table()
+    table.add_column("Direction", style="cyan")
+    table.add_column("Relation", style="magenta")
+    table.add_column("ID", style="green")
+    table.add_column("Summary/Content")
+    table.add_column("Depth", style="dim")
+
+    for item in results:
+        rel = item.get("relation", "unknown")
+        rid = item.get("id", "")[:12]
+        depth = item.get("depth", 1)
+        direction = item.get("direction", "outgoing")
+        arrow = "→" if direction == "outgoing" else "←"
+
+        preview = item.get("summary", "")
+        if not preview and item.get("content"):
+            preview = (
+                item["content"][:40] + "..."
+                if len(item.get("content", "")) > 40
+                else item.get("content", "")
+            )
+
+        table.add_row(arrow, rel, rid, preview, str(depth) if depth > 1 else "")
+
+    console.print(table)
+
+
+@app.command("graph-status")
+def graph_status():
+    """Show graph backend status and statistics."""
+    ctx = get_ctx()
+
+    console.print("[bold]Graph Backend Status[/bold]\n")
+
+    if ctx.has_graph():
+        console.print("[green]Graph backend: Active[/green]")
+
+        # Try to get some stats
+        try:
+            from contextfs.config import get_config
+
+            config = get_config()
+            console.print(f"Backend type: {config.backend.value}")
+
+            if "falkordb" in config.backend.value:
+                console.print(f"FalkorDB host: {config.falkordb_host}:{config.falkordb_port}")
+                console.print(f"Graph name: {config.falkordb_graph_name}")
+        except Exception:
+            pass
+
+        console.print("\nLineage settings:")
+        try:
+            from contextfs.config import get_config
+
+            config = get_config()
+            console.print(f"  Auto-track: {config.lineage_auto_track}")
+            console.print(f"  Merge strategy: {config.lineage_merge_strategy.value}")
+            console.print(f"  Preserve tags: {config.lineage_preserve_tags}")
+        except Exception:
+            console.print("  [dim]Could not load settings[/dim]")
+    else:
+        console.print("[yellow]Graph backend: Not active[/yellow]")
+        console.print("\nTo enable graph features:")
+        console.print("  1. Set CONTEXTFS_BACKEND=sqlite+falkordb or postgres+falkordb")
+        console.print("  2. Start FalkorDB: docker-compose up -d falkordb")
+        console.print("  3. Restart contextfs")
 
 
 if __name__ == "__main__":
