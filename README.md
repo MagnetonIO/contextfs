@@ -210,44 +210,11 @@ CONTEXTFS_AUTO_LOAD_ON_STARTUP=true
 
 ## Supported Languages
 
-ContextFS supports 50+ file types for code ingestion:
-
-**Top 20 Programming Languages:**
-Python, JavaScript, TypeScript, Java, C++, C, C#, Go, Rust, PHP, Ruby, Swift, Kotlin, Scala, R, MATLAB, Perl, Lua, Haskell, Elixir
-
-**Plus:** Dart, Julia, Clojure, Erlang, F#, Zig, Nim, Crystal, Groovy, and more.
-
-**Web:** HTML, CSS, SCSS, JSX, TSX, Vue, Svelte
-
-**Config:** JSON, YAML, TOML, XML, INI
-
-**Documentation:** Markdown, RST, TeX, Org
+ContextFS supports 50+ file types including Python, JavaScript, TypeScript, Go, Rust, Java, C++, and more. See [full list](https://magnetonio.github.io/contextfs/getting-started/supported-languages/) in docs.
 
 ## Developer Memory Workflow (DMW)
 
-ContextFS enables **persistent developer memory** that follows you across sessions:
-
-```python
-# Save decisions as you make them
-ctx.save(
-    "Use PostgreSQL for production",
-    type=MemoryType.DECISION,
-    tags=["database", "architecture"]
-)
-
-# Document bug fixes for future reference
-ctx.save(
-    "CORS fix: allow_methods=['*'] required for credentials",
-    type=MemoryType.ERROR,
-    tags=["cors", "api", "bug-fix"]
-)
-
-# Later sessions can search for context
-results = ctx.search("database decisions")
-results = ctx.search("CORS issues", type=MemoryType.ERROR)
-```
-
-### Memory Types
+ContextFS enables **persistent developer memory** across sessions with typed memories:
 
 | Type | Use Case |
 |------|----------|
@@ -258,70 +225,59 @@ results = ctx.search("CORS issues", type=MemoryType.ERROR)
 | `procedural` | Setup guides, deployment steps |
 | `episodic` | Session transcripts, conversations |
 
-### Solo vs Team Workflows
+See the full **[Developer Memory Workflow Guide](docs/DMW.md)** for patterns and examples.
 
-- **Solo**: Per-repo namespace, personal memory bank
-- **Team**: Shared namespace, collective knowledge base
+### Memory Lineage & Graph Operations
 
-See the full **[Developer Memory Workflow Guide](docs/DMW.md)** for detailed patterns.
+ContextFS tracks memory evolution and relationships with graph-backed lineage:
 
-### Session & Memory Event Workflow
+```bash
+# Evolve memory (update with history tracking)
+contextfs evolve <id> "Updated content" --summary "Why it changed"
 
-ContextFS tracks sessions and provides CRUD operations for managing your memory lifecycle:
+# View lineage (ancestors/descendants)
+contextfs lineage <id> --direction both
 
-```python
-# Start a labeled session
-ctx = ContextFS()
-session = ctx.start_session(tool="claude-code", label="feature-auth")
+# Merge multiple memories
+contextfs merge <id1> <id2> --summary "Combined knowledge" --strategy union
 
-# Log important exchanges during conversation
-ctx.add_message("user", "Implement OAuth2 login")
-ctx.add_message("assistant", "Created OAuth2 flow in auth/oauth.py")
+# Split memory into parts
+contextfs split <id> "Part 1" "Part 2" --summaries "First|Second"
 
-# Save memories as decisions are made
-memory = ctx.save(
-    "Use PKCE flow for OAuth2 - more secure for SPAs",
-    type=MemoryType.DECISION,
-    tags=["auth", "oauth", "security"]
-)
+# Link related memories
+contextfs link <id1> <id2> references --bidirectional
 
-# Update memory if context changes
-ctx.update(memory.id, tags=["auth", "oauth", "security", "production"])
-
-# End session with auto-generated summary
-ctx.end_session(generate_summary=True)
+# Find connected memories
+contextfs related <id> --depth 2
 ```
 
-**Session Events via MCP:**
+**MCP Tools for Graph Operations:**
 
+| Tool | Description |
+|------|-------------|
+| `contextfs_evolve` | Update memory with history tracking |
+| `contextfs_merge` | Combine multiple memories into one |
+| `contextfs_split` | Divide memory into separate parts |
+| `contextfs_link` | Create relationships between memories |
+| `contextfs_related` | Find connected memories via graph traversal |
+| `contextfs_lineage` | View memory evolution history |
+
+**Relationship Types:** `references`, `depends_on`, `contradicts`, `supports`, `supersedes`, `related_to`, `derived_from`, `part_of`, `implements`
+
+### Session Management
+
+```bash
+# List sessions
+contextfs sessions
+
+# Save current session
+contextfs save --save-session current --label "feature-auth"
+
+# Load session context
+contextfs load-session <session_id>
 ```
-# During conversation - log key exchanges
-contextfs_message(role="user", content="How should we handle auth?")
-contextfs_message(role="assistant", content="Implementing JWT with refresh tokens")
 
-# Save decisions with context
-contextfs_save(content="...", type="decision", tags=["auth"])
-
-# Update existing memories
-contextfs_update(id="abc123", tags=["auth", "jwt", "v2"])
-
-# Import external conversations (from Claude Desktop JSON exports)
-contextfs_import_conversation(json_content="...", summary="Auth discussion")
-
-# Manage sessions
-contextfs_update_session(session_id="xyz", label="auth-feature-complete")
-contextfs_delete_session(session_id="old-session")
-
-# End of session - save for future reference
-contextfs_save(save_session="current", label="auth-implementation")
-```
-
-**Source Tool Detection:**
-
-ContextFS automatically detects whether it's running under Claude Code or Claude Desktop:
-- `claude-code`: Terminal environment (has `TERM`, `SHELL` env vars)
-- `claude-desktop`: GUI environment (no terminal indicators)
-- Override with `CONTEXTFS_SOURCE_TOOL` environment variable
+Source tool auto-detected (`claude-code`, `claude-desktop`) or set via `CONTEXTFS_SOURCE_TOOL`.
 
 ## Web UI
 
@@ -343,38 +299,57 @@ Features:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     ContextFS Core                          │
-├─────────────────────────────────────────────────────────────┤
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
-│  │   CLI    │  │   MCP    │  │  Web UI  │  │  Python  │    │
-│  │          │  │  Server  │  │          │  │   API    │    │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘    │
-│       │             │             │             │           │
-│       └─────────────┴──────┬──────┴─────────────┘           │
-│                            │                                │
-│                    ┌───────▼───────┐                        │
-│                    │  ContextFS()  │                        │
-│                    │   core.py     │                        │
-│                    └───────┬───────┘                        │
-│                            │                                │
-│          ┌─────────────────┼─────────────────┐              │
-│          │                 │                 │              │
-│  ┌───────▼───────┐ ┌───────▼───────┐ ┌───────▼───────┐     │
-│  │  AutoIndexer  │ │  RAG Backend  │ │  FTS Backend  │     │
-│  │  (Code Index) │ │  (ChromaDB)   │ │  (SQLite)     │     │
-│  └───────────────┘ └───────────────┘ └───────────────┘     │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        ContextFS Core                             │
+├──────────────────────────────────────────────────────────────────┤
+│   ┌───────┐   ┌───────┐   ┌───────┐   ┌───────┐                  │
+│   │  CLI  │   │  MCP  │   │ Web UI│   │Python │                  │
+│   │       │   │Server │   │       │   │  API  │                  │
+│   └───┬───┘   └───┬───┘   └───┬───┘   └───┬───┘                  │
+│       └───────────┴─────┬─────┴───────────┘                      │
+│                         │                                         │
+│                 ┌───────▼───────┐                                 │
+│                 │  ContextFS()  │                                 │
+│                 │   core.py     │                                 │
+│                 └───────┬───────┘                                 │
+│                         │                                         │
+│         ┌───────────────┼───────────────┐                         │
+│         │               │               │                         │
+│ ┌───────▼───────┐ ┌─────▼─────┐ ┌───────▼───────┐                │
+│ │MemoryLineage  │ │StorageRouter│ │ AutoIndexer │                │
+│ │(Graph Ops)    │ │           │ │ (Code Index) │                 │
+│ └───────┬───────┘ └─────┬─────┘ └───────────────┘                │
+│         │               │                                         │
+│         │       ┌───────▼───────┐                                 │
+│         │       │TypedStorage   │ ← EdgeRelation, MemoryEdge     │
+│         │       │   Protocol    │   GraphPath, GraphTraversal    │
+│         │       └───────┬───────┘                                 │
+│         │               │                                         │
+│         └───────┬───────┼───────┬───────────────┐                │
+│                 │       │       │               │                 │
+│         ┌───────▼──┐ ┌──▼───┐ ┌─▼────────┐ ┌────▼─────┐          │
+│         │ SQLite   │ │Chroma│ │PostgreSQL│ │ FalkorDB │          │
+│         │ + FTS5   │ │  DB  │ │ +pgvector│ │ (Cypher) │          │
+│         │(default) │ │(RAG) │ │ (hosted) │ │ (graph)  │          │
+│         └──────────┘ └──────┘ └──────────┘ └──────────┘          │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Dual Storage
+### Storage Backends
 
-| SQLite + FTS5 | ChromaDB |
-|---------------|----------|
-| Fast keyword queries | Vector similarity search |
-| Session/message storage | Code semantic search |
-| Exact matches | Conceptual matching |
-| Metadata & filtering | Embedding-based retrieval |
+| Backend | Purpose |
+|---------|---------|
+| **SQLite + FTS5** | Default local storage, keyword search, sessions |
+| **ChromaDB** | Vector embeddings, semantic/RAG search |
+| **PostgreSQL + pgvector** | Hosted deployments, team sharing |
+| **FalkorDB** | Advanced graph queries via Cypher |
+
+### Typed Storage Protocol
+
+The `StorageProtocol` provides a unified interface across backends with typed models:
+- `EdgeRelation` - 20+ relationship types (references, depends_on, contradicts, etc.)
+- `MemoryEdge` - Typed edges with weights and metadata
+- `GraphPath` / `GraphTraversal` - Path finding and subgraph queries
 
 ## License
 

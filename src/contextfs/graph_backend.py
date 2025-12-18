@@ -107,9 +107,7 @@ class FalkorDBBackend:
             logger.info(f"Connected to FalkorDB at {self._host}:{self._port}")
 
         except ImportError:
-            raise ImportError(
-                "FalkorDB package not installed. " "Install with: pip install falkordb"
-            )
+            raise ImportError("FalkorDB package not installed. Install with: pip install falkordb")
         except Exception as e:
             logger.error(f"Failed to connect to FalkorDB: {e}")
             raise
