@@ -46,8 +46,10 @@ class ContextFSBrowser {
     private searchBtn!: HTMLButtonElement;
     private typeFilter!: HTMLSelectElement;
     private namespaceFilter!: HTMLSelectElement;
-    private searchModeSelect!: HTMLSelectElement;
     private resultsContainer!: HTMLElement;
+
+    // Namespace display names cache
+    private namespaceDisplayNames: Map<string, string> = new Map();
     private dualResultsContainer!: HTMLElement;
     private ftsResultsContainer!: HTMLElement;
     private ragResultsContainer!: HTMLElement;
@@ -70,7 +72,6 @@ class ContextFSBrowser {
         this.searchBtn = document.getElementById('search-btn') as HTMLButtonElement;
         this.typeFilter = document.getElementById('type-filter') as HTMLSelectElement;
         this.namespaceFilter = document.getElementById('namespace-filter') as HTMLSelectElement;
-        this.searchModeSelect = document.getElementById('search-mode') as HTMLSelectElement;
         this.resultsContainer = document.getElementById('results') as HTMLElement;
         this.dualResultsContainer = document.getElementById('dual-results') as HTMLElement;
         this.ftsResultsContainer = document.getElementById('fts-results') as HTMLElement;
@@ -94,7 +95,6 @@ class ContextFSBrowser {
         // Filters
         this.typeFilter.addEventListener('change', () => this.search());
         this.namespaceFilter.addEventListener('change', () => this.search());
-        this.searchModeSelect.addEventListener('change', () => this.search());
 
         // Tabs
         document.querySelectorAll('.tab').forEach((tab) => {
@@ -172,7 +172,7 @@ class ContextFSBrowser {
 
         const type = this.typeFilter.value as MemoryType | '';
         const namespace = this.namespaceFilter.value;
-        const searchMode = this.searchModeSelect.value as SearchMode;
+        const searchMode: SearchMode = 'hybrid'; // Default to hybrid search
 
         // Reset pagination for new search
         if (!loadMore) {
@@ -188,36 +188,20 @@ class ContextFSBrowser {
         }
 
         try {
-            if (searchMode === 'dual') {
-                // Show dual view (no pagination for dual mode)
-                this.showDualView();
-                this.ftsResultsContainer.innerHTML = '<div class="loading"></div>';
-                this.ragResultsContainer.innerHTML = '<div class="loading"></div>';
-
-                const dualResults = await this.searchDualAPI(query, type || undefined, namespace || undefined);
-                this.renderDualResults(dualResults);
-            } else {
-                // Show single view
-                this.showSingleView();
-                if (!loadMore) {
-                    this.resultsContainer.innerHTML = '<div class="loading"></div>';
-                }
-
-                let results: SearchResult[];
-
-                if (this.useSqlJs && this.db && searchMode === 'fts') {
-                    results = this.searchLocal(query, type || undefined, namespace || undefined, this.searchPageSize, this.searchOffset);
-                } else {
-                    results = await this.searchAPI(query, type || undefined, namespace || undefined, searchMode, this.searchOffset);
-                }
-
-                // Check if there are more results
-                this.searchHasMore = results.length === this.searchPageSize;
-                this.searchOffset += results.length;
-                this.currentSearchResults = loadMore ? [...this.currentSearchResults, ...results] : results;
-
-                this.renderResults(results, loadMore);
+            // Show single view
+            this.showSingleView();
+            if (!loadMore) {
+                this.resultsContainer.innerHTML = '<div class="loading"></div>';
             }
+
+            const results = await this.searchAPI(query, type || undefined, namespace || undefined, searchMode, this.searchOffset);
+
+            // Check if there are more results
+            this.searchHasMore = results.length === this.searchPageSize;
+            this.searchOffset += results.length;
+            this.currentSearchResults = loadMore ? [...this.currentSearchResults, ...results] : results;
+
+            this.renderResults(results, loadMore);
         } catch (error) {
             this.resultsContainer.innerHTML = `<p class="placeholder">Error: ${(error as Error).message}</p>`;
         }
@@ -241,14 +225,20 @@ class ContextFSBrowser {
         this.showSingleView();
         this.resultsContainer.innerHTML = '<div class="loading"></div>';
 
+        // Get current filter values
+        const type = this.typeFilter.value as MemoryType | '';
+        const namespace = this.namespaceFilter.value;
+
         try {
-            const memories = await this.getRecentAPI(10);
+            const memories = await this.getRecentAPI(20, type || undefined, namespace || undefined);
             if (memories.length === 0) {
-                this.resultsContainer.innerHTML = '<p class="placeholder">No memories yet. Save some memories to get started!</p>';
+                const filterMsg = type ? ` of type "${type}"` : '';
+                this.resultsContainer.innerHTML = `<p class="placeholder">No memories${filterMsg} found.</p>`;
                 return;
             }
 
-            this.resultsContainer.innerHTML = '<h3 class="section-title">Recent Memories</h3>' +
+            const title = type ? `Recent ${type.charAt(0).toUpperCase() + type.slice(1)} Memories` : 'Recent Memories';
+            this.resultsContainer.innerHTML = `<h3 class="section-title">${title}</h3>` +
                 memories.map((m) => this.renderMemoryCard({
                     memory: m,
                     score: 1.0,
@@ -548,8 +538,12 @@ class ContextFSBrowser {
         return results[0].values.map((row) => this.rowToMemory(results[0].columns, row));
     }
 
-    private async getRecentAPI(limit: number = 20): Promise<Memory[]> {
-        const response = await fetch(`${this.apiBase}/memories?limit=${limit}`);
+    private async getRecentAPI(limit: number = 20, type?: MemoryType, namespace?: string): Promise<Memory[]> {
+        const params = new URLSearchParams({ limit: String(limit) });
+        if (type) params.set('type', type);
+        if (namespace) params.set('namespace', namespace);
+
+        const response = await fetch(`${this.apiBase}/memories?${params}`);
         const data: APIResponse<Memory[]> = await response.json();
 
         if (!data.success || !data.data) {
@@ -789,21 +783,50 @@ class ContextFSBrowser {
 
     private async loadNamespaces(): Promise<void> {
         try {
-            let namespaces: string[];
+            interface NamespaceInfo {
+                id: string;
+                display_name: string;
+                source_repo: string | null;
+            }
+
+            let namespaces: NamespaceInfo[];
 
             if (this.useSqlJs && this.db) {
-                const result = this.db.exec('SELECT DISTINCT namespace_id FROM memories');
-                namespaces = result[0]?.values.map((row) => row[0] as string) || [];
+                // Get namespace IDs and source repos from local DB
+                const result = this.db.exec(
+                    'SELECT DISTINCT namespace_id, source_repo FROM memories'
+                );
+                namespaces = (result[0]?.values || []).map((row) => {
+                    const nsId = row[0] as string;
+                    const sourceRepo = row[1] as string | null;
+                    let displayName = nsId;
+
+                    if (sourceRepo) {
+                        const repoName = sourceRepo.replace(/\/$/, '').split('/').pop();
+                        if (repoName) displayName = repoName;
+                    } else if (nsId === 'global') {
+                        displayName = 'global';
+                    } else if (nsId.startsWith('repo-')) {
+                        displayName = `repo-${nsId.slice(5, 13)}...`;
+                    }
+
+                    return { id: nsId, display_name: displayName, source_repo: sourceRepo };
+                });
             } else {
                 const response = await fetch(`${this.apiBase}/namespaces`);
-                const data: APIResponse<string[]> = await response.json();
+                const data: APIResponse<NamespaceInfo[]> = await response.json();
                 namespaces = data.data || [];
             }
 
+            // Cache display names and populate dropdown
             namespaces.forEach((ns) => {
+                this.namespaceDisplayNames.set(ns.id, ns.display_name);
                 const option = document.createElement('option');
-                option.value = ns;
-                option.textContent = ns;
+                option.value = ns.id;
+                option.textContent = ns.display_name;
+                if (ns.source_repo) {
+                    option.title = ns.source_repo; // Show full path on hover
+                }
                 this.namespaceFilter.appendChild(option);
             });
         } catch {

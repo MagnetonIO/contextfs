@@ -19,6 +19,8 @@ class ContextFSBrowser {
         this.searchHasMore = true;
         this.currentSearchParams = null;
         this.currentSearchResults = [];
+        // Namespace display names cache
+        this.namespaceDisplayNames = new Map();
         this.initElements();
         this.initEventListeners();
         this.init();
@@ -28,7 +30,6 @@ class ContextFSBrowser {
         this.searchBtn = document.getElementById('search-btn');
         this.typeFilter = document.getElementById('type-filter');
         this.namespaceFilter = document.getElementById('namespace-filter');
-        this.searchModeSelect = document.getElementById('search-mode');
         this.resultsContainer = document.getElementById('results');
         this.dualResultsContainer = document.getElementById('dual-results');
         this.ftsResultsContainer = document.getElementById('fts-results');
@@ -51,7 +52,6 @@ class ContextFSBrowser {
         // Filters
         this.typeFilter.addEventListener('change', () => this.search());
         this.namespaceFilter.addEventListener('change', () => this.search());
-        this.searchModeSelect.addEventListener('change', () => this.search());
         // Tabs
         document.querySelectorAll('.tab').forEach((tab) => {
             tab.addEventListener('click', (e) => this.switchTab(e));
@@ -68,13 +68,6 @@ class ContextFSBrowser {
         // Footer actions
         document.getElementById('export-btn')?.addEventListener('click', () => this.exportMemories());
         document.getElementById('sync-btn')?.addEventListener('click', () => this.syncToPostgres());
-        document.getElementById('refresh-btn')?.addEventListener('click', () => this.refreshAll());
-        // Auto-refresh when tab becomes visible
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                this.refreshAll();
-            }
-        });
     }
     async init() {
         try {
@@ -118,29 +111,6 @@ class ContextFSBrowser {
             this.db = new SQL.Database();
         }
     }
-    async refreshAll() {
-        // Reload database from API if using sql.js
-        if (this.useSqlJs) {
-            try {
-                const response = await fetch(`${this.apiBase}/database`);
-                if (response.ok) {
-                    const SQL = await window.initSqlJs({
-                        locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${file}`,
-                    });
-                    const buffer = await response.arrayBuffer();
-                    this.db = new SQL.Database(new Uint8Array(buffer));
-                }
-            } catch (e) {
-                console.log('Failed to reload database:', e);
-            }
-        }
-        // Reload all views
-        await this.loadNamespaces();
-        await this.loadRecent();
-        await this.loadSessions(true);
-        await this.loadStats();
-        await this.showRecentInSearch();
-    }
     // ==================== Search ====================
     async search(loadMore = false) {
         const query = this.searchInput.value.trim();
@@ -151,7 +121,7 @@ class ContextFSBrowser {
         }
         const type = this.typeFilter.value;
         const namespace = this.namespaceFilter.value;
-        const searchMode = this.searchModeSelect.value;
+        const searchMode = 'hybrid'; // Default to hybrid search
         // Reset pagination for new search
         if (!loadMore) {
             this.searchOffset = 0;
@@ -165,33 +135,17 @@ class ContextFSBrowser {
             };
         }
         try {
-            if (searchMode === 'dual') {
-                // Show dual view (no pagination for dual mode)
-                this.showDualView();
-                this.ftsResultsContainer.innerHTML = '<div class="loading"></div>';
-                this.ragResultsContainer.innerHTML = '<div class="loading"></div>';
-                const dualResults = await this.searchDualAPI(query, type || undefined, namespace || undefined);
-                this.renderDualResults(dualResults);
+            // Show single view
+            this.showSingleView();
+            if (!loadMore) {
+                this.resultsContainer.innerHTML = '<div class="loading"></div>';
             }
-            else {
-                // Show single view
-                this.showSingleView();
-                if (!loadMore) {
-                    this.resultsContainer.innerHTML = '<div class="loading"></div>';
-                }
-                let results;
-                if (this.useSqlJs && this.db && searchMode === 'fts') {
-                    results = this.searchLocal(query, type || undefined, namespace || undefined, this.searchPageSize, this.searchOffset);
-                }
-                else {
-                    results = await this.searchAPI(query, type || undefined, namespace || undefined, searchMode, this.searchOffset);
-                }
-                // Check if there are more results
-                this.searchHasMore = results.length === this.searchPageSize;
-                this.searchOffset += results.length;
-                this.currentSearchResults = loadMore ? [...this.currentSearchResults, ...results] : results;
-                this.renderResults(results, loadMore);
-            }
+            const results = await this.searchAPI(query, type || undefined, namespace || undefined, searchMode, this.searchOffset);
+            // Check if there are more results
+            this.searchHasMore = results.length === this.searchPageSize;
+            this.searchOffset += results.length;
+            this.currentSearchResults = loadMore ? [...this.currentSearchResults, ...results] : results;
+            this.renderResults(results, loadMore);
         }
         catch (error) {
             this.resultsContainer.innerHTML = `<p class="placeholder">Error: ${error.message}</p>`;
@@ -211,13 +165,18 @@ class ContextFSBrowser {
     async showRecentInSearch() {
         this.showSingleView();
         this.resultsContainer.innerHTML = '<div class="loading"></div>';
+        // Get current filter values
+        const type = this.typeFilter.value;
+        const namespace = this.namespaceFilter.value;
         try {
-            const memories = await this.getRecentAPI(10);
+            const memories = await this.getRecentAPI(20, type || undefined, namespace || undefined);
             if (memories.length === 0) {
-                this.resultsContainer.innerHTML = '<p class="placeholder">No memories yet. Save some memories to get started!</p>';
+                const filterMsg = type ? ` of type "${type}"` : '';
+                this.resultsContainer.innerHTML = `<p class="placeholder">No memories${filterMsg} found.</p>`;
                 return;
             }
-            this.resultsContainer.innerHTML = '<h3 class="section-title">Recent Memories</h3>' +
+            const title = type ? `Recent ${type.charAt(0).toUpperCase() + type.slice(1)} Memories` : 'Recent Memories';
+            this.resultsContainer.innerHTML = `<h3 class="section-title">${title}</h3>` +
                 memories.map((m) => this.renderMemoryCard({
                     memory: m,
                     score: 1.0,
@@ -465,8 +424,13 @@ class ContextFSBrowser {
             return [];
         return results[0].values.map((row) => this.rowToMemory(results[0].columns, row));
     }
-    async getRecentAPI(limit = 20) {
-        const response = await fetch(`${this.apiBase}/memories?limit=${limit}`);
+    async getRecentAPI(limit = 20, type, namespace) {
+        const params = new URLSearchParams({ limit: String(limit) });
+        if (type)
+            params.set('type', type);
+        if (namespace)
+            params.set('namespace', namespace);
+        const response = await fetch(`${this.apiBase}/memories?${params}`);
         const data = await response.json();
         if (!data.success || !data.data) {
             throw new Error(data.error || 'Failed to load memories');
@@ -675,18 +639,40 @@ class ContextFSBrowser {
         try {
             let namespaces;
             if (this.useSqlJs && this.db) {
-                const result = this.db.exec('SELECT DISTINCT namespace_id FROM memories');
-                namespaces = result[0]?.values.map((row) => row[0]) || [];
+                // Get namespace IDs and source repos from local DB
+                const result = this.db.exec('SELECT DISTINCT namespace_id, source_repo FROM memories');
+                namespaces = (result[0]?.values || []).map((row) => {
+                    const nsId = row[0];
+                    const sourceRepo = row[1];
+                    let displayName = nsId;
+                    if (sourceRepo) {
+                        const repoName = sourceRepo.replace(/\/$/, '').split('/').pop();
+                        if (repoName)
+                            displayName = repoName;
+                    }
+                    else if (nsId === 'global') {
+                        displayName = 'global';
+                    }
+                    else if (nsId.startsWith('repo-')) {
+                        displayName = `repo-${nsId.slice(5, 13)}...`;
+                    }
+                    return { id: nsId, display_name: displayName, source_repo: sourceRepo };
+                });
             }
             else {
                 const response = await fetch(`${this.apiBase}/namespaces`);
                 const data = await response.json();
                 namespaces = data.data || [];
             }
+            // Cache display names and populate dropdown
             namespaces.forEach((ns) => {
+                this.namespaceDisplayNames.set(ns.id, ns.display_name);
                 const option = document.createElement('option');
-                option.value = ns;
-                option.textContent = ns;
+                option.value = ns.id;
+                option.textContent = ns.display_name;
+                if (ns.source_repo) {
+                    option.title = ns.source_repo; // Show full path on hover
+                }
                 this.namespaceFilter.appendChild(option);
             });
         }
@@ -700,143 +686,23 @@ class ContextFSBrowser {
         if (!result)
             return;
         const { memory } = result;
-        this.currentMemory = memory;
         this.modalBody.innerHTML = `
             <div class="modal-header">
                 <span class="memory-type ${memory.type}">${memory.type}</span>
                 <h3>${memory.summary || `Memory ${memory.id.substring(0, 8)}`}</h3>
             </div>
-            <div class="modal-body" id="memory-view-mode">
+            <div class="modal-body">
                 <pre>${this.escapeHtml(memory.content)}</pre>
                 <div class="memory-meta" style="margin-top: 16px;">
                     <p><strong>ID:</strong> ${memory.id}</p>
                     <p><strong>Namespace:</strong> ${memory.namespace_id}</p>
-                    <p><strong>Project:</strong> ${memory.project || 'none'}</p>
                     <p><strong>Created:</strong> ${this.formatDate(memory.created_at)}</p>
                     ${memory.tags.length ? `<p><strong>Tags:</strong> ${memory.tags.join(', ')}</p>` : ''}
                     ${memory.source_file ? `<p><strong>Source:</strong> ${memory.source_file}</p>` : ''}
                 </div>
             </div>
-            <div class="modal-body" id="memory-edit-mode" style="display: none;">
-                <div class="form-group">
-                    <label>Content</label>
-                    <textarea id="edit-memory-content" rows="6">${this.escapeHtml(memory.content)}</textarea>
-                </div>
-                <div class="form-group">
-                    <label>Summary</label>
-                    <input type="text" id="edit-memory-summary" value="${this.escapeHtml(memory.summary || '')}">
-                </div>
-                <div class="form-group">
-                    <label>Type</label>
-                    <select id="edit-memory-type">
-                        ${['fact', 'decision', 'procedural', 'episodic', 'user', 'code', 'error'].map(t =>
-                            `<option value="${t}" ${memory.type === t ? 'selected' : ''}>${t}</option>`
-                        ).join('')}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Tags (comma-separated)</label>
-                    <input type="text" id="edit-memory-tags" value="${memory.tags.join(', ')}">
-                </div>
-                <div class="form-group">
-                    <label>Project</label>
-                    <input type="text" id="edit-memory-project" value="${this.escapeHtml(memory.project || '')}">
-                </div>
-            </div>
-            <div class="modal-actions">
-                <button id="btn-edit-memory" class="btn-secondary">Edit</button>
-                <button id="btn-save-memory" class="btn-primary" style="display: none;">Save</button>
-                <button id="btn-cancel-edit" class="btn-secondary" style="display: none;">Cancel</button>
-                <button id="btn-delete-memory" class="btn-danger">Delete</button>
-            </div>
         `;
         this.modal.classList.add('active');
-
-        // Add event listeners
-        document.getElementById('btn-edit-memory')?.addEventListener('click', () => this.enterMemoryEditMode());
-        document.getElementById('btn-save-memory')?.addEventListener('click', () => this.saveMemory());
-        document.getElementById('btn-cancel-edit')?.addEventListener('click', () => this.exitMemoryEditMode());
-        document.getElementById('btn-delete-memory')?.addEventListener('click', () => this.deleteMemory(memory.id));
-    }
-
-    enterMemoryEditMode() {
-        document.getElementById('memory-view-mode').style.display = 'none';
-        document.getElementById('memory-edit-mode').style.display = 'block';
-        document.getElementById('btn-edit-memory').style.display = 'none';
-        document.getElementById('btn-save-memory').style.display = 'inline-block';
-        document.getElementById('btn-cancel-edit').style.display = 'inline-block';
-        document.getElementById('btn-delete-memory').style.display = 'none';
-    }
-
-    exitMemoryEditMode() {
-        document.getElementById('memory-view-mode').style.display = 'block';
-        document.getElementById('memory-edit-mode').style.display = 'none';
-        document.getElementById('btn-edit-memory').style.display = 'inline-block';
-        document.getElementById('btn-save-memory').style.display = 'none';
-        document.getElementById('btn-cancel-edit').style.display = 'none';
-        document.getElementById('btn-delete-memory').style.display = 'inline-block';
-    }
-
-    async saveMemory() {
-        if (!this.currentMemory) return;
-
-        const content = document.getElementById('edit-memory-content')?.value;
-        const summary = document.getElementById('edit-memory-summary')?.value;
-        const type = document.getElementById('edit-memory-type')?.value;
-        const tagsStr = document.getElementById('edit-memory-tags')?.value;
-        const project = document.getElementById('edit-memory-project')?.value;
-
-        const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(t => t) : [];
-
-        try {
-            const response = await fetch(`${this.apiBase}/memories/${this.currentMemory.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content, summary, type, tags, project: project || null }),
-            });
-            const data = await response.json();
-
-            if (data.success) {
-                this.closeModal();
-                await this.loadRecent();
-                await this.showRecentInSearch();
-                alert('Memory updated successfully');
-            } else {
-                throw new Error(data.error || 'Update failed');
-            }
-        } catch (error) {
-            alert(`Failed to update memory: ${error.message}`);
-        }
-    }
-
-    async deleteMemory(id) {
-        if (!confirm('Are you sure you want to delete this memory?')) return;
-
-        try {
-            const response = await fetch(`${this.apiBase}/memories/${id}`, {
-                method: 'DELETE',
-            });
-            const data = await response.json();
-
-            if (data.success) {
-                // Also delete from local DB if using sql.js
-                if (this.useSqlJs && this.db) {
-                    try {
-                        this.db.run('DELETE FROM memories WHERE id = ? OR id LIKE ?', [id, `${id}%`]);
-                    } catch (e) {
-                        console.log('Local DB delete failed:', e);
-                    }
-                }
-                this.closeModal();
-                await this.loadRecent();
-                await this.showRecentInSearch();
-                alert('Memory deleted successfully');
-            } else {
-                throw new Error(data.error || 'Delete failed');
-            }
-        } catch (error) {
-            alert(`Failed to delete memory: ${error.message}`);
-        }
     }
     async showSessionDetail(id) {
         // Load session messages from API or local DB
@@ -849,132 +715,24 @@ class ContextFSBrowser {
                 throw new Error(data.error || 'Failed to load session');
             }
             const session = data.data;
-            this.currentSession = session;
             const messages = session.messages || [];
             this.modalBody.innerHTML = `
                 <div class="modal-header">
-                    <h3 id="session-title">${session.label || `Session ${session.id.substring(0, 8)}`}</h3>
+                    <h3>${session.label || `Session ${session.id.substring(0, 8)}`}</h3>
                     <p class="text-muted">${session.tool} • ${this.formatDate(session.started_at)}</p>
                 </div>
-                <div class="modal-body" id="session-view-mode">
-                    <div class="session-info">
-                        <p><strong>ID:</strong> ${session.id}</p>
-                        <p><strong>Label:</strong> ${session.label || 'none'}</p>
-                        <p><strong>Summary:</strong> ${session.summary || 'none'}</p>
-                        <p><strong>Messages:</strong> ${messages.length}</p>
-                    </div>
-                    ${messages.length ? `
-                        <h4>Messages</h4>
-                        <div class="messages-list">
-                            ${messages.map((m) => `
-                                <div class="message ${m.role}">
-                                    <strong>${m.role}:</strong>
-                                    <p>${this.escapeHtml(m.content)}</p>
-                                </div>
-                            `).join('')}
+                <div class="modal-body">
+                    ${messages.map((m) => `
+                        <div class="message ${m.role}">
+                            <strong>${m.role}:</strong>
+                            <p>${this.escapeHtml(m.content)}</p>
                         </div>
-                    ` : '<p class="text-muted">No messages in this session</p>'}
-                </div>
-                <div class="modal-body" id="session-edit-mode" style="display: none;">
-                    <div class="form-group">
-                        <label>Label</label>
-                        <input type="text" id="edit-session-label" value="${this.escapeHtml(session.label || '')}">
-                    </div>
-                    <div class="form-group">
-                        <label>Summary</label>
-                        <textarea id="edit-session-summary" rows="3">${this.escapeHtml(session.summary || '')}</textarea>
-                    </div>
-                </div>
-                <div class="modal-actions">
-                    <button id="btn-edit-session" class="btn-secondary">Edit</button>
-                    <button id="btn-save-session" class="btn-primary" style="display: none;">Save</button>
-                    <button id="btn-cancel-session-edit" class="btn-secondary" style="display: none;">Cancel</button>
-                    <button id="btn-delete-session" class="btn-danger">Delete</button>
+                    `).join('')}
                 </div>
             `;
-
-            // Add event listeners
-            document.getElementById('btn-edit-session')?.addEventListener('click', () => this.enterSessionEditMode());
-            document.getElementById('btn-save-session')?.addEventListener('click', () => this.saveSession());
-            document.getElementById('btn-cancel-session-edit')?.addEventListener('click', () => this.exitSessionEditMode());
-            document.getElementById('btn-delete-session')?.addEventListener('click', () => this.deleteSession(session.id));
         }
         catch (error) {
             this.modalBody.innerHTML = `<p class="placeholder">Error: ${error.message}</p>`;
-        }
-    }
-
-    enterSessionEditMode() {
-        document.getElementById('session-view-mode').style.display = 'none';
-        document.getElementById('session-edit-mode').style.display = 'block';
-        document.getElementById('btn-edit-session').style.display = 'none';
-        document.getElementById('btn-save-session').style.display = 'inline-block';
-        document.getElementById('btn-cancel-session-edit').style.display = 'inline-block';
-        document.getElementById('btn-delete-session').style.display = 'none';
-    }
-
-    exitSessionEditMode() {
-        document.getElementById('session-view-mode').style.display = 'block';
-        document.getElementById('session-edit-mode').style.display = 'none';
-        document.getElementById('btn-edit-session').style.display = 'inline-block';
-        document.getElementById('btn-save-session').style.display = 'none';
-        document.getElementById('btn-cancel-session-edit').style.display = 'none';
-        document.getElementById('btn-delete-session').style.display = 'inline-block';
-    }
-
-    async saveSession() {
-        if (!this.currentSession) return;
-
-        const label = document.getElementById('edit-session-label')?.value;
-        const summary = document.getElementById('edit-session-summary')?.value;
-
-        try {
-            const response = await fetch(`${this.apiBase}/sessions/${this.currentSession.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ label: label || null, summary: summary || null }),
-            });
-            const data = await response.json();
-
-            if (data.success) {
-                this.closeModal();
-                await this.loadSessions(true);
-                alert('Session updated successfully');
-            } else {
-                throw new Error(data.error || 'Update failed');
-            }
-        } catch (error) {
-            alert(`Failed to update session: ${error.message}`);
-        }
-    }
-
-    async deleteSession(id) {
-        if (!confirm('Are you sure you want to delete this session and all its messages?')) return;
-
-        try {
-            const response = await fetch(`${this.apiBase}/sessions/${id}`, {
-                method: 'DELETE',
-            });
-            const data = await response.json();
-
-            if (data.success) {
-                // Also delete from local DB if using sql.js
-                if (this.useSqlJs && this.db) {
-                    try {
-                        this.db.run('DELETE FROM messages WHERE session_id = ? OR session_id LIKE ?', [id, `${id}%`]);
-                        this.db.run('DELETE FROM sessions WHERE id = ? OR id LIKE ?', [id, `${id}%`]);
-                    } catch (e) {
-                        console.log('Local DB delete failed:', e);
-                    }
-                }
-                this.closeModal();
-                await this.loadSessions(true);
-                alert('Session deleted successfully');
-            } else {
-                throw new Error(data.error || 'Delete failed');
-            }
-        } catch (error) {
-            alert(`Failed to delete session: ${error.message}`);
         }
     }
     closeModal() {

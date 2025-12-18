@@ -159,7 +159,15 @@ class FTSBackend:
             rows = cursor.fetchall()
         except sqlite3.OperationalError:
             # Invalid FTS query syntax, try simple search
+            conn.close()
             return self._simple_search(query, limit, type, namespace_id)
+        except sqlite3.DatabaseError as e:
+            # FTS index out of sync - rebuild and retry
+            conn.close()
+            if "missing row" in str(e):
+                self._rebuild_fts_index()
+                return self._simple_search(query, limit, type, namespace_id)
+            raise
         finally:
             conn.close()
 
@@ -213,6 +221,50 @@ class FTSBackend:
                 return " OR ".join(f"{w}*" for w in words)
 
         return query
+
+    def _rebuild_fts_index(self) -> None:
+        """Rebuild FTS index to fix out-of-sync issues."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.warning("Rebuilding FTS index due to sync issue...")
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            # Drop and recreate FTS table
+            cursor.execute("DROP TABLE IF EXISTS memories_fts")
+            cursor.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                    id,
+                    content,
+                    summary,
+                    tags,
+                    type,
+                    namespace_id,
+                    content='memories',
+                    content_rowid='rowid'
+                )
+            """
+            )
+
+            # Repopulate from memories table
+            cursor.execute(
+                """
+                INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id)
+                SELECT rowid, id, content, summary, tags, type, namespace_id FROM memories
+            """
+            )
+
+            conn.commit()
+            logger.info("FTS index rebuilt successfully")
+        except Exception as e:
+            logger.error(f"Failed to rebuild FTS index: {e}")
+            conn.rollback()
+        finally:
+            conn.close()
 
     def _simple_search(
         self,

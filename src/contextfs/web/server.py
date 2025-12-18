@@ -604,13 +604,49 @@ def create_app(
 
     @app.get("/api/namespaces", response_model=APIResponse)
     async def get_namespaces():
-        """Get list of namespaces."""
+        """Get list of namespaces with human-readable display names."""
         ctx = get_ctx()
 
         try:
             memories = await asyncio.to_thread(ctx.list_recent, limit=10000)
-            namespaces = list({m.namespace_id for m in memories})
-            return APIResponse(success=True, data=namespaces)
+
+            # Build namespace info - collect all source_repos for each namespace
+            namespace_repos: dict[str, set[str]] = {}
+            for m in memories:
+                ns = m.namespace_id
+                if ns not in namespace_repos:
+                    namespace_repos[ns] = set()
+                if m.source_repo:
+                    namespace_repos[ns].add(m.source_repo)
+
+            # Build final namespace info with best display name
+            namespace_info = []
+            for ns, repos in namespace_repos.items():
+                # Filter out None-like values and get repo names
+                valid_repos = [r for r in repos if r and r != "None"]
+
+                if valid_repos:
+                    # Use the first valid repo name
+                    source_repo = valid_repos[0]
+                    repo_name = source_repo.rstrip("/").split("/")[-1]
+                    display_name = repo_name if repo_name else source_repo
+                elif ns == "global":
+                    display_name = "global"
+                    source_repo = None
+                else:
+                    # No repo info - use namespace ID
+                    display_name = ns
+                    source_repo = None
+
+                namespace_info.append(
+                    {
+                        "id": ns,
+                        "display_name": display_name,
+                        "source_repo": source_repo,
+                    }
+                )
+
+            return APIResponse(success=True, data=namespace_info)
 
         except Exception as e:
             logger.exception("Namespaces error")
