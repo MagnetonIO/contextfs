@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# ContextFS Release Script
+# ContextFS Release Script (Non-Interactive)
 # Usage: ./scripts/release.sh <version>
 # Example: ./scripts/release.sh 0.1.6
 
@@ -48,13 +48,6 @@ echo ""
 echo "============================================"
 echo ""
 
-read -p "Continue with release? [y/N] " -n 1 -r
-echo ""
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Release cancelled."
-    exit 0
-fi
-
 # Update pyproject.toml
 sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
 echo "✓ Updated pyproject.toml"
@@ -73,24 +66,14 @@ git tag "$TAG"
 echo "✓ Created tag $TAG"
 
 # Push to remote
-echo ""
-read -p "Push to remote? [y/N] " -n 1 -r
-echo ""
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    git push origin main
-    git push origin "$TAG"
-    echo "✓ Pushed to remote"
+git push origin main
+git push origin "$TAG"
+echo "✓ Pushed to remote"
 
-    echo ""
-    echo "To publish to PyPI:"
-    echo "  python -m build"
-    echo "  twine upload dist/*"
-else
-    echo ""
-    echo "Skipped push. To push manually:"
-    echo "  git push origin main"
-    echo "  git push origin $TAG"
-fi
+echo ""
+echo "To publish to PyPI:"
+echo "  python -m build"
+echo "  twine upload dist/*"
 
 echo ""
 echo "Done! Version $VERSION is ready."

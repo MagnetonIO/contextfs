@@ -358,8 +358,3 @@ Is the graph backend available?
 | Split        | ✅  | ✅     | ✅         |
 | Graph Status | ✅  | ✅     | ✅         |
 
-## See Also
-
-- [Architecture](./architecture.md)
-- [Backend Configuration](./backends.md)
-- [MCP Server](./mcp-server.md)
