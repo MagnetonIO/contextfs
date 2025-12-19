@@ -1742,9 +1742,9 @@ class ContextFS:
         on_progress: Callable[[str, int, int], None] | None = None,
     ) -> dict:
         """
-        Reindex all repositories that have memories in the database.
+        Reindex all repositories that have been previously indexed.
 
-        Finds all unique source_repo values and re-indexes each repository.
+        Uses stored repo paths from index_status table to reindex.
         Useful for rebuilding indexes after ChromaDB corruption or upgrades.
 
         Args:
@@ -1755,7 +1755,40 @@ class ContextFS:
         Returns:
             Statistics dict with repos processed, files indexed, etc.
         """
-        repos = self.list_repos()
+        # Get repo paths from index_status table
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        # Check if index_status table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='index_status'")
+        if not cursor.fetchone():
+            conn.close()
+            return {
+                "success": True,
+                "repos_found": 0,
+                "repos_indexed": 0,
+                "repos_failed": 0,
+                "total_files": 0,
+                "total_memories": 0,
+                "errors": [],
+            }
+
+        cursor.execute("""
+            SELECT namespace_id, repo_path
+            FROM index_status
+            WHERE repo_path IS NOT NULL AND repo_path != ''
+        """)
+
+        repos = []
+        for row in cursor.fetchall():
+            repos.append(
+                {
+                    "namespace_id": row[0],
+                    "repo_path": row[1],
+                }
+            )
+
+        conn.close()
 
         if not repos:
             return {
@@ -1768,16 +1801,6 @@ class ContextFS:
                 "errors": [],
             }
 
-        # Common paths to search for repos
-        search_paths = [
-            Path.home() / "Documents" / "Development",
-            Path.home() / "Development",
-            Path.home() / "projects",
-            Path.home() / "code",
-            Path.home(),
-            Path.cwd(),
-        ]
-
         successful = 0
         failed = 0
         total_files = 0
@@ -1785,21 +1808,20 @@ class ContextFS:
         errors = []
 
         for i, repo_info in enumerate(repos):
-            repo_name = repo_info.get("source_repo", "unknown")
+            repo_path = Path(repo_info["repo_path"])
+            repo_name = repo_path.name
 
             if on_progress:
                 on_progress(repo_name, i + 1, len(repos))
 
-            # Try to find the repo path
-            repo_path = None
-            for base_path in search_paths:
-                candidate = base_path / repo_name
-                if candidate.exists() and (candidate / ".git").exists():
-                    repo_path = candidate
-                    break
+            # Verify path exists and is a git repo
+            if not repo_path.exists():
+                errors.append(f"{repo_name}: Path no longer exists: {repo_path}")
+                failed += 1
+                continue
 
-            if not repo_path:
-                errors.append(f"{repo_name}: Could not find repo path")
+            if not (repo_path / ".git").exists():
+                errors.append(f"{repo_name}: Not a git repository: {repo_path}")
                 failed += 1
                 continue
 
