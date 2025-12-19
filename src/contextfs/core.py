@@ -1735,6 +1735,119 @@ class ContextFS:
         """
         return self.storage.rebuild_chromadb_from_sqlite(on_progress=on_progress)
 
+    def reindex_all_repos(
+        self,
+        incremental: bool = True,
+        mode: str = "all",
+        on_progress: Callable[[str, int, int], None] | None = None,
+    ) -> dict:
+        """
+        Reindex all repositories that have been previously indexed.
+
+        Uses stored repo paths from index_status table to reindex.
+        Useful for rebuilding indexes after ChromaDB corruption or upgrades.
+
+        Args:
+            incremental: Only index new/changed files (default: True)
+            mode: "all", "files_only", or "commits_only"
+            on_progress: Callback (repo_name, current_repo, total_repos)
+
+        Returns:
+            Statistics dict with repos processed, files indexed, etc.
+        """
+        # Get repo paths from index_status table
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        # Check if index_status table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='index_status'")
+        if not cursor.fetchone():
+            conn.close()
+            return {
+                "success": True,
+                "repos_found": 0,
+                "repos_indexed": 0,
+                "repos_failed": 0,
+                "total_files": 0,
+                "total_memories": 0,
+                "errors": [],
+            }
+
+        cursor.execute("""
+            SELECT namespace_id, repo_path
+            FROM index_status
+            WHERE repo_path IS NOT NULL AND repo_path != ''
+        """)
+
+        repos = []
+        for row in cursor.fetchall():
+            repos.append(
+                {
+                    "namespace_id": row[0],
+                    "repo_path": row[1],
+                }
+            )
+
+        conn.close()
+
+        if not repos:
+            return {
+                "success": True,
+                "repos_found": 0,
+                "repos_indexed": 0,
+                "repos_failed": 0,
+                "total_files": 0,
+                "total_memories": 0,
+                "errors": [],
+            }
+
+        successful = 0
+        failed = 0
+        total_files = 0
+        total_memories = 0
+        errors = []
+
+        for i, repo_info in enumerate(repos):
+            repo_path = Path(repo_info["repo_path"])
+            repo_name = repo_path.name
+
+            if on_progress:
+                on_progress(repo_name, i + 1, len(repos))
+
+            # Verify path exists and is a git repo
+            if not repo_path.exists():
+                errors.append(f"{repo_name}: Path no longer exists: {repo_path}")
+                failed += 1
+                continue
+
+            if not (repo_path / ".git").exists():
+                errors.append(f"{repo_name}: Not a git repository: {repo_path}")
+                failed += 1
+                continue
+
+            try:
+                result = self.index_repository(
+                    repo_path=repo_path,
+                    incremental=incremental,
+                    mode=mode,
+                )
+                total_files += result.get("files_indexed", 0)
+                total_memories += result.get("memories_created", 0)
+                successful += 1
+            except Exception as e:
+                errors.append(f"{repo_name}: {e!s}")
+                failed += 1
+
+        return {
+            "success": failed == 0,
+            "repos_found": len(repos),
+            "repos_indexed": successful,
+            "repos_failed": failed,
+            "total_files": total_files,
+            "total_memories": total_memories,
+            "errors": errors,
+        }
+
     def close(self) -> None:
         """Clean shutdown."""
         if self._current_session:

@@ -1,0 +1,39 @@
+#!/bin/bash
+# ContextFS Post-Merge Hook
+# Incrementally indexes new/changed files after git pull/merge
+#
+# Install: cp hooks/post-merge .git/hooks/ && chmod +x .git/hooks/post-merge
+# Or run: contextfs install-hooks
+
+# Exit on error
+set -e
+
+# Check if contextfs is available
+if ! command -v contextfs &> /dev/null; then
+    # Try common locations
+    if [ -f "$HOME/.local/bin/contextfs" ]; then
+        CONTEXTFS="$HOME/.local/bin/contextfs"
+    elif [ -f "$HOME/.pyenv/shims/contextfs" ]; then
+        CONTEXTFS="$HOME/.pyenv/shims/contextfs"
+    else
+        # Silently exit if contextfs not found
+        exit 0
+    fi
+else
+    CONTEXTFS="contextfs"
+fi
+
+# Get the repo root
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$REPO_ROOT" ]; then
+    exit 0
+fi
+
+# Run incremental index in background to not block merge
+# Index both files and new commits from the pull
+(
+    cd "$REPO_ROOT"
+    $CONTEXTFS index --incremental --quiet 2>/dev/null &
+) &
+
+exit 0

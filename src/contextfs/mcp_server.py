@@ -994,6 +994,43 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="contextfs_rebuild_chroma",
+            description="Rebuild ChromaDB search index from SQLite data. Fast recovery after corruption without re-scanning files.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="contextfs_reindex",
+            description="Reindex repository/repositories. Use 'all_repos: true' to reindex all repos in database, or provide 'repo_path' for a single repo.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "all_repos": {
+                        "type": "boolean",
+                        "description": "Reindex all repositories in the database",
+                        "default": False,
+                    },
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to specific repository to reindex (ignored if all_repos is true)",
+                    },
+                    "incremental": {
+                        "type": "boolean",
+                        "description": "Only index new/changed files (default: true)",
+                        "default": True,
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["all", "files_only", "commits_only"],
+                        "description": "Index mode: 'all' (files+commits), 'files_only', or 'commits_only'",
+                        "default": "all",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -2112,6 +2149,69 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     TextContent(
                         type="text",
                         text=f"Index not found for: {repo_path or namespace_id}",
+                    )
+                ]
+
+        elif name == "contextfs_rebuild_chroma":
+            result = ctx.rebuild_chromadb()
+
+            if result.get("success"):
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"ChromaDB rebuilt successfully!\nMemories rebuilt: {result.get('memories_rebuilt', 0)}",
+                    )
+                ]
+            else:
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Failed to rebuild ChromaDB: {result.get('error', 'Unknown error')}",
+                    )
+                ]
+
+        elif name == "contextfs_reindex":
+            all_repos = arguments.get("all_repos", False)
+            repo_path = arguments.get("repo_path")
+            incremental = arguments.get("incremental", True)
+            mode = arguments.get("mode", "all")
+
+            if all_repos:
+                # Reindex all repos in database
+                result = ctx.reindex_all_repos(
+                    incremental=incremental,
+                    mode=mode,
+                )
+
+                output = [
+                    f"Repos found: {result['repos_found']}",
+                    f"Repos indexed: {result['repos_indexed']}",
+                    f"Repos failed: {result['repos_failed']}",
+                    f"Total files: {result['total_files']}",
+                    f"Total memories: {result['total_memories']}",
+                ]
+
+                if result["errors"]:
+                    output.append("\nErrors:")
+                    for err in result["errors"]:
+                        output.append(f"  - {err}")
+
+                return [TextContent(type="text", text="\n".join(output))]
+            else:
+                # Reindex single repo
+                from pathlib import Path
+
+                path = Path(repo_path) if repo_path else None
+                result = ctx.index_repository(
+                    repo_path=path,
+                    incremental=incremental,
+                    mode=mode,
+                )
+
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Repository reindexed!\nFiles indexed: {result.get('files_indexed', 0)}\nMemories created: {result.get('memories_created', 0)}",
                     )
                 ]
 

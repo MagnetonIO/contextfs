@@ -269,3 +269,69 @@ class TestMCPServerTools:
         finally:
             os.chdir(original_cwd)
             mcp_module._ctx = None
+
+    @pytest.mark.asyncio
+    async def test_list_tools_includes_rebuild_and_reindex(self):
+        """Test that list_tools includes rebuild and reindex tools."""
+        from contextfs.mcp_server import list_tools
+
+        tools = await list_tools()
+        tool_names = [t.name for t in tools]
+
+        assert "contextfs_rebuild_chroma" in tool_names
+        assert "contextfs_reindex" in tool_names
+
+
+class TestReindexAllRepos:
+    """Tests for reindex_all_repos core method."""
+
+    def test_reindex_all_repos_empty(self, temp_dir: Path):
+        """Test reindex_all_repos with no repos in database."""
+        from contextfs.core import ContextFS
+
+        data_dir = temp_dir / "contextfs_data"
+        ctx = ContextFS(data_dir=data_dir, auto_index=False)
+
+        result = ctx.reindex_all_repos()
+
+        assert result["success"] is True
+        assert result["repos_found"] == 0
+        assert result["repos_indexed"] == 0
+
+        ctx.close()
+
+    def test_reindex_all_repos_with_repo(self, temp_dir: Path, sample_python_code: str):
+        """Test reindex_all_repos with an existing indexed repo."""
+        import subprocess
+
+        from contextfs.core import ContextFS
+
+        # Create and index a repo first
+        repo_dir = temp_dir / "test-repo"
+        repo_dir.mkdir()
+
+        subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"], cwd=repo_dir, capture_output=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=repo_dir, capture_output=True
+        )
+        (repo_dir / "app.py").write_text(sample_python_code)
+        subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo_dir, capture_output=True)
+
+        data_dir = temp_dir / "contextfs_data"
+        ctx = ContextFS(data_dir=data_dir, auto_index=False)
+
+        # Index the repo first
+        ctx.index_repository(repo_path=repo_dir)
+
+        # Now try to reindex all - but it won't find the repo since temp path
+        # isn't in the common search paths
+        result = ctx.reindex_all_repos()
+
+        # Will report the repo but fail to find path (since temp dir not in common paths)
+        assert result["repos_found"] >= 1
+
+        ctx.close()

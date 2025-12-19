@@ -1005,11 +1005,10 @@ def reindex_all(
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
 ):
-    """Reindex all repositories that have memories in SQLite.
+    """Reindex all previously indexed repositories.
 
-    Finds all unique source_repo values in your memories and re-indexes
-    each repository. Useful for rebuilding indexes after ChromaDB corruption
-    or when upgrading contextfs.
+    Uses stored repo paths from index_status table to reindex.
+    Useful for rebuilding indexes after ChromaDB corruption or upgrades.
 
     Examples:
         contextfs reindex-all                    # Incremental reindex all repos
@@ -1019,74 +1018,142 @@ def reindex_all(
 
     ctx = get_ctx()
 
-    # Get all repos from SQLite
-    repos = ctx.list_repos()
+    # Progress callback for CLI output
+    current_repo = {"name": "", "done": False}
 
-    if not repos:
-        console.print("[yellow]No repositories found in database[/yellow]")
+    def on_progress(repo_name: str, current: int, total: int):
+        if not quiet:
+            if current_repo["name"] and not current_repo["done"]:
+                # Previous repo finished without error
+                pass
+            current_repo["name"] = repo_name
+            current_repo["done"] = False
+            console.print(f"  [cyan]Indexing {repo_name}...[/cyan]", end=" ")
+
+    result = ctx.reindex_all_repos(
+        incremental=incremental,
+        mode=mode,
+        on_progress=on_progress if not quiet else None,
+    )
+
+    if result["repos_found"] == 0:
+        console.print("[yellow]No indexed repositories found in database[/yellow]")
         return
 
     if not quiet:
-        console.print(f"\n[bold]Found {len(repos)} repositories to reindex[/bold]\n")
+        # Print final status for last repo
+        if current_repo["name"]:
+            console.print("[green]✓[/green]")
 
-    successful = 0
-    failed = 0
-    total_files = 0
-    total_memories = 0
+        if result["errors"]:
+            console.print("\n[yellow]Errors:[/yellow]")
+            for err in result["errors"]:
+                console.print(f"  [yellow]⚠ {err}[/yellow]")
 
-    for repo_info in repos:
-        repo_name = repo_info.get("name", "unknown")
+        console.print("\n[green]✅ Reindexing complete![/green]")
+        console.print(f"  Successful: {result['repos_indexed']}")
+        console.print(f"  Failed: {result['repos_failed']}")
+        console.print(f"  Total files: {result['total_files']}")
+        console.print(f"  Total memories: {result['total_memories']}")
 
-        # Try to find the repo path from common locations
-        possible_paths = [
-            Path.home() / "Documents" / "Development" / repo_name,
-            Path.home() / "Development" / repo_name,
-            Path.home() / "projects" / repo_name,
-            Path.home() / "code" / repo_name,
-            Path.home() / repo_name,
-            Path.cwd() / repo_name,
-        ]
 
-        repo_path = None
-        for p in possible_paths:
-            if p.exists() and (p / ".git").exists():
-                repo_path = p
-                break
+@app.command("install-hooks")
+def install_hooks(
+    repo_path: str = typer.Argument(None, help="Repository path (default: current directory)"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing hooks"),
+):
+    """Install git hooks for automatic indexing.
 
-        if not repo_path:
-            if not quiet:
-                console.print(f"  [yellow]⚠ {repo_name}: Could not find repo path[/yellow]")
-            failed += 1
+    Installs post-commit and post-merge hooks that automatically
+    run incremental indexing after commits and pulls.
+
+    Examples:
+        contextfs install-hooks              # Install to current repo
+        contextfs install-hooks /path/to/repo
+        contextfs install-hooks --force      # Overwrite existing hooks
+    """
+    import shutil
+
+    # Determine target repo
+    target = Path(repo_path).resolve() if repo_path else Path.cwd()
+
+    # Verify it's a git repo
+    git_dir = target / ".git"
+    if not git_dir.exists():
+        console.print(f"[red]Error: {target} is not a git repository[/red]")
+        raise typer.Exit(1)
+
+    hooks_dir = git_dir / "hooks"
+    hooks_dir.mkdir(exist_ok=True)
+
+    # Find source hooks (bundled with package)
+    import contextfs
+
+    pkg_dir = Path(contextfs.__file__).parent.parent.parent
+    source_hooks_dir = pkg_dir / "hooks"
+
+    # If not found in package, create hooks inline
+    hooks = {
+        "post-commit": """#!/bin/bash
+# ContextFS Post-Commit Hook - Auto-index on commit
+set -e
+if command -v contextfs &> /dev/null; then
+    CONTEXTFS="contextfs"
+elif [ -f "$HOME/.local/bin/contextfs" ]; then
+    CONTEXTFS="$HOME/.local/bin/contextfs"
+else
+    exit 0
+fi
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+(cd "$REPO_ROOT" && $CONTEXTFS index --incremental --mode files_only --quiet 2>/dev/null &) &
+exit 0
+""",
+        "post-merge": """#!/bin/bash
+# ContextFS Post-Merge Hook - Auto-index on pull/merge
+set -e
+if command -v contextfs &> /dev/null; then
+    CONTEXTFS="contextfs"
+elif [ -f "$HOME/.local/bin/contextfs" ]; then
+    CONTEXTFS="$HOME/.local/bin/contextfs"
+else
+    exit 0
+fi
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+(cd "$REPO_ROOT" && $CONTEXTFS index --incremental --quiet 2>/dev/null &) &
+exit 0
+""",
+    }
+
+    console.print(f"Installing ContextFS git hooks to: [cyan]{target}[/cyan]\n")
+
+    for hook_name, hook_content in hooks.items():
+        hook_path = hooks_dir / hook_name
+        source_path = source_hooks_dir / hook_name if source_hooks_dir.exists() else None
+
+        # Check if hook exists
+        if hook_path.exists() and not force:
+            console.print(f"  [yellow]{hook_name}:[/yellow] exists (use --force to overwrite)")
             continue
 
-        if not quiet:
-            console.print(f"  [cyan]Indexing {repo_name}...[/cyan]", end=" ")
+        # Backup existing hook
+        if hook_path.exists():
+            backup_path = hooks_dir / f"{hook_name}.bak"
+            shutil.copy(hook_path, backup_path)
+            console.print(f"  [dim]{hook_name}: backed up to {hook_name}.bak[/dim]")
 
-        try:
-            result = ctx.index_repository(
-                repo_path=repo_path,
-                incremental=incremental,
-                mode=mode,
-            )
-            files = result.get("files_indexed", 0)
-            memories = result.get("memories_created", 0)
-            total_files += files
-            total_memories += memories
-            successful += 1
+        # Write hook (prefer source file if available)
+        if source_path and source_path.exists():
+            shutil.copy(source_path, hook_path)
+        else:
+            hook_path.write_text(hook_content)
 
-            if not quiet:
-                console.print(f"[green]✓[/green] {files} files, {memories} memories")
-        except Exception as e:
-            failed += 1
-            if not quiet:
-                console.print(f"[red]✗ {e}[/red]")
+        # Make executable
+        hook_path.chmod(0o755)
+        console.print(f"  [green]{hook_name}:[/green] installed")
 
-    if not quiet:
-        console.print("\n[green]✅ Reindexing complete![/green]")
-        console.print(f"  Successful: {successful}")
-        console.print(f"  Failed: {failed}")
-        console.print(f"  Total files: {total_files}")
-        console.print(f"  Total memories: {total_memories}")
+    console.print("\n[green]Done![/green] ContextFS will auto-index on:")
+    console.print("  - git commit (indexes changed files)")
+    console.print("  - git pull/merge (indexes new files and commits)")
 
 
 @app.command("cleanup-indexes")
