@@ -8,6 +8,10 @@ Works with Claude Desktop, Claude Code, and any MCP client.
 import asyncio
 import os
 import signal
+
+# Disable tokenizers parallelism to avoid deadlocks when using threads
+# Must be set before any tokenizers are imported
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1336,6 +1340,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
             async def run_indexing():
                 """Run indexing in background."""
+                import os
+
+                # Disable tokenizers parallelism to avoid crashes in threaded context
+                os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
                 loop = asyncio.get_running_loop()
 
                 def on_progress(current: int, total: int, filename: str) -> None:
@@ -1368,8 +1377,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     )
                     _indexing_state.result = result
                     _indexing_state.running = False
+                except asyncio.CancelledError:
+                    _indexing_state.error = "Indexing cancelled"
+                    _indexing_state.running = False
                 except Exception as e:
-                    _indexing_state.error = str(e)
+                    import traceback
+
+                    _indexing_state.error = f"{str(e)}\n{traceback.format_exc()}"
                     _indexing_state.running = False
 
             # Start background task

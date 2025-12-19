@@ -13,6 +13,10 @@ import os
 from abc import ABC, abstractmethod
 from enum import Enum
 
+# Disable tokenizers parallelism to avoid deadlocks in multi-threaded contexts
+# Must be set before any tokenizers/transformers are imported
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 logger = logging.getLogger(__name__)
 
 

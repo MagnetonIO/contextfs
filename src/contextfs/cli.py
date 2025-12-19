@@ -476,6 +476,12 @@ def index(
     incremental: bool = typer.Option(
         True, "--incremental/--full", help="Only index new/changed files"
     ),
+    mode: str = typer.Option(
+        "all",
+        "--mode",
+        "-m",
+        help="Index mode: 'all' (files+commits), 'files_only', or 'commits_only'",
+    ),
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Quiet mode for hooks (minimal output)"
     ),
@@ -503,6 +509,8 @@ def index(
             cmd.append("--force")
         if not incremental:
             cmd.append("--full")
+        if mode != "all":
+            cmd.extend(["--mode", mode])
         if repo_path:
             cmd.append(str(repo_path))
 
@@ -532,6 +540,12 @@ def index(
         raise typer.Exit(1)
 
     ctx = get_ctx()
+
+    # Validate mode parameter
+    valid_modes = ["all", "files_only", "commits_only"]
+    if mode not in valid_modes:
+        console.print(f"[red]Invalid mode: {mode}. Must be one of: {', '.join(valid_modes)}[/red]")
+        raise typer.Exit(1)
 
     # Reset ChromaDB if requested (fixes corruption issues)
     if reset_chroma:
@@ -588,12 +602,14 @@ def index(
                 repo_path=repo_path,
                 on_progress=on_progress,
                 incremental=incremental,
+                mode=mode,
             )
     else:
         # Quiet mode - no progress output
         result = ctx.index_repository(
             repo_path=repo_path,
             incremental=incremental,
+            mode=mode,
         )
 
     # Display results
@@ -604,6 +620,7 @@ def index(
         table.add_column("Metric", style="cyan")
         table.add_column("Count", style="green", justify="right")
 
+        table.add_row("Mode", result.get("mode", mode))
         table.add_row("Files discovered", str(result.get("files_discovered", 0)))
         table.add_row("Files indexed", str(result.get("files_indexed", 0)))
         table.add_row("Commits indexed", str(result.get("commits_indexed", 0)))
@@ -958,6 +975,100 @@ def rebuild_chroma(
     else:
         console.print(f"[red]❌ Rebuild failed: {result.get('error', 'Unknown error')}[/red]")
         raise typer.Exit(1)
+
+
+@app.command("reindex-all")
+def reindex_all(
+    incremental: bool = typer.Option(
+        True, "--incremental/--full", help="Only index new/changed files"
+    ),
+    mode: str = typer.Option(
+        "all", "--mode", "-m", help="Index mode: 'all', 'files_only', or 'commits_only'"
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+):
+    """Reindex all repositories that have memories in SQLite.
+
+    Finds all unique source_repo values in your memories and re-indexes
+    each repository. Useful for rebuilding indexes after ChromaDB corruption
+    or when upgrading contextfs.
+
+    Examples:
+        contextfs reindex-all                    # Incremental reindex all repos
+        contextfs reindex-all --full             # Full reindex all repos
+        contextfs reindex-all --mode files_only  # Only reindex files
+    """
+
+    ctx = get_ctx()
+
+    # Get all repos from SQLite
+    repos = ctx.list_repos()
+
+    if not repos:
+        console.print("[yellow]No repositories found in database[/yellow]")
+        return
+
+    if not quiet:
+        console.print(f"\n[bold]Found {len(repos)} repositories to reindex[/bold]\n")
+
+    successful = 0
+    failed = 0
+    total_files = 0
+    total_memories = 0
+
+    for repo_info in repos:
+        repo_name = repo_info.get("name", "unknown")
+
+        # Try to find the repo path from common locations
+        possible_paths = [
+            Path.home() / "Documents" / "Development" / repo_name,
+            Path.home() / "Development" / repo_name,
+            Path.home() / "projects" / repo_name,
+            Path.home() / "code" / repo_name,
+            Path.home() / repo_name,
+            Path.cwd() / repo_name,
+        ]
+
+        repo_path = None
+        for p in possible_paths:
+            if p.exists() and (p / ".git").exists():
+                repo_path = p
+                break
+
+        if not repo_path:
+            if not quiet:
+                console.print(f"  [yellow]⚠ {repo_name}: Could not find repo path[/yellow]")
+            failed += 1
+            continue
+
+        if not quiet:
+            console.print(f"  [cyan]Indexing {repo_name}...[/cyan]", end=" ")
+
+        try:
+            result = ctx.index_repository(
+                repo_path=repo_path,
+                incremental=incremental,
+                mode=mode,
+            )
+            files = result.get("files_indexed", 0)
+            memories = result.get("memories_created", 0)
+            total_files += files
+            total_memories += memories
+            successful += 1
+
+            if not quiet:
+                console.print(f"[green]✓[/green] {files} files, {memories} memories")
+        except Exception as e:
+            failed += 1
+            if not quiet:
+                console.print(f"[red]✗ {e}[/red]")
+
+    if not quiet:
+        console.print("\n[green]✅ Reindexing complete![/green]")
+        console.print(f"  Successful: {successful}")
+        console.print(f"  Failed: {failed}")
+        console.print(f"  Total files: {total_files}")
+        console.print(f"  Total memories: {total_memories}")
 
 
 @app.command()
