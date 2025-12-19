@@ -8,6 +8,32 @@ Always follow GitFlow for changes:
 4. Create PR to merge into main
 5. Never commit directly to main
 
+## Testing Requirements
+**Each feature must have a test. Tests must pass locally before committing.**
+
+### Running Tests
+```bash
+# Run all tests
+pytest tests/
+
+# Run specific test file
+pytest tests/integration/test_autoindex.py -x -q
+
+# Run with coverage
+pytest tests/ --cov=contextfs
+```
+
+### Test Guidelines
+1. **Every new feature needs a test** - No exceptions
+2. **Run tests locally before committing** - Avoid CI failures
+3. **Tests must work without optional dependencies** - Use `auto` mode for embedding backend
+4. **Fix failing tests before pushing** - Don't break the build
+
+### Common CI Failures to Avoid
+- **FastEmbed not installed**: Use `embedding_backend: str = "auto"` (falls back to sentence_transformers)
+- **Missing test fixtures**: Ensure pytest fixtures are properly scoped
+- **Database state**: Tests should be isolated, use temp directories
+
 ## Validation Before Commit
 Before committing any changes:
 1. Run relevant tests: `pytest tests/` or specific test files

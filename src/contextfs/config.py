@@ -65,8 +65,9 @@ class Config(BaseSettings):
     # =================================================================
     # Embedding Backend Configuration
     # =================================================================
-    # Backend: "fastembed" (ONNX, faster), "sentence_transformers", or "auto"
-    embedding_backend: str = "fastembed"
+    # Backend: "auto" (fastembed if installed, else sentence_transformers),
+    #          "fastembed" (ONNX, faster), or "sentence_transformers"
+    embedding_backend: str = "auto"
     # GPU acceleration: None = auto-detect, True = force GPU, False = force CPU
     use_gpu: bool | None = None
     # Parallel workers for embedding (None = auto, 0 = all cores)
