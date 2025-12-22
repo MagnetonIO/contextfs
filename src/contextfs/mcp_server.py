@@ -527,10 +527,14 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="contextfs_index",
-            description="Start indexing the current repository's codebase in background. Use contextfs_index_status to check progress.",
+            description="Start indexing a repository's codebase in background. Defaults to current directory, or specify repo_path for any repository. Use contextfs_index_status to check progress.",
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to repository to index. Can be full path or repo name from list-indexes. Defaults to current directory.",
+                    },
                     "incremental": {
                         "type": "boolean",
                         "description": "Only index new/changed files (default: true)",
@@ -1317,13 +1321,42 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             incremental = arguments.get("incremental", True)
             force = arguments.get("force", False)
             mode = arguments.get("mode", "all")
+            repo_path_arg = arguments.get("repo_path")
 
-            # Get current working directory
-            cwd = Path.cwd()
-            repo_name = detect_current_repo()
+            # Resolve repo path
+            if repo_path_arg:
+                # Check if it's a full path
+                if repo_path_arg.startswith("/"):
+                    repo_path = Path(repo_path_arg)
+                else:
+                    # Try to find by repo name in indexed repos
+                    indexes = ctx.list_indexes()
+                    matching = [
+                        idx
+                        for idx in indexes
+                        if idx.repo_path and idx.repo_path.split("/")[-1] == repo_path_arg
+                    ]
+                    if matching:
+                        repo_path = Path(matching[0].repo_path)
+                    else:
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Repository '{repo_path_arg}' not found. Use full path or a name from list-indexes.",
+                            )
+                        ]
 
-            if not repo_name:
-                return [TextContent(type="text", text="Error: Not in a git repository")]
+                if not repo_path.exists():
+                    return [
+                        TextContent(type="text", text=f"Error: Path does not exist: {repo_path}")
+                    ]
+                repo_name = repo_path.name
+            else:
+                # Default to current working directory
+                repo_path = Path.cwd()
+                repo_name = detect_current_repo()
+                if not repo_name:
+                    return [TextContent(type="text", text="Error: Not in a git repository")]
 
             # Check if indexing is already running
             if _indexing_state.running:
@@ -1348,7 +1381,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     _indexing_state = IndexingState()
 
             # Check if already indexed (unless force or commits_only mode)
-            status = ctx.get_index_status(repo_path=cwd)
+            status = ctx.get_index_status(repo_path=repo_path)
             if status and status.indexed and not force and mode != "commits_only":
                 return [
                     TextContent(
@@ -1361,7 +1394,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
             # Clear index if forcing (but not for commits_only mode which is additive)
             if force and mode != "commits_only":
-                ctx.clear_index(repo_path=cwd)
+                ctx.clear_index(repo_path=repo_path)
 
             # Reset indexing state
             _indexing_state = IndexingState(
@@ -1419,7 +1452,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     # Run blocking indexing in thread pool
                     result = await asyncio.to_thread(
                         ctx.index_repository,
-                        repo_path=cwd,
+                        repo_path=repo_path,
                         incremental=incremental,
                         on_progress=on_progress,
                         mode=mode,
