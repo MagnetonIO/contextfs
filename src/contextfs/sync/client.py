@@ -19,6 +19,7 @@ import json
 import logging
 import platform
 import socket
+import sqlite3
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -95,10 +96,12 @@ class SyncClient:
         self._client = httpx.AsyncClient(timeout=timeout)
         self._path_resolver = PathResolver()
         self._device_tracker = DeviceTracker()
+        self._server_url = server_url
 
-        # Sync state
+        # Sync state (loaded from SQLite)
         self._last_sync: datetime | None = None
-        self._sync_state_path = self._get_sync_state_path()
+        self._last_push: datetime | None = None
+        self._last_pull: datetime | None = None
         self._load_sync_state()
 
     @property
@@ -129,31 +132,91 @@ class SyncClient:
         config_path.write_text(device_id)
         return device_id
 
-    def _get_sync_state_path(self) -> Path:
-        """Get path to sync state file."""
-        return Path.home() / ".contextfs" / "sync_state.json"
+    def _get_db_path(self) -> Path:
+        """Get path to SQLite database."""
+        return Path.home() / ".contextfs" / "context.db"
+
+    def _ensure_sync_state_table(self, conn: sqlite3.Connection) -> None:
+        """Ensure sync_state table exists."""
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sync_state (
+                id INTEGER PRIMARY KEY,
+                device_id TEXT NOT NULL UNIQUE,
+                server_url TEXT,
+                last_sync_at TIMESTAMP,
+                last_push_at TIMESTAMP,
+                last_pull_at TIMESTAMP,
+                device_tracker TEXT DEFAULT '{}',
+                registered_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
 
     def _load_sync_state(self) -> None:
-        """Load sync state from file."""
-        if self._sync_state_path.exists():
-            try:
-                with open(self._sync_state_path) as f:
-                    data = json.load(f)
-                if data.get("last_sync"):
-                    self._last_sync = datetime.fromisoformat(data["last_sync"])
-                self._device_tracker = DeviceTracker.from_dict(data.get("device_tracker"))
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning(f"Failed to load sync state: {e}")
+        """Load sync state from SQLite database."""
+        db_path = self._get_db_path()
+        if not db_path.exists():
+            return
+
+        try:
+            conn = sqlite3.connect(db_path)
+            self._ensure_sync_state_table(conn)
+
+            cursor = conn.execute(
+                "SELECT last_sync_at, last_push_at, last_pull_at, device_tracker "
+                "FROM sync_state WHERE device_id = ?",
+                (self.device_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                if row[0]:
+                    self._last_sync = datetime.fromisoformat(row[0])
+                if row[1]:
+                    self._last_push = datetime.fromisoformat(row[1])
+                if row[2]:
+                    self._last_pull = datetime.fromisoformat(row[2])
+                if row[3]:
+                    self._device_tracker = DeviceTracker.from_dict(json.loads(row[3]))
+            conn.close()
+        except (sqlite3.Error, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to load sync state: {e}")
 
     def _save_sync_state(self) -> None:
-        """Save sync state to file."""
-        self._sync_state_path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "last_sync": self._last_sync.isoformat() if self._last_sync else None,
-            "device_tracker": self._device_tracker.to_dict(),
-        }
-        with open(self._sync_state_path, "w") as f:
-            json.dump(data, f, indent=2)
+        """Save sync state to SQLite database."""
+        db_path = self._get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            conn = sqlite3.connect(db_path)
+            self._ensure_sync_state_table(conn)
+
+            conn.execute(
+                """
+                INSERT INTO sync_state (device_id, server_url, last_sync_at, last_push_at, last_pull_at, device_tracker, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    server_url = excluded.server_url,
+                    last_sync_at = excluded.last_sync_at,
+                    last_push_at = excluded.last_push_at,
+                    last_pull_at = excluded.last_pull_at,
+                    device_tracker = excluded.device_tracker,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    self.device_id,
+                    self._server_url,
+                    self._last_sync.isoformat() if self._last_sync else None,
+                    self._last_push.isoformat() if self._last_push else None,
+                    self._last_pull.isoformat() if self._last_pull else None,
+                    json.dumps(self._device_tracker.to_dict()),
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except sqlite3.Error as e:
+            logger.warning(f"Failed to save sync state: {e}")
 
     async def register_device(
         self,
