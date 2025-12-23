@@ -49,3 +49,10 @@ Always search contextfs memories FIRST before searching code directly:
 ## Database Changes
 - Core tables (memories, sessions): Use Alembic migrations in `src/contextfs/migrations/`
 - Index tables (index_status, indexed_files, indexed_commits): Managed by AutoIndexer._init_db() directly, no migration needed
+
+## Documentation in Memory
+**When adding new features, always save to contextfs memory:**
+1. After implementing a new CLI command, MCP tool, or API endpoint, save to memory with type `api`
+2. Use `contextfs_evolve` on memory ID `f9b4bb25` (API reference) to update the complete endpoint list
+3. Include: endpoint/command name, parameters, and brief description
+4. This keeps the API reference memory up-to-date for future sessions
