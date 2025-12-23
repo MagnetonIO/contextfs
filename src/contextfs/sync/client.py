@@ -418,7 +418,7 @@ class SyncClient:
                 metadata["_vector_clock"] = synced.vector_clock
                 metadata["_content_hash"] = synced.content_hash
 
-                # Save using the save() method parameters
+                # Save using the save() method parameters, preserving original timestamps
                 self.ctx.save(
                     content=synced.content,
                     type=MemoryType(synced.type) if synced.type else MemoryType.FACT,
@@ -427,6 +427,8 @@ class SyncClient:
                     namespace_id=synced.namespace_id,
                     source_repo=paths.get("source_repo") or synced.source_repo,
                     metadata=metadata,
+                    created_at=synced.created_at,
+                    updated_at=synced.updated_at,
                 )
 
     # =========================================================================

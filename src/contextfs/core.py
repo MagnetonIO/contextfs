@@ -514,6 +514,8 @@ class ContextFS:
         source_repo: str | None = None,
         project: str | None = None,
         metadata: dict | None = None,
+        created_at: datetime | None = None,
+        updated_at: datetime | None = None,
     ) -> Memory:
         """
         Save content to memory.
@@ -528,6 +530,8 @@ class ContextFS:
             source_repo: Repository name/path
             project: Project name for grouping memories across repos
             metadata: Additional metadata
+            created_at: Original creation timestamp (for sync, defaults to now)
+            updated_at: Original update timestamp (for sync, defaults to now)
 
         Returns:
             Saved Memory object
@@ -554,6 +558,8 @@ class ContextFS:
             project=project,
             session_id=self._current_session.id if self._current_session else None,
             metadata=metadata or {},
+            created_at=created_at or datetime.now(),
+            updated_at=updated_at or datetime.now(),
         )
 
         # Save to SQLite
