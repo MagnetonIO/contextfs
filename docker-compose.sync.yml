@@ -1,0 +1,118 @@
+# ContextFS Sync Service - Local Development
+# Usage: docker-compose -f docker-compose.sync.yml up -d
+#
+# This creates a separate sync infrastructure that can work alongside
+# the main contextfs services or independently.
+
+services:
+  # ==========================================================================
+  # PostgreSQL for Sync Service
+  # Uses port 5433 to avoid conflict with main postgres on 5432
+  # ==========================================================================
+  sync-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: contextfs-sync-postgres
+    environment:
+      POSTGRES_USER: contextfs
+      POSTGRES_PASSWORD: contextfs
+      POSTGRES_DB: contextfs_sync
+    ports:
+      - "5433:5432"
+    volumes:
+      - sync_postgres_data:/var/lib/postgresql/data
+      - ./migrations/sync-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contextfs -d contextfs_sync"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ==========================================================================
+  # Sync API Service
+  # FastAPI server handling push/pull sync operations
+  # ==========================================================================
+  sync-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sync
+    container_name: contextfs-sync-api
+    environment:
+      CONTEXTFS_POSTGRES_URL: postgresql://contextfs:contextfs@sync-postgres:5432/contextfs_sync
+      CONTEXTFS_SYNC_PORT: "8766"
+      CONTEXTFS_SYNC_HOST: "0.0.0.0"
+      CORS_ORIGINS: "*"
+    ports:
+      - "8766:8766"
+    volumes:
+      # Mount source for development (hot reload)
+      - ./src/contextfs:/app/src/contextfs:ro
+      - ./service:/app/service:ro
+    depends_on:
+      sync-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ==========================================================================
+  # pgAdmin for Sync Database (optional)
+  # ==========================================================================
+  sync-pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: contextfs-sync-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@contextfs.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5051:80"
+    volumes:
+      - sync_pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - sync-postgres
+    restart: unless-stopped
+    profiles:
+      - with-admin
+
+volumes:
+  sync_postgres_data:
+  sync_pgadmin_data:
+
+networks:
+  default:
+    name: contextfs-sync-network
+
+# ==========================================================================
+# Usage Examples
+# ==========================================================================
+# Start sync services:
+#   docker-compose -f docker-compose.sync.yml up -d
+#
+# Start with pgAdmin:
+#   docker-compose -f docker-compose.sync.yml --profile with-admin up -d
+#
+# View logs:
+#   docker-compose -f docker-compose.sync.yml logs -f sync-api
+#
+# Stop all:
+#   docker-compose -f docker-compose.sync.yml down
+#
+# Reset database:
+#   docker-compose -f docker-compose.sync.yml down -v
+#
+# ==========================================================================
+# Connecting from ContextFS Client
+# ==========================================================================
+# from contextfs.sync import SyncClient
+#
+# client = SyncClient("http://localhost:8766")
+# await client.register_device("My Laptop", "darwin")
+# await client.sync_all()
+#
+# ==========================================================================
+# CLI Usage
+# ==========================================================================
+# contextfs sync register --server http://localhost:8766 --name "My Device"
+# contextfs sync push
+# contextfs sync pull
+# contextfs sync status
+# ==========================================================================

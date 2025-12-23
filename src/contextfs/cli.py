@@ -1874,5 +1874,23 @@ def graph_status():
         console.print("  3. Restart contextfs")
 
 
+# Register sync subcommand group (Click-based)
+# We need to add the Click group directly to Typer's underlying Click app
+def _register_sync_commands():
+    try:
+        from contextfs.sync.cli import get_sync_commands
+
+        sync_click_group = get_sync_commands()
+
+        # Get the underlying Click app and add the sync group
+        click_app = typer.main.get_command(app)
+        click_app.add_command(sync_click_group, name="sync")
+    except ImportError:
+        pass  # Sync module not available
+
+
+_register_sync_commands()
+
+
 if __name__ == "__main__":
     app()
