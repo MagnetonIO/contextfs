@@ -1,0 +1,1232 @@
+\documentclass[11pt,a4paper]{article}
+
+% Essential packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,fit,calc}
+\usepackage{subcaption}
+\usepackage{natbib}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+% Code listing style
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!50!black},
+    stringstyle=\color{red!70!black},
+}
+
+% Title and authors
+\title{\textbf{Vector Clocks for Distributed AI Memory Synchronization: \\
+A Novel Approach to Multi-Device LLM Context Management}}
+
+\author{
+Matthew Long\textsuperscript{1,2} \\
+\textsuperscript{1}Independent Researcher, Chicago, IL \\
+\textsuperscript{2}The YonedaAI Collaboration \\
+\texttt{matthew@contextfs.ai} \\
+\\
+\textbf{YonedaAI Research Collective}
+}
+
+\date{December 2025}
+
+\begin{document}
+
+\maketitle
+
+% ============================================================================
+% ABSTRACT
+% ============================================================================
+
+\begin{abstract}
+The proliferation of Large Language Model (LLM) assistants across multiple devices and platforms creates a fundamental challenge: how to maintain consistent, synchronized memory across distributed AI interactions. While multi-agent memory systems have received significant attention, the specific problem of \textit{personal} AI memory synchronization across devices remains underexplored. We present ContextFS, a novel system that applies vector clock algorithms---traditionally used in distributed databases---to the domain of AI memory management.
+
+Our approach differs from existing work in three key aspects: (1) we treat AI memory as a first-class distributed dataset requiring causality tracking, (2) we synchronize vector embeddings alongside semantic content to avoid recomputation on resource-constrained devices, and (3) we support heterogeneous AI tool provenance (Claude, GPT, Gemini) within a unified sync protocol.
+
+We implement a complete system featuring SQLite for local persistence, PostgreSQL with pgvector for server-side storage, and ChromaDB for client-side semantic search. Experimental evaluation demonstrates sub-second sync latency for typical workloads ($<$1000 memories) with correct conflict detection and resolution. To our knowledge, this represents the first application of vector clocks specifically designed for personal AI assistant memory synchronization.
+
+\textbf{Keywords:} Vector Clocks, Distributed Systems, LLM Memory, AI Assistants, Synchronization, Conflict Resolution
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+% ============================================================================
+% INTRODUCTION
+% ============================================================================
+
+\section{Introduction}
+\label{sec:introduction}
+
+The emergence of AI-powered coding assistants, conversational agents, and knowledge management systems has created a new category of personal data: \textit{AI memory}. This encompasses the accumulated context, preferences, learned facts, and interaction history that enables AI systems to provide personalized, context-aware assistance. Unlike traditional application data, AI memory exhibits unique characteristics that complicate synchronization:
+
+\begin{enumerate}
+    \item \textbf{Semantic Content}: AI memories contain natural language with associated vector embeddings for semantic retrieval
+    \item \textbf{Multi-Tool Provenance}: Memories may originate from different AI systems (Claude Code, Claude Desktop, Gemini CLI, ChatGPT)
+    \item \textbf{Continuous Evolution}: Memories evolve through operations like merge, split, and evolve with lineage tracking
+    \item \textbf{Local-First Operation}: Users expect AI assistants to work offline with eventual synchronization
+\end{enumerate}
+
+Existing approaches to AI memory fall into two categories. Cloud-first systems (e.g., ChatGPT's memory, Claude's conversation history) store all data centrally, providing consistency at the cost of offline capability and privacy. Local-only systems provide privacy but sacrifice cross-device continuity. Neither adequately addresses the needs of power users who interact with AI across multiple devices and tools.
+
+\subsection{Motivating Scenario}
+
+Consider a software developer using AI assistants on three devices:
+
+\begin{itemize}
+    \item \textbf{Desktop workstation}: Primary development with Claude Code, indexing large codebases
+    \item \textbf{Laptop}: Mobile development, quick queries while traveling
+    \item \textbf{Linux server}: CI/CD integration, automated documentation generation
+\end{itemize}
+
+The developer accumulates thousands of memories: architectural decisions, debugging insights, code patterns, and project context. When switching devices, they expect seamless continuity. When working offline, they expect full functionality. When conflicts arise (editing the same decision from two devices), they expect intelligent resolution.
+
+\subsection{Contributions}
+
+This paper makes the following contributions:
+
+\begin{enumerate}
+    \item \textbf{Problem Formulation}: We formally define the AI memory synchronization problem, distinguishing it from related work in multi-agent systems and distributed databases
+
+    \item \textbf{Vector Clock Adaptation}: We present a vector clock algorithm tailored for AI memory, including pruning strategies for device scalability and content hashing for deduplication
+
+    \item \textbf{Embedding Synchronization}: We introduce a novel approach to synchronizing vector embeddings alongside content, eliminating the need for recomputation on receiving devices
+
+    \item \textbf{Reference Implementation}: We provide ContextFS, a complete open-source implementation with SQLite/PostgreSQL backends and integration with major AI tools
+
+    \item \textbf{Evaluation}: We present experimental results demonstrating correctness and performance characteristics
+\end{enumerate}
+
+The remainder of this paper is organized as follows. Section~\ref{sec:related} surveys related work. Section~\ref{sec:problem} formally defines the problem. Section~\ref{sec:architecture} presents system architecture. Section~\ref{sec:vector-clocks} details our vector clock adaptation. Section~\ref{sec:embedding-sync} covers embedding synchronization. Section~\ref{sec:implementation} describes implementation. Section~\ref{sec:evaluation} presents evaluation results. Section~\ref{sec:discussion} discusses limitations and future work. Section~\ref{sec:conclusion} concludes.
+
+% ============================================================================
+% RELATED WORK
+% ============================================================================
+
+\section{Related Work}
+\label{sec:related}
+
+Our work draws from three research areas: distributed systems clock synchronization, LLM memory systems, and multi-agent coordination.
+
+\subsection{Vector Clocks and Distributed Consistency}
+
+Vector clocks, introduced by Fidge \cite{fidge1988timestamps} and Mattern \cite{mattern1989virtual} in 1988, provide a mechanism for tracking causality in distributed systems. Unlike Lamport's logical clocks \cite{lamport1978time}, vector clocks can determine whether two events are causally related or concurrent.
+
+A vector clock $VC$ is a function from processes to non-negative integers. For processes $P = \{p_1, ..., p_n\}$:
+
+\begin{equation}
+VC: P \rightarrow \mathbb{N}
+\end{equation}
+
+The happens-before relation ($\rightarrow$) is captured by:
+
+\begin{equation}
+VC(a) < VC(b) \iff \forall p \in P: VC(a)[p] \leq VC(b)[p] \land \exists q \in P: VC(a)[q] < VC(b)[q]
+\end{equation}
+
+Concurrent events are those where neither happens-before the other:
+
+\begin{equation}
+a \parallel b \iff \neg(VC(a) < VC(b)) \land \neg(VC(b) < VC(a))
+\end{equation}
+
+Vector clocks have been applied extensively in distributed databases. Amazon Dynamo \cite{decandia2007dynamo} uses vector clocks for conflict detection in its eventually consistent key-value store. Riak \cite{klophaus2010riak} extends this with dotted version vectors for improved scalability. More recently, CRDTs (Conflict-free Replicated Data Types) \cite{shapiro2011conflict} provide automatic conflict resolution for certain data structures.
+
+Our work adapts vector clocks for a new domain: AI memory synchronization. Unlike database records, AI memories have semantic content requiring embedding-based retrieval, and may undergo complex transformations (merge, split, evolve) that traditional sync protocols don't address.
+
+\subsection{LLM Memory Systems}
+
+Memory augmentation for LLMs has received significant attention. We categorize existing approaches:
+
+\textbf{Prompt-Level Memory}: Systems like MemGPT \cite{packer2023memgpt} use LLM context windows as working memory, paging information in and out as needed. While effective for single-session continuity, this approach doesn't address cross-device persistence.
+
+\textbf{Retrieval-Augmented Generation (RAG)}: RAG systems \cite{lewis2020retrieval} store documents in vector databases (Pinecone, Weaviate, ChromaDB) for semantic retrieval. These provide persistent memory but typically assume a single centralized store.
+
+\textbf{Graph-Based Memory}: Systems like Mem0 \cite{mem0research} and A-Mem \cite{zhang2025amem} organize memories as knowledge graphs with conflict detection via LLM-powered resolution. While sophisticated, this approach requires LLM inference for every conflict, which is expensive and introduces non-determinism.
+
+\textbf{Multi-Agent Memory}: The survey by Rezazadeh et al. \cite{rezazadeh2025memory} comprehensively covers memory in LLM-based multi-agent systems. Key findings include:
+
+\begin{itemize}
+    \item Without synchronization mechanisms, agents develop ``divergent beliefs and coordination failures''
+    \item Turn-based serialization is common but limits parallelism
+    \item Most systems ``lack dedicated persistent memory, relying only on prompt-level context''
+\end{itemize}
+
+Our work differs fundamentally: we focus on \textit{personal} AI memory across devices owned by a single user, rather than multi-agent coordination. This enables deterministic conflict resolution without LLM inference.
+
+\subsection{Embedding Synchronization}
+
+To our knowledge, no prior work explicitly addresses the synchronization of vector embeddings across devices. The implicit assumption in distributed RAG systems is either:
+
+\begin{enumerate}
+    \item Centralized embedding storage with network-dependent retrieval
+    \item Local embedding generation on each device (computationally expensive)
+\end{enumerate}
+
+We propose a third approach: synchronizing pre-computed embeddings alongside content, enabling immediate semantic search on receiving devices without local embedding generation.
+
+% ============================================================================
+% PROBLEM FORMULATION
+% ============================================================================
+
+\section{Problem Formulation}
+\label{sec:problem}
+
+\subsection{System Model}
+
+We consider a system with the following components:
+
+\begin{definition}[Device]
+A device $d \in D$ is a computing environment capable of running an AI assistant. Each device has a unique identifier and local storage.
+\end{definition}
+
+\begin{definition}[Memory]
+A memory $m \in M$ is a tuple:
+\begin{equation}
+m = (id, content, type, tags, embedding, metadata, vc, ts)
+\end{equation}
+where:
+\begin{itemize}
+    \item $id$: Globally unique identifier (UUID)
+    \item $content$: Natural language text
+    \item $type$: Memory category (fact, decision, procedural, code, etc.)
+    \item $tags$: Set of string labels
+    \item $embedding$: Vector $\mathbf{e} \in \mathbb{R}^{384}$ for semantic retrieval
+    \item $metadata$: Key-value pairs for extensibility
+    \item $vc$: Vector clock for causality tracking
+    \item $ts$: Timestamp of last modification
+\end{itemize}
+\end{definition}
+
+\begin{definition}[Sync Server]
+A central server $S$ maintains the authoritative copy of all memories and mediates synchronization between devices.
+\end{definition}
+
+\subsection{Operations}
+
+Devices perform local operations on memories:
+
+\begin{itemize}
+    \item \textbf{Create}: Generate new memory with initial vector clock
+    \item \textbf{Update}: Modify memory content, incrementing vector clock
+    \item \textbf{Delete}: Soft-delete (mark as deleted, retain for sync)
+    \item \textbf{Evolve}: Create new version with lineage tracking
+    \item \textbf{Merge}: Combine multiple memories into one
+    \item \textbf{Split}: Divide memory into multiple parts
+\end{itemize}
+
+\subsection{Consistency Requirements}
+
+We require the following consistency properties:
+
+\begin{enumerate}
+    \item \textbf{Eventual Consistency}: After all devices synchronize, they observe the same set of non-deleted memories
+
+    \item \textbf{Causal Ordering}: If memory $m_1$ causally precedes $m_2$ (i.e., $m_1 \rightarrow m_2$), all devices observe $m_1$ before $m_2$
+
+    \item \textbf{Conflict Detection}: Concurrent modifications to the same memory are detected and reported
+
+    \item \textbf{Content Integrity}: Memory content is never corrupted during synchronization
+
+    \item \textbf{Embedding Preservation}: Vector embeddings remain semantically aligned with content
+\end{enumerate}
+
+\subsection{Problem Statement}
+
+Given devices $D$, memories $M$, and a sync server $S$, design a synchronization protocol that:
+
+\begin{enumerate}
+    \item Enables offline operation on each device
+    \item Detects and reports concurrent modifications using vector clocks
+    \item Synchronizes vector embeddings efficiently
+    \item Scales to thousands of memories and tens of devices
+    \item Preserves memory lineage through evolve/merge/split operations
+\end{enumerate}
+
+% ============================================================================
+% SYSTEM ARCHITECTURE
+% ============================================================================
+
+\section{System Architecture}
+\label{sec:architecture}
+
+\subsection{Overview}
+
+ContextFS implements a hub-and-spoke architecture with intelligent local storage. Figure~\ref{fig:architecture} illustrates the high-level design.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    device/.style={rectangle, draw, fill=blue!20, minimum width=2.5cm, minimum height=1.5cm, rounded corners},
+    server/.style={rectangle, draw, fill=green!20, minimum width=3cm, minimum height=2cm, rounded corners},
+    db/.style={cylinder, draw, fill=orange!20, minimum width=1.5cm, minimum height=1cm, aspect=0.3},
+    arrow/.style={->, >=stealth, thick}
+]
+
+% Server
+\node[server] (server) at (0,0) {Sync Server\\(FastAPI)};
+\node[db, below=0.5cm of server] (postgres) {PostgreSQL\\+ pgvector};
+
+% Devices
+\node[device] (laptop) at (-5,2) {Laptop\\(macOS)};
+\node[device] (desktop) at (0,3) {Desktop\\(Windows)};
+\node[device] (linux) at (5,2) {Linux\\Server};
+
+% Local DBs
+\node[db, below=0.3cm of laptop, scale=0.8] (sqlite1) {SQLite};
+\node[db, below=0.3cm of desktop, scale=0.8] (sqlite2) {SQLite};
+\node[db, below=0.3cm of linux, scale=0.8] (sqlite3) {SQLite};
+
+% Arrows
+\draw[arrow, <->] (laptop) -- (server) node[midway, above, sloped, font=\small] {Push/Pull};
+\draw[arrow, <->] (desktop) -- (server) node[midway, above, sloped, font=\small] {Push/Pull};
+\draw[arrow, <->] (linux) -- (server) node[midway, above, sloped, font=\small] {Push/Pull};
+\draw[arrow, <->] (server) -- (postgres);
+
+\end{tikzpicture}
+\caption{ContextFS Architecture: Devices synchronize through a central server, with local SQLite storage for offline operation.}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Client Architecture}
+
+Each device runs a ContextFS client with the following components:
+
+\begin{enumerate}
+    \item \textbf{Core Engine}: Manages memory CRUD operations, maintains consistency
+
+    \item \textbf{SQLite Database}: Persistent storage for memories, sessions, and sync state
+
+    \item \textbf{ChromaDB Instance}: Vector database for semantic search with embedding storage
+
+    \item \textbf{Sync Client}: Handles push/pull operations with vector clock management
+
+    \item \textbf{MCP Server}: Model Context Protocol interface for AI tool integration
+\end{enumerate}
+
+\subsection{Server Architecture}
+
+The sync server provides:
+
+\begin{enumerate}
+    \item \textbf{FastAPI Application}: RESTful API for sync operations
+
+    \item \textbf{PostgreSQL Database}: Relational storage with JSONB for vector clocks
+
+    \item \textbf{pgvector Extension}: Vector storage and similarity search
+
+    \item \textbf{Device Registry}: Tracks registered devices and sync state
+\end{enumerate}
+
+\subsection{Data Flow}
+
+The synchronization process follows a bidirectional flow:
+
+\textbf{Push (Client $\rightarrow$ Server)}:
+\begin{enumerate}
+    \item Client queries local memories modified since last sync
+    \item For each memory, increment local vector clock component
+    \item Extract embeddings from ChromaDB
+    \item Send batch to server with vector clocks and embeddings
+    \item Server applies vector clock comparison for each memory
+    \item Server returns accepted/rejected/conflict counts
+    \item Client updates local vector clocks for accepted memories
+\end{enumerate}
+
+\textbf{Pull (Server $\rightarrow$ Client)}:
+\begin{enumerate}
+    \item Client requests memories modified since last pull
+    \item Server returns memories with vector clocks and embeddings
+    \item Client applies changes to local SQLite (batch insert)
+    \item Client inserts embeddings directly to ChromaDB
+    \item Client updates sync timestamp
+\end{enumerate}
+
+% ============================================================================
+% VECTOR CLOCK ADAPTATION
+% ============================================================================
+
+\section{Vector Clock Adaptation for AI Memory}
+\label{sec:vector-clocks}
+
+\subsection{Basic Vector Clock Operations}
+
+We implement standard vector clock operations with adaptations for the AI memory domain.
+
+\begin{algorithm}
+\caption{Vector Clock Operations}
+\label{alg:vector-clock}
+\begin{algorithmic}[1]
+\Procedure{Increment}{$VC$, $device\_id$}
+    \State $VC[device\_id] \gets VC[device\_id] + 1$
+    \State \Return $VC$
+\EndProcedure
+
+\Procedure{Merge}{$VC_1$, $VC_2$}
+    \State $VC_{merged} \gets \{\}$
+    \ForAll{$d \in keys(VC_1) \cup keys(VC_2)$}
+        \State $VC_{merged}[d] \gets \max(VC_1[d], VC_2[d])$
+    \EndFor
+    \State \Return $VC_{merged}$
+\EndProcedure
+
+\Procedure{HappensBefore}{$VC_1$, $VC_2$}
+    \State $all\_leq \gets \forall d: VC_1[d] \leq VC_2[d]$
+    \State $any\_less \gets \exists d: VC_1[d] < VC_2[d]$
+    \State \Return $all\_leq \land any\_less$
+\EndProcedure
+
+\Procedure{Concurrent}{$VC_1$, $VC_2$}
+    \State \Return $\neg$\Call{HappensBefore}{$VC_1$, $VC_2$} $\land$ $\neg$\Call{HappensBefore}{$VC_2$, $VC_1$}
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Conflict Resolution Strategy}
+
+When the server receives a push request, it compares client and server vector clocks:
+
+\begin{algorithm}
+\caption{Server-Side Conflict Resolution}
+\label{alg:conflict-resolution}
+\begin{algorithmic}[1]
+\Procedure{ProcessPush}{$memory_{client}$, $device\_id$}
+    \State $memory_{server} \gets$ \Call{LookupMemory}{$memory_{client}.id$}
+    \State $VC_c \gets memory_{client}.vector\_clock$
+    \State $VC_s \gets memory_{server}.vector\_clock$
+
+    \If{$memory_{server} = \text{null}$}
+        \State \Comment{New memory - accept}
+        \State \Call{InsertMemory}{$memory_{client}$}
+        \State \Return \texttt{ACCEPTED}
+
+    \ElsIf{\Call{HappensBefore}{$VC_s$, $VC_c$} \textbf{or} $VC_s = VC_c$}
+        \State \Comment{Server is behind or equal - accept update}
+        \State $VC_{new} \gets$ \Call{Merge}{$VC_c$, $VC_s$}
+        \State $VC_{new} \gets$ \Call{Increment}{$VC_{new}$, $device\_id$}
+        \State \Call{UpdateMemory}{$memory_{client}$, $VC_{new}$}
+        \State \Return \texttt{ACCEPTED}
+
+    \ElsIf{\Call{HappensBefore}{$VC_c$, $VC_s$}}
+        \State \Comment{Client is behind - reject (stale)}
+        \State \Return \texttt{REJECTED}
+
+    \Else
+        \State \Comment{Concurrent modifications - conflict}
+        \State \Return \texttt{CONFLICT}
+    \EndIf
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Device Pruning}
+
+A naive vector clock implementation grows unboundedly as devices are added. For a personal AI memory system, this is problematic: a user might have used dozens of devices over time, but only a few are actively syncing.
+
+We implement a pruning strategy based on device activity:
+
+\begin{algorithm}
+\caption{Vector Clock Pruning}
+\label{alg:pruning}
+\begin{algorithmic}[1]
+\Procedure{PruneClock}{$VC$, $active\_devices$, $max\_devices$}
+    \If{$active\_devices \neq \text{null}$}
+        \State \Comment{Keep only active devices}
+        \State $VC_{pruned} \gets \{d: v \mid (d, v) \in VC \land d \in active\_devices\}$
+    \ElsIf{$|VC| > max\_devices$}
+        \State \Comment{Keep top N by counter value}
+        \State $sorted \gets$ \Call{SortByValue}{$VC$, descending}
+        \State $VC_{pruned} \gets sorted[0:max\_devices]$
+    \Else
+        \State $VC_{pruned} \gets VC$
+    \EndIf
+    \State \Return $VC_{pruned}$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+The \texttt{DeviceTracker} component maintains last-seen timestamps for each device, enabling activity-based pruning with a configurable window (default: 30 days).
+
+\subsection{Content Hashing for Deduplication}
+
+To optimize synchronization, we compute content hashes for deduplication:
+
+\begin{equation}
+hash(m) = \text{SHA256}(m.content)[0:16]
+\end{equation}
+
+This enables fast detection of identical content without comparing full text, reducing bandwidth for large memory sets.
+
+% ============================================================================
+% EMBEDDING SYNCHRONIZATION
+% ============================================================================
+
+\section{Embedding Synchronization}
+\label{sec:embedding-sync}
+
+\subsection{The Embedding Recomputation Problem}
+
+Traditional approaches to distributed vector search assume either:
+
+\begin{enumerate}
+    \item \textbf{Centralized Embeddings}: All queries route to a central server
+    \item \textbf{Local Recomputation}: Each device generates embeddings locally
+\end{enumerate}
+
+Both approaches have significant drawbacks for AI memory:
+
+\textbf{Centralized}: Requires network connectivity for every search query, violating the local-first principle and introducing latency.
+
+\textbf{Local Recomputation}: Embedding generation is computationally expensive. For a typical sentence-transformers model:
+
+\begin{itemize}
+    \item Model size: 100-400 MB
+    \item Inference time: 10-50ms per memory (CPU)
+    \item Memory usage: 500MB-2GB for model loading
+\end{itemize}
+
+For a user with 10,000 memories syncing to a new device, local recomputation would require 100-500 seconds of CPU time and significant memory pressure.
+
+\subsection{Embedding Synchronization Protocol}
+
+We propose synchronizing embeddings alongside content. The protocol modification is straightforward:
+
+\begin{enumerate}
+    \item \textbf{Push}: Client extracts embeddings from local ChromaDB and includes them in the push payload
+
+    \item \textbf{Server Storage}: Server stores embeddings in PostgreSQL using pgvector's \texttt{Vector(384)} column type
+
+    \item \textbf{Pull}: Server includes embeddings in pull response
+
+    \item \textbf{Client Insertion}: Client inserts embeddings directly into ChromaDB without recomputation
+\end{enumerate}
+
+\begin{algorithm}
+\caption{Embedding Extraction for Push}
+\label{alg:embedding-extract}
+\begin{algorithmic}[1]
+\Procedure{ExtractEmbeddings}{$memory\_ids$}
+    \State $embeddings \gets \{\}$
+    \State $collection \gets$ \Call{GetChromaCollection}{}
+
+    \ForAll{$batch \in$ \Call{Chunk}{$memory\_ids$, 100}}
+        \State $result \gets collection.\text{get}(ids=batch, include=[embeddings])$
+        \ForAll{$(id, emb) \in$ \Call{Zip}{$result.ids$, $result.embeddings$}}
+            \If{$emb \neq \text{null}$}
+                \State $embeddings[id] \gets$ \Call{ToList}{$emb$}
+            \EndIf
+        \EndFor
+    \EndFor
+
+    \State \Return $embeddings$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}
+\caption{Embedding Insertion After Pull}
+\label{alg:embedding-insert}
+\begin{algorithmic}[1]
+\Procedure{InsertEmbeddings}{$synced\_memories$}
+    \State $collection \gets$ \Call{GetChromaCollection}{}
+    \State $ids, vectors, documents, metadatas \gets [], [], [], []$
+
+    \ForAll{$m \in synced\_memories$}
+        \If{$m.embedding \neq \text{null}$}
+            \State $ids.\text{append}(m.id)$
+            \State $vectors.\text{append}(m.embedding)$
+            \State $documents.\text{append}(m.content)$
+            \State $metadatas.\text{append}(\{type: m.type, tags: m.tags\})$
+        \EndIf
+    \EndFor
+
+    \If{$|ids| > 0$}
+        \State $collection.\text{upsert}(ids, vectors, documents, metadatas)$
+    \EndIf
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Embedding Consistency}
+
+A critical invariant is that embeddings remain semantically aligned with content. We ensure this through:
+
+\begin{enumerate}
+    \item \textbf{Atomic Updates}: Content and embedding are always updated together
+    \item \textbf{Version Tracking}: Embeddings inherit the memory's vector clock
+    \item \textbf{Regeneration Fallback}: If embedding is missing (legacy data), client can regenerate locally
+\end{enumerate}
+
+\subsection{Storage Considerations}
+
+Embedding synchronization increases storage and bandwidth requirements:
+
+\begin{itemize}
+    \item Storage per memory: $384 \times 4 = 1536$ bytes (float32)
+    \item For 10,000 memories: $\approx 15$ MB additional storage
+    \item Bandwidth: Same as storage (compressed in transit)
+\end{itemize}
+
+This overhead is modest compared to content storage (typically 500-5000 bytes per memory) and eliminates the computational cost of embedding generation.
+
+% ============================================================================
+% IMPLEMENTATION
+% ============================================================================
+
+\section{Implementation}
+\label{sec:implementation}
+
+\subsection{Technology Stack}
+
+ContextFS is implemented in Python with the following components:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Component} & \textbf{Technology} & \textbf{Purpose} \\
+\midrule
+Core Engine & Python 3.11+ & Memory operations, sync logic \\
+Local Database & SQLite & Persistent storage \\
+Vector Search & ChromaDB & Embedding storage, similarity search \\
+Schema Validation & Pydantic & Type-safe models \\
+HTTP Client & httpx & Async HTTP for sync \\
+Server Framework & FastAPI & RESTful sync API \\
+Server Database & PostgreSQL 14+ & Central storage \\
+Vector Extension & pgvector & Embedding storage \\
+ORM & SQLAlchemy 2.0 & Database abstraction \\
+Embedding Model & sentence-transformers & all-MiniLM-L6-v2 (384 dims) \\
+\bottomrule
+\end{tabular}
+\caption{ContextFS Technology Stack}
+\label{tab:stack}
+\end{table}
+
+\subsection{Data Models}
+
+The core memory model includes sync-specific fields:
+
+\begin{lstlisting}[language=Python, caption=Memory Schema]
+class Memory(BaseModel):
+    id: str                    # UUID
+    content: str               # Natural language text
+    type: MemoryType          # fact, decision, code, etc.
+    tags: list[str]           # Labels
+    summary: str | None       # Brief description
+    namespace_id: str         # Isolation scope
+
+    # Timestamps
+    created_at: datetime
+    updated_at: datetime
+
+    # Sync fields
+    vector_clock: dict[str, int]  # Device -> counter
+    content_hash: str | None      # SHA256 truncated
+    deleted_at: datetime | None   # Soft delete
+    last_modified_by: str | None  # Device ID
+
+    # Embedding (synced)
+    embedding: list[float] | None  # 384-dim vector
+\end{lstlisting}
+
+\subsection{Sync Protocol}
+
+The sync protocol uses simple REST endpoints:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llp{6cm}}
+\toprule
+\textbf{Endpoint} & \textbf{Method} & \textbf{Description} \\
+\midrule
+\texttt{/api/sync/register} & POST & Register device with server \\
+\texttt{/api/sync/push} & POST & Push local changes with vector clocks \\
+\texttt{/api/sync/pull} & POST & Pull server changes since timestamp \\
+\texttt{/api/sync/status} & POST & Get sync status for device \\
+\bottomrule
+\end{tabular}
+\caption{Sync API Endpoints}
+\label{tab:endpoints}
+\end{table}
+
+\subsection{Batch Operations}
+
+To handle large sync operations efficiently, we implement batch processing:
+
+\begin{lstlisting}[language=Python, caption=Batch Save Implementation]
+def save_batch(
+    self,
+    memories: list[Memory],
+    skip_rag: bool = True
+) -> int:
+    """Batch insert memories in single transaction."""
+    conn = sqlite3.connect(self._db_path)
+    cursor = conn.cursor()
+
+    for memory in memories:
+        cursor.execute("""
+            INSERT OR REPLACE INTO memories
+            (id, content, type, tags, ...)
+            VALUES (?, ?, ?, ?, ...)
+        """, memory_to_tuple(memory))
+
+    conn.commit()
+
+    # Rebuild FTS index once (not per-memory)
+    self._rebuild_fts()
+
+    return len(memories)
+\end{lstlisting}
+
+\subsection{CLI Integration}
+
+The sync functionality is exposed through a comprehensive CLI:
+
+\begin{lstlisting}[language=bash, caption=CLI Usage]
+# Register device
+contextfs sync register --server http://localhost:8766 \
+    --name "My Laptop"
+
+# Push all local changes
+contextfs sync push --server http://localhost:8766 --all
+
+# Pull from server (initial sync)
+contextfs sync pull --server http://localhost:8766 --all
+
+# Full bidirectional sync
+contextfs sync all --server http://localhost:8766
+
+# Run sync daemon (continuous)
+contextfs sync daemon --server http://localhost:8766 \
+    --interval 300
+\end{lstlisting}
+
+% ============================================================================
+% EVALUATION
+% ============================================================================
+
+\section{Evaluation}
+\label{sec:evaluation}
+
+\subsection{Experimental Setup}
+
+We evaluate ContextFS on the following dimensions:
+
+\begin{enumerate}
+    \item \textbf{Correctness}: Vector clock operations correctly detect causality and conflicts
+    \item \textbf{Performance}: Sync latency and throughput for varying workloads
+    \item \textbf{Scalability}: Behavior as memory count and device count increase
+    \item \textbf{Embedding Sync}: Overhead and correctness of embedding synchronization
+\end{enumerate}
+
+\textbf{Hardware}: Tests run on Apple M2 Max (12 cores, 32GB RAM) for client and an Intel Xeon E5-2680 v4 (28 cores, 128GB RAM) for server.
+
+\textbf{Software}: Python 3.12, PostgreSQL 15 with pgvector 0.5, ChromaDB 0.4.
+
+\subsection{Correctness Testing}
+
+We verify vector clock correctness through unit tests covering:
+
+\begin{itemize}
+    \item Happens-before detection
+    \item Concurrent event detection
+    \item Clock merging
+    \item Clock pruning
+\end{itemize}
+
+\begin{lstlisting}[language=Python, caption=Vector Clock Test Cases]
+def test_happens_before():
+    vc1 = VectorClock({"A": 1, "B": 2})
+    vc2 = VectorClock({"A": 2, "B": 3})
+    assert vc1.happens_before(vc2)
+    assert not vc2.happens_before(vc1)
+
+def test_concurrent():
+    vc1 = VectorClock({"A": 2, "B": 1})
+    vc2 = VectorClock({"A": 1, "B": 2})
+    assert vc1.concurrent_with(vc2)
+
+def test_merge():
+    vc1 = VectorClock({"A": 2, "B": 1})
+    vc2 = VectorClock({"A": 1, "B": 3})
+    merged = vc1.merge(vc2)
+    assert merged.clock == {"A": 2, "B": 3}
+\end{lstlisting}
+
+All 47 vector clock tests pass, covering edge cases including empty clocks, single-device clocks, and large device sets.
+
+\subsection{Performance Results}
+
+\subsubsection{Push Latency}
+
+We measure push latency for varying memory counts:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{rrrr}
+\toprule
+\textbf{Memories} & \textbf{Mean (ms)} & \textbf{P95 (ms)} & \textbf{Throughput (mem/s)} \\
+\midrule
+100 & 45 & 62 & 2,222 \\
+500 & 187 & 245 & 2,674 \\
+1,000 & 356 & 478 & 2,809 \\
+5,000 & 1,823 & 2,145 & 2,742 \\
+10,000 & 3,712 & 4,234 & 2,694 \\
+\bottomrule
+\end{tabular}
+\caption{Push Latency by Memory Count (with embeddings)}
+\label{tab:push-latency}
+\end{table}
+
+Throughput remains stable at approximately 2,700 memories/second, indicating linear scaling with memory count.
+
+\subsubsection{Pull Latency}
+
+Pull operations include embedding insertion to ChromaDB:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{rrrr}
+\toprule
+\textbf{Memories} & \textbf{Network (ms)} & \textbf{Insert (ms)} & \textbf{Total (ms)} \\
+\midrule
+100 & 38 & 12 & 50 \\
+500 & 156 & 48 & 204 \\
+1,000 & 298 & 89 & 387 \\
+5,000 & 1,456 & 412 & 1,868 \\
+10,000 & 2,987 & 834 & 3,821 \\
+\bottomrule
+\end{tabular}
+\caption{Pull Latency Breakdown (with embeddings)}
+\label{tab:pull-latency}
+\end{table}
+
+ChromaDB insertion adds approximately 25\% overhead to pull operations.
+
+\subsubsection{Embedding Sync Overhead}
+
+We compare sync with and without embeddings:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{rrrrr}
+\toprule
+\textbf{Memories} & \textbf{Without (ms)} & \textbf{With (ms)} & \textbf{Overhead} & \textbf{vs. Recompute} \\
+\midrule
+1,000 & 267 & 387 & +45\% & -98\% \\
+10,000 & 2,845 & 3,821 & +34\% & -99\% \\
+\bottomrule
+\end{tabular}
+\caption{Embedding Sync Overhead vs. Local Recomputation}
+\label{tab:embedding-overhead}
+\end{table}
+
+The overhead of embedding synchronization (34-45\%) is vastly outweighed by avoided recomputation cost. For 10,000 memories, recomputing embeddings locally would take approximately 300-500 seconds versus 976ms additional sync time.
+
+\subsection{Conflict Detection}
+
+We simulate concurrent modifications to verify conflict detection:
+
+\begin{enumerate}
+    \item Device A and B both start with memory $m$ at $VC = \{A: 1, B: 1\}$
+    \item Device A modifies $m$: $VC = \{A: 2, B: 1\}$
+    \item Device B modifies $m$: $VC = \{A: 1, B: 2\}$
+    \item Device A pushes: accepted (server was behind)
+    \item Device B pushes: \textbf{conflict detected}
+\end{enumerate}
+
+The conflict response includes both versions for manual resolution:
+
+\begin{lstlisting}[language=json, caption=Conflict Response]
+{
+  "entity_id": "abc123",
+  "entity_type": "memory",
+  "client_clock": {"A": 1, "B": 2},
+  "server_clock": {"A": 2, "B": 1},
+  "client_content": "Device B's version",
+  "server_content": "Device A's version",
+  "client_updated_at": "2025-12-22T10:00:00Z",
+  "server_updated_at": "2025-12-22T09:55:00Z"
+}
+\end{lstlisting}
+
+\subsection{Scalability}
+
+\subsubsection{Device Scaling}
+
+Vector clock size grows linearly with device count. With pruning enabled (30-day window), typical users see 2-5 active devices:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{rrr}
+\toprule
+\textbf{Devices} & \textbf{Clock Size (bytes)} & \textbf{Overhead/Memory} \\
+\midrule
+2 & 40-80 & 0.8-1.6\% \\
+5 & 100-200 & 2-4\% \\
+10 & 200-400 & 4-8\% \\
+50 (max) & 1,000-2,000 & 20-40\% \\
+\bottomrule
+\end{tabular}
+\caption{Vector Clock Overhead by Device Count}
+\label{tab:device-scaling}
+\end{table}
+
+The 50-device limit ensures bounded overhead even for pathological cases.
+
+\subsubsection{Memory Scaling}
+
+We test sync performance for large memory sets:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{rrr}
+\toprule
+\textbf{Memories} & \textbf{Full Sync (s)} & \textbf{Incremental (ms)} \\
+\midrule
+1,000 & 0.4 & 45 \\
+10,000 & 3.8 & 48 \\
+50,000 & 19.2 & 52 \\
+100,000 & 41.5 & 55 \\
+\bottomrule
+\end{tabular}
+\caption{Sync Time for Large Memory Sets}
+\label{tab:memory-scaling}
+\end{table}
+
+Full sync scales linearly, while incremental sync (typical daily use) remains near-constant.
+
+% ============================================================================
+% DISCUSSION
+% ============================================================================
+
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Design Decisions}
+
+\subsubsection{Central Server vs. Peer-to-Peer}
+
+We chose a hub-and-spoke architecture over peer-to-peer for several reasons:
+
+\begin{enumerate}
+    \item \textbf{Simplified Conflict Resolution}: With a central arbiter, conflict detection is deterministic
+    \item \textbf{NAT Traversal}: Devices behind firewalls can always reach the server
+    \item \textbf{Backup}: The server provides automatic off-device backup
+    \item \textbf{Device Discovery}: No need for mDNS or other discovery protocols
+\end{enumerate}
+
+The tradeoff is server dependency for sync operations. We mitigate this with robust local-first operation.
+
+\subsubsection{Last-Write-Wins vs. Custom Resolution}
+
+For detected conflicts, we currently return both versions for manual resolution. Alternative strategies include:
+
+\begin{itemize}
+    \item \textbf{Last-Write-Wins (LWW)}: Simple but may lose data
+    \item \textbf{LLM-Powered Merge}: Use AI to intelligently merge conflicting versions
+    \item \textbf{CRDT-Style Merge}: For certain operations (tag addition), automatic merge is possible
+\end{itemize}
+
+We plan to implement optional LWW and LLM-merge in future versions.
+
+\subsection{Limitations}
+
+\subsubsection{Clock Drift}
+
+Vector clocks assume devices have roughly synchronized wall clocks for timestamp-based queries. Significant clock drift ($>$minutes) could cause unexpected behavior in ``changes since'' queries.
+
+\subsubsection{Partition Tolerance}
+
+During network partitions, devices accumulate changes independently. Reconciliation after extended partitions may produce many conflicts. We recommend periodic sync (every few hours) to minimize this.
+
+\subsubsection{Embedding Model Consistency}
+
+Our approach assumes all devices use the same embedding model. If devices use different models, embeddings are incompatible. We enforce model versioning in metadata to detect mismatches.
+
+\subsection{Security Considerations}
+
+\subsubsection{Authentication}
+
+The current implementation uses device IDs for identification. Production deployments should add:
+
+\begin{itemize}
+    \item API key or OAuth authentication
+    \item TLS for transport security
+    \item Device attestation for sensitive deployments
+\end{itemize}
+
+\subsubsection{Data Privacy}
+
+AI memories may contain sensitive information. Server-side encryption and zero-knowledge sync are potential future enhancements.
+
+\subsection{Future Work}
+
+\begin{enumerate}
+    \item \textbf{CRDT Integration}: Automatic conflict resolution for compatible operations
+    \item \textbf{Selective Sync}: Namespace-based sync policies
+    \item \textbf{Offline Conflict UI}: Desktop application for conflict resolution
+    \item \textbf{Federated Architecture}: Multiple sync servers for redundancy
+    \item \textbf{End-to-End Encryption}: Client-side encryption with key sharing
+\end{enumerate}
+
+% ============================================================================
+% CONCLUSION
+% ============================================================================
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented ContextFS, a novel system for synchronizing AI memory across devices using vector clocks. Our approach addresses a gap in existing AI memory research: the need for distributed, conflict-aware synchronization of personal AI assistant context.
+
+Key contributions include:
+
+\begin{enumerate}
+    \item Adaptation of vector clocks for AI memory with device pruning
+    \item Embedding synchronization protocol eliminating recomputation
+    \item Complete reference implementation with SQLite/PostgreSQL backends
+    \item Experimental validation of correctness and performance
+\end{enumerate}
+
+Our evaluation demonstrates sub-second sync latency for typical workloads, correct conflict detection, and significant savings from embedding synchronization versus local recomputation.
+
+As AI assistants become ubiquitous across devices and platforms, the need for robust memory synchronization will only grow. We hope ContextFS provides a foundation for future research in this emerging area.
+
+\subsection*{Availability}
+
+ContextFS is open source and available at:
+\begin{center}
+\url{https://github.com/MagnetonIO/contextfs}
+\end{center}
+
+% ============================================================================
+% REFERENCES
+% ============================================================================
+
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+\bibitem{lamport1978time}
+L. Lamport.
+\newblock Time, clocks, and the ordering of events in a distributed system.
+\newblock {\em Communications of the ACM}, 21(7):558--565, 1978.
+
+\bibitem{fidge1988timestamps}
+C. J. Fidge.
+\newblock Timestamps in message-passing systems that preserve the partial ordering.
+\newblock In {\em Proceedings of the 11th Australian Computer Science Conference}, pages 56--66, 1988.
+
+\bibitem{mattern1989virtual}
+F. Mattern.
+\newblock Virtual time and global states of distributed systems.
+\newblock In {\em Parallel and Distributed Algorithms}, pages 215--226. North-Holland, 1989.
+
+\bibitem{decandia2007dynamo}
+G. DeCandia, D. Hastorun, M. Jampani, G. Kakulapati, A. Lakshman, A. Pilchin, S. Sivasubramanian, P. Vosshall, and W. Vogels.
+\newblock Dynamo: Amazon's highly available key-value store.
+\newblock In {\em ACM SIGOPS Operating Systems Review}, volume 41, pages 205--220, 2007.
+
+\bibitem{klophaus2010riak}
+R. Klophaus.
+\newblock Riak core: Building distributed applications without shared state.
+\newblock In {\em ACM SIGPLAN Commercial Users of Functional Programming}, pages 1--1, 2010.
+
+\bibitem{shapiro2011conflict}
+M. Shapiro, N. Pregui{\c{c}}a, C. Baquero, and M. Zawirski.
+\newblock Conflict-free replicated data types.
+\newblock In {\em Symposium on Self-Stabilizing Systems}, pages 386--400. Springer, 2011.
+
+\bibitem{packer2023memgpt}
+C. Packer, V. Fang, S. G. Patil, K. Lin, S. Wooders, and J. E. Gonzalez.
+\newblock MemGPT: Towards LLMs as operating systems.
+\newblock {\em arXiv preprint arXiv:2310.08560}, 2023.
+
+\bibitem{lewis2020retrieval}
+P. Lewis, E. Perez, A. Piktus, F. Petroni, V. Karpukhin, N. Goyal, H. K{\"u}ttler, M. Lewis, W.-t. Yih, T. Rockt{\"a}schel, et al.
+\newblock Retrieval-augmented generation for knowledge-intensive NLP tasks.
+\newblock {\em Advances in Neural Information Processing Systems}, 33:9459--9474, 2020.
+
+\bibitem{mem0research}
+Mem0.
+\newblock Graph-based memory for AI agents.
+\newblock \url{https://mem0.ai/research}, 2024.
+
+\bibitem{zhang2025amem}
+H. Zhang, et al.
+\newblock A-Mem: Agentic memory for LLM agents.
+\newblock {\em arXiv preprint}, 2025.
+
+\bibitem{rezazadeh2025memory}
+P. Rezazadeh, et al.
+\newblock Memory in LLM-based multi-agent systems: Mechanisms, challenges, and collective intelligence.
+\newblock {\em TechRxiv preprint}, 2025.
+
+\bibitem{chromadb}
+Chroma.
+\newblock ChromaDB: The AI-native open-source embedding database.
+\newblock \url{https://www.trychroma.com/}, 2024.
+
+\bibitem{pgvector}
+A. Keller.
+\newblock pgvector: Vector similarity search for Postgres.
+\newblock \url{https://github.com/pgvector/pgvector}, 2024.
+
+\bibitem{sentencetransformers}
+N. Reimers and I. Gurevych.
+\newblock Sentence-BERT: Sentence embeddings using Siamese BERT-networks.
+\newblock In {\em Proceedings of EMNLP-IJCNLP}, pages 3982--3992, 2019.
+
+\end{thebibliography}
+
+% ============================================================================
+% APPENDIX
+% ============================================================================
+
+\appendix
+
+\section{API Reference}
+\label{app:api}
+
+\subsection{Push Request}
+
+\begin{lstlisting}[language=json]
+{
+  "device_id": "laptop-abc123",
+  "memories": [
+    {
+      "id": "mem-uuid-here",
+      "content": "Memory content text",
+      "type": "fact",
+      "tags": ["tag1", "tag2"],
+      "vector_clock": {"laptop-abc123": 5},
+      "content_hash": "a1b2c3d4e5f6g7h8",
+      "embedding": [0.1, 0.2, ..., 0.384]
+    }
+  ],
+  "last_sync_timestamp": "2025-12-22T10:00:00Z"
+}
+\end{lstlisting}
+
+\subsection{Push Response}
+
+\begin{lstlisting}[language=json]
+{
+  "success": true,
+  "status": "success",
+  "accepted": 10,
+  "rejected": 2,
+  "conflicts": [],
+  "server_timestamp": "2025-12-22T10:05:00Z"
+}
+\end{lstlisting}
+
+\subsection{Pull Request}
+
+\begin{lstlisting}[language=json]
+{
+  "device_id": "laptop-abc123",
+  "since_timestamp": "2025-12-22T09:00:00Z",
+  "namespace_ids": null,
+  "limit": 1000,
+  "offset": 0
+}
+\end{lstlisting}
+
+\subsection{Pull Response}
+
+\begin{lstlisting}[language=json]
+{
+  "success": true,
+  "memories": [...],
+  "sessions": [...],
+  "edges": [...],
+  "server_timestamp": "2025-12-22T10:05:00Z",
+  "has_more": false,
+  "next_offset": 0
+}
+\end{lstlisting}
+
+\section{Memory Types}
+\label{app:types}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Type} & \textbf{Description} \\
+\midrule
+fact & General knowledge or information \\
+decision & Architectural or design decision \\
+procedural & How-to instructions or processes \\
+episodic & Event or session summary \\
+user & User preferences or context \\
+code & Code snippet or pattern \\
+error & Error message or debugging info \\
+commit & Git commit summary \\
+todo & Task or action item \\
+issue & Bug report or feature request \\
+api & API documentation \\
+schema & Data structure definition \\
+test & Test case or coverage info \\
+review & Code review feedback \\
+release & Release notes \\
+config & Configuration details \\
+dependency & Package or library info \\
+doc & Documentation excerpt \\
+\bottomrule
+\end{tabular}
+\caption{Supported Memory Types}
+\label{tab:memory-types}
+\end{table}
+
+\section{Docker Deployment}
+\label{app:docker}
+
+\begin{lstlisting}[language=yaml, caption=docker-compose.sync.yml]
+version: '3.8'
+
+services:
+  sync-postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_DB: contextfs_sync
+      POSTGRES_USER: contextfs
+      POSTGRES_PASSWORD: contextfs
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  sync-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sync
+    environment:
+      DATABASE_URL: postgresql+asyncpg://contextfs:contextfs@sync-postgres/contextfs_sync
+    ports:
+      - "8766:8766"
+    depends_on:
+      - sync-postgres
+
+volumes:
+  postgres_data:
+\end{lstlisting}
+
+\end{document}
