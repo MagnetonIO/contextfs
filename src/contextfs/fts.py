@@ -40,6 +40,19 @@ class FTSBackend:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
+        # Check if FTS table exists and has correct schema
+        needs_rebuild = False
+        try:
+            cursor.execute("SELECT type FROM memories_fts LIMIT 0")
+        except sqlite3.OperationalError:
+            # Table doesn't exist or missing 'type' column - needs rebuild
+            needs_rebuild = True
+
+        if needs_rebuild:
+            self._migrate_fts_schema(conn)
+            conn.close()
+            return
+
         # Create FTS5 virtual table with BM25 ranking
         # Searchable: content, summary, tags
         # Filterable (UNINDEXED): id, type, namespace_id, source_repo, source_tool, project
@@ -61,6 +74,71 @@ class FTSBackend:
         """)
 
         # Triggers to keep FTS in sync with memories table
+        # (only create if memories table exists)
+        try:
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                    INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.summary, NEW.tags, NEW.type, NEW.namespace_id, NEW.source_repo, NEW.source_tool, NEW.project);
+                END
+            """)
+
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+                    INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.summary, OLD.tags, OLD.type, OLD.namespace_id, OLD.source_repo, OLD.source_tool, OLD.project);
+                END
+            """)
+
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+                    INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.summary, OLD.tags, OLD.type, OLD.namespace_id, OLD.source_repo, OLD.source_tool, OLD.project);
+                    INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.summary, NEW.tags, NEW.type, NEW.namespace_id, NEW.source_repo, NEW.source_tool, NEW.project);
+                END
+            """)
+        except sqlite3.OperationalError:
+            # memories table doesn't exist yet - triggers will be created when core.py inits DB
+            pass
+
+        conn.commit()
+        conn.close()
+
+    def _migrate_fts_schema(self, conn: sqlite3.Connection) -> None:
+        """Migrate FTS table to new schema with all required columns."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info("Migrating FTS schema to new version...")
+
+        cursor = conn.cursor()
+
+        # Drop old FTS table and triggers
+        cursor.execute("DROP TRIGGER IF EXISTS memories_ai")
+        cursor.execute("DROP TRIGGER IF EXISTS memories_ad")
+        cursor.execute("DROP TRIGGER IF EXISTS memories_au")
+        cursor.execute("DROP TABLE IF EXISTS memories_fts")
+
+        # Create new FTS table with full schema
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                id UNINDEXED,
+                content,
+                summary,
+                tags,
+                type UNINDEXED,
+                namespace_id UNINDEXED,
+                source_repo UNINDEXED,
+                source_tool UNINDEXED,
+                project UNINDEXED,
+                content='memories',
+                content_rowid='rowid',
+                tokenize='porter unicode61'
+            )
+        """)
+
+        # Create triggers
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
                 INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
@@ -84,8 +162,18 @@ class FTSBackend:
             END
         """)
 
+        # Populate FTS from existing memories (if table exists)
+        try:
+            cursor.execute("""
+                INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                SELECT rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project FROM memories
+            """)
+        except sqlite3.OperationalError:
+            # memories table doesn't exist yet - that's OK, triggers will populate FTS
+            pass
+
         conn.commit()
-        conn.close()
+        logger.info("FTS schema migration complete")
 
     def rebuild_index(self) -> None:
         """Rebuild FTS index from memories table."""
