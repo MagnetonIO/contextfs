@@ -13,11 +13,17 @@ from __future__ import annotations
 
 import hashlib
 from abc import abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
+
+
+def utc_now() -> datetime:
+    """Return current UTC time as timezone-aware datetime."""
+    return datetime.now(timezone.utc)
+
 
 # =============================================================================
 # Enums
@@ -66,8 +72,8 @@ class SyncableEntity(BaseModel):
     vector_clock: dict[str, int] = Field(default_factory=dict)
     content_hash: str | None = None
     deleted_at: datetime | None = None
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     last_modified_by: str | None = None  # device_id that made last change
 
     def compute_content_hash(self, content: str) -> str:
@@ -143,7 +149,7 @@ class SyncedSession(SyncableEntity):
     repo_path: str | None = None
 
     branch: str | None = None
-    started_at: datetime = Field(default_factory=datetime.now)
+    started_at: datetime = Field(default_factory=utc_now)
     ended_at: datetime | None = None
     summary: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -230,7 +236,7 @@ class SyncPushResponse(BaseModel):
     accepted: int = 0
     rejected: int = 0
     conflicts: list[ConflictInfo] = Field(default_factory=list)
-    server_timestamp: datetime = Field(default_factory=datetime.now)
+    server_timestamp: datetime = Field(default_factory=utc_now)
     message: str | None = None
 
 
@@ -252,7 +258,7 @@ class SyncPullResponse(BaseModel):
     memories: list[SyncedMemory] = Field(default_factory=list)
     sessions: list[SyncedSession] = Field(default_factory=list)
     edges: list[SyncedEdge] = Field(default_factory=list)
-    server_timestamp: datetime = Field(default_factory=datetime.now)
+    server_timestamp: datetime = Field(default_factory=utc_now)
     has_more: bool = False  # True if more pages available
     next_cursor: datetime | None = None  # Cursor for next page (deprecated, use next_offset)
     next_offset: int = 0  # Offset for next page
@@ -271,7 +277,7 @@ class SyncStatusResponse(BaseModel):
     last_sync_at: datetime | None = None
     pending_push_count: int = 0
     pending_pull_count: int = 0
-    server_timestamp: datetime = Field(default_factory=datetime.now)
+    server_timestamp: datetime = Field(default_factory=utc_now)
 
 
 # =============================================================================

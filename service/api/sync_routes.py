@@ -5,7 +5,7 @@ vector clock conflict resolution.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, select
@@ -106,7 +106,7 @@ async def push_changes(
     accepted = 0
     rejected = 0
     conflicts: list[ConflictInfo] = []
-    server_timestamp = datetime.now()
+    server_timestamp = datetime.now(timezone.utc)
 
     # Process memories
     for memory in request.memories:
@@ -395,7 +395,7 @@ async def pull_changes(
     Returns all changes since last sync timestamp, including soft-deleted items
     (so clients can apply the deletion).
     """
-    server_timestamp = datetime.now()
+    server_timestamp = datetime.now(timezone.utc)
 
     # Query memories
     memories = await _pull_memories(session, request)
@@ -624,7 +624,7 @@ async def get_sync_status(
         last_sync_at=device.last_sync_at,
         pending_push_count=0,  # Server doesn't know client state
         pending_pull_count=pending_pull,
-        server_timestamp=datetime.now(),
+        server_timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -644,7 +644,7 @@ async def _update_device_sync_state(
     device = result.scalar_one_or_none()
 
     if device:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         device.last_sync_at = now
         if pull_at:
             device.sync_cursor = pull_at

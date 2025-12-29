@@ -7,7 +7,7 @@ Run with: uvicorn service.api.main:app --host 0.0.0.0 --port 8766
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,7 +71,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "contextfs-sync",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

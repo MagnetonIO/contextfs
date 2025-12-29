@@ -7,10 +7,17 @@ Vector clocks track causality across devices, enabling detection of:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+def _ensure_tz_aware(dt: datetime) -> datetime:
+    """Ensure datetime is timezone-aware (assumes UTC if naive)."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 class VectorClock(BaseModel):
@@ -196,7 +203,7 @@ class DeviceTracker(BaseModel):
 
     def update(self, device_id: str, timestamp: datetime | None = None) -> None:
         """Update last-seen timestamp for a device."""
-        self.devices[device_id] = timestamp or datetime.now()
+        self.devices[device_id] = timestamp or datetime.now(timezone.utc)
 
     def get_active_devices(self, as_of: datetime | None = None) -> set[str]:
         """
@@ -208,10 +215,14 @@ class DeviceTracker(BaseModel):
         Returns:
             Set of active device IDs
         """
-        reference = as_of or datetime.now()
+        reference = _ensure_tz_aware(as_of or datetime.now(timezone.utc))
         cutoff = reference - timedelta(days=self.prune_after_days)
 
-        return {device_id for device_id, last_seen in self.devices.items() if last_seen >= cutoff}
+        return {
+            device_id
+            for device_id, last_seen in self.devices.items()
+            if _ensure_tz_aware(last_seen) >= cutoff
+        }
 
     def prune_clock(self, clock: VectorClock) -> VectorClock:
         """

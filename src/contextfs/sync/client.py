@@ -21,7 +21,7 @@ import platform
 import socket
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +47,15 @@ if TYPE_CHECKING:
     from contextfs.schemas import Memory
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_tz_aware(dt: datetime | None) -> datetime | None:
+    """Ensure datetime is timezone-aware (assumes UTC if naive)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 class SyncClient:
@@ -449,7 +458,8 @@ class SyncClient:
 
         # Filter by last sync time if we have one (unless push_all)
         if self._last_sync and not push_all:
-            memories = [m for m in memories if m.updated_at > self._last_sync]
+            last_sync_aware = _ensure_tz_aware(self._last_sync)
+            memories = [m for m in memories if _ensure_tz_aware(m.updated_at) > last_sync_aware]
 
         return memories
 
@@ -695,7 +705,7 @@ class SyncClient:
                 accepted=0,
                 rejected=0,
                 conflicts=[],
-                server_timestamp=datetime.now(),
+                server_timestamp=datetime.now(timezone.utc),
                 message=str(e),
             )
 
@@ -710,7 +720,7 @@ class SyncClient:
                 memories=[],
                 sessions=[],
                 edges=[],
-                server_timestamp=datetime.now(),
+                server_timestamp=datetime.now(timezone.utc),
             )
 
         duration_ms = (time.time() - start) * 1000
