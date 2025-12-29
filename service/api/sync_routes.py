@@ -211,7 +211,8 @@ async def _process_memory_push(
         existing.repo_name = memory.repo_name
         existing.relative_path = memory.relative_path
         existing.updated_at = memory.updated_at
-        existing.vector_clock = client_clock.merge(server_clock).increment(device_id).to_dict()
+        # Don't increment - client already incremented before sending
+        existing.vector_clock = client_clock.merge(server_clock).to_dict()
         existing.content_hash = memory.content_hash
         existing.deleted_at = memory.deleted_at
         existing.last_modified_by = device_id
@@ -287,7 +288,8 @@ async def _process_session_push(
         existing.summary = sess.summary
         existing.ended_at = sess.ended_at
         existing.updated_at = sess.updated_at
-        existing.vector_clock = client_clock.merge(server_clock).increment(device_id).to_dict()
+        # Don't increment - client already incremented before sending
+        existing.vector_clock = client_clock.merge(server_clock).to_dict()
         existing.deleted_at = sess.deleted_at
         existing.last_modified_by = device_id
         existing.metadata = sess.metadata
@@ -354,7 +356,8 @@ async def _process_edge_push(
     if server_clock.happens_before(client_clock) or server_clock.equal_to(client_clock):
         existing.weight = edge.weight
         existing.updated_at = edge.updated_at
-        existing.vector_clock = client_clock.merge(server_clock).increment(device_id).to_dict()
+        # Don't increment - client already incremented before sending
+        existing.vector_clock = client_clock.merge(server_clock).to_dict()
         existing.deleted_at = edge.deleted_at
         existing.last_modified_by = device_id
         existing.metadata = edge.metadata
