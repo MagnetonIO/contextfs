@@ -136,6 +136,11 @@ networks:
 # ==========================================================================
 # Usage Examples
 # ==========================================================================
+# RECOMMENDED: Start ChromaDB server (prevents corruption from multi-process):
+#   docker-compose --profile with-chromadb up -d chromadb
+#   export CONTEXTFS_CHROMA_HOST=localhost
+#   export CONTEXTFS_CHROMA_PORT=8000
+#
 # Start core services (Postgres + FalkorDB):
 #   docker-compose up -d postgres falkordb
 #
@@ -143,10 +148,10 @@ networks:
 #   docker-compose --profile with-admin up -d
 #
 # Start everything:
-#   docker-compose --profile with-admin --profile with-api up -d
+#   docker-compose --profile with-admin --profile with-api --profile with-chromadb up -d
 #
 # View logs:
-#   docker-compose logs -f postgres falkordb
+#   docker-compose logs -f postgres falkordb chromadb
 #
 # Stop all:
 #   docker-compose down
@@ -157,6 +162,11 @@ networks:
 # ==========================================================================
 # .env Configuration
 # ==========================================================================
+# RECOMMENDED for multi-MCP usage (prevents ChromaDB corruption):
+#   docker-compose --profile with-chromadb up -d chromadb
+#   CONTEXTFS_CHROMA_HOST=localhost
+#   CONTEXTFS_CHROMA_PORT=8000
+#
 # For SQLite (default - no docker needed):
 #   CONTEXTFS_BACKEND=sqlite
 #

@@ -59,8 +59,10 @@ class Config(BaseSettings):
     # =================================================================
     embedding_model: str = "all-MiniLM-L6-v2"
     chroma_collection: str = "contextfs_memories"
-    chroma_host: str | None = None  # None = embedded mode
+    chroma_host: str | None = None  # None = embedded mode, set to "localhost" for server mode
     chroma_port: int = 8000
+    # Auto-start ChromaDB server on corruption detection (prevents multi-process issues)
+    chroma_auto_server: bool = True
 
     # =================================================================
     # Embedding Backend Configuration

@@ -76,12 +76,17 @@ class ContextFS:
         self._init_db()
 
         # Initialize RAG backend with configurable embedding backend
+        # When chroma_host is set, uses HttpClient (server mode) instead of PersistentClient
+        # When chroma_auto_server is True, auto-starts server on corruption
         self.rag = RAGBackend(
             data_dir=self.data_dir,
             embedding_model=self.config.embedding_model,
             embedding_backend=self.config.embedding_backend,
             use_gpu=self.config.use_gpu,
             parallel_workers=self.config.embedding_parallel_workers,
+            chroma_host=self.config.chroma_host,
+            chroma_port=self.config.chroma_port,
+            chroma_auto_server=self.config.chroma_auto_server,
         )
 
         # Initialize FTS and Hybrid search backends
@@ -279,6 +284,31 @@ class ContextFS:
         """Load relevant context on startup."""
         # This could load recent memories, active session, etc.
         pass
+
+    def check_and_repair_chromadb(self) -> bool:
+        """Check if ChromaDB needs repair and rebuild if necessary.
+
+        This is called automatically when corruption is detected during
+        initialization. Returns True if repair was performed.
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        if not self.rag.needs_rebuild:
+            return False
+
+        logger.info("ChromaDB was auto-recovered from corruption. Rebuilding from SQLite...")
+
+        try:
+            # Rebuild ChromaDB from SQLite (our memories are safe there)
+            stats = self.rebuild_chromadb()
+            logger.info(f"ChromaDB rebuilt successfully: {stats.get('rebuilt', 0)} memories")
+            self.rag.mark_rebuilt()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to rebuild ChromaDB: {e}")
+            return False
 
     # ==================== Auto-Indexing ====================
 

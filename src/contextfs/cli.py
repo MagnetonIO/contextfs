@@ -1904,6 +1904,79 @@ def graph_status():
         console.print("  3. Restart contextfs")
 
 
+@app.command("chroma-server")
+def chroma_server(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to bind to"),
+    data_path: Path = typer.Option(
+        None, "--path", help="ChromaDB data path (default: ~/.contextfs/chroma_db)"
+    ),
+    background: bool = typer.Option(False, "--daemon", "-d", help="Run in background"),
+):
+    """Start ChromaDB server for multi-process access.
+
+    Running ChromaDB as a server prevents corruption from concurrent access.
+    All ContextFS instances connect to this server instead of using embedded mode.
+
+    After starting the server, set CONTEXTFS_CHROMA_HOST=localhost in your
+    environment or add chroma_host: localhost to your config.
+
+    Examples:
+        contextfs chroma-server                    # Start on localhost:8000
+        contextfs chroma-server -p 8001            # Custom port
+        contextfs chroma-server --daemon           # Run in background
+    """
+    import subprocess
+    import sys
+
+    # Default data path
+    if data_path is None:
+        data_path = Path.home() / ".contextfs" / "chroma_db"
+
+    data_path.mkdir(parents=True, exist_ok=True)
+
+    console.print("[bold]ChromaDB Server[/bold]")
+    console.print(f"  Data path: {data_path}")
+    console.print(f"  Listening: http://{host}:{port}")
+    console.print()
+    console.print("[green]To use server mode, set:[/green]")
+    console.print(f"  export CONTEXTFS_CHROMA_HOST={host}")
+    console.print(f"  export CONTEXTFS_CHROMA_PORT={port}")
+    console.print()
+
+    # Build the chroma run command
+    cmd = [
+        sys.executable,
+        "-m",
+        "chromadb.cli",
+        "run",
+        "--path",
+        str(data_path),
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+
+    if background:
+        # Start in background
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        console.print("[green]✅ ChromaDB server started in background[/green]")
+        console.print("   PID can be found with: pgrep -f 'chromadb.cli run'")
+    else:
+        # Run in foreground
+        console.print("[dim]Press Ctrl+C to stop[/dim]")
+        try:
+            subprocess.run(cmd)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Stopped[/yellow]")
+
+
 # Register sync subcommand group
 # Create a Typer sub-app that forwards to the Click-based sync CLI
 try:
