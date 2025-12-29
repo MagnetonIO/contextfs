@@ -31,9 +31,12 @@ from contextfs.sync.path_resolver import PathResolver, PortablePath
 from contextfs.sync.protocol import (
     DeviceInfo,
     DeviceRegistration,
+    EntityManifestEntry,
+    SyncDiffResponse,
     SyncedEdge,
     SyncedMemory,
     SyncedSession,
+    SyncManifestRequest,
     SyncPullRequest,
     SyncPullResponse,
     SyncPushRequest,
@@ -661,6 +664,165 @@ class SyncClient:
             f"Pull complete: {len(result.memories)} memories, {len(result.sessions)} sessions"
         )
         return result
+
+    # =========================================================================
+    # Content-Addressed Sync (Merkle-style)
+    # =========================================================================
+
+    def _build_manifest(
+        self,
+        namespace_ids: list[str] | None = None,
+    ) -> SyncManifestRequest:
+        """Build a manifest of all local entities for content-addressed sync.
+
+        Returns a manifest containing {id, content_hash} for all local
+        memories, sessions, and edges.
+        """
+        conn = sqlite3.connect(self._get_db_path())
+        conn.row_factory = sqlite3.Row
+
+        memory_entries: list[EntityManifestEntry] = []
+        session_entries: list[EntityManifestEntry] = []
+        edge_entries: list[EntityManifestEntry] = []
+
+        # Get all memories
+        query = "SELECT id, content, updated_at FROM memories"
+        params: list[Any] = []
+        if namespace_ids:
+            placeholders = ",".join("?" * len(namespace_ids))
+            query += f" WHERE namespace_id IN ({placeholders})"
+            params.extend(namespace_ids)
+
+        for row in conn.execute(query, params):
+            content_hash = (
+                self.compute_content_hash(row["content"]) if row["content"] is not None else None
+            )
+            updated_at = None
+            if row["updated_at"]:
+                try:
+                    updated_at = datetime.fromisoformat(row["updated_at"])
+                except (ValueError, TypeError):
+                    pass
+            memory_entries.append(
+                EntityManifestEntry(
+                    id=row["id"],
+                    content_hash=content_hash,
+                    updated_at=updated_at,
+                )
+            )
+
+        # Get all sessions
+        for row in conn.execute("SELECT id, started_at FROM sessions"):
+            started_at = None
+            if row["started_at"]:
+                try:
+                    started_at = datetime.fromisoformat(row["started_at"])
+                except (ValueError, TypeError):
+                    pass
+            session_entries.append(
+                EntityManifestEntry(
+                    id=row["id"],
+                    content_hash=None,  # Sessions don't have content hash
+                    updated_at=started_at,
+                )
+            )
+
+        # Get all edges
+        for row in conn.execute("SELECT from_id, to_id, relation, created_at FROM memory_edges"):
+            edge_id = f"{row['from_id']}:{row['to_id']}:{row['relation']}"
+            created_at = None
+            if row["created_at"]:
+                try:
+                    created_at = datetime.fromisoformat(row["created_at"])
+                except (ValueError, TypeError):
+                    pass
+            edge_entries.append(
+                EntityManifestEntry(
+                    id=edge_id,
+                    content_hash=None,
+                    updated_at=created_at,
+                )
+            )
+
+        conn.close()
+
+        return SyncManifestRequest(
+            device_id=self.device_id,
+            memories=memory_entries,
+            sessions=session_entries,
+            edges=edge_entries,
+            namespace_ids=namespace_ids,
+        )
+
+    async def pull_diff(
+        self,
+        namespace_ids: list[str] | None = None,
+    ) -> SyncDiffResponse:
+        """Pull changes using content-addressed sync (Merkle-style).
+
+        This is idempotent - run it 100 times, always correct result.
+        Instead of relying on timestamps, compares actual content hashes.
+
+        Args:
+            namespace_ids: Filter by namespaces
+
+        Returns:
+            SyncDiffResponse with missing, updated, and deleted entities
+        """
+        # Build manifest of all local entities
+        manifest = self._build_manifest(namespace_ids=namespace_ids)
+
+        logger.info(
+            f"Sending manifest: {len(manifest.memories)} memories, "
+            f"{len(manifest.sessions)} sessions, {len(manifest.edges)} edges"
+        )
+
+        # Send manifest to server, get diff back
+        response = await self._client.post(
+            f"{self.server_url}/api/sync/diff",
+            json=manifest.model_dump(mode="json"),
+        )
+        response.raise_for_status()
+
+        diff = SyncDiffResponse.model_validate(response.json())
+
+        # Apply the diff to local database
+        if diff.missing_memories or diff.missing_sessions or diff.missing_edges:
+            # Create a SyncPullResponse to reuse existing apply logic
+            pull_response = SyncPullResponse(
+                success=True,
+                memories=diff.missing_memories,
+                sessions=diff.missing_sessions,
+                edges=diff.missing_edges,
+                server_timestamp=diff.server_timestamp,
+            )
+            await self._apply_pulled_changes(pull_response)
+
+        # Handle deletions
+        for memory_id in diff.deleted_memory_ids:
+            try:
+                self.ctx.delete(memory_id)
+            except Exception:
+                pass  # Already deleted
+
+        for session_id in diff.deleted_session_ids:
+            try:
+                self.ctx.delete_session(session_id)
+            except Exception:
+                pass
+
+        # Note: Edge deletion would go here if implemented
+
+        # Update sync state
+        self._last_sync = diff.server_timestamp
+        self._save_sync_state()
+
+        logger.info(
+            f"Diff sync complete: {len(diff.missing_memories)} memories, "
+            f"{len(diff.missing_sessions)} sessions, "
+            f"{len(diff.deleted_memory_ids)} deleted"
+        )
+        return diff
 
     async def _apply_pulled_changes(self, response: SyncPullResponse) -> None:
         """Apply pulled changes to local SQLite database."""

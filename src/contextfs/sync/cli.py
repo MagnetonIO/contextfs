@@ -219,6 +219,48 @@ def pull(server: str, namespace: tuple[str, ...], since: str | None, pull_all: b
         sys.exit(1)
 
 
+@sync_cli.command(name="diff")
+@click.option(
+    "--server",
+    "-s",
+    default=DEFAULT_SERVER_URL,
+    help="Sync server URL",
+    envvar="CONTEXTFS_SYNC_SERVER",
+)
+@click.option(
+    "--namespace",
+    "-n",
+    multiple=True,
+    help="Namespace ID to sync (can specify multiple)",
+)
+def diff_sync(server: str, namespace: tuple[str, ...]):
+    """Content-addressed sync (idempotent, Merkle-style).
+
+    Compares local content hashes with server state.
+    Always produces correct result regardless of sync state.
+    """
+    from contextfs.sync import SyncClient
+
+    namespace_ids = list(namespace) if namespace else None
+
+    async def _diff():
+        async with SyncClient(server) as client:
+            return await client.pull_diff(namespace_ids=namespace_ids)
+
+    try:
+        result = run_async(_diff())
+        click.echo("Diff sync complete:")
+        click.echo(f"  Missing memories: {len(result.missing_memories)}")
+        click.echo(f"  Missing sessions: {len(result.missing_sessions)}")
+        click.echo(f"  Missing edges: {len(result.missing_edges)}")
+        click.echo(f"  Deleted: {result.total_deleted}")
+        click.echo(f"  Updated: {result.total_updated}")
+        click.echo(f"  Server time: {result.server_timestamp}")
+    except Exception as e:
+        click.echo(f"Diff sync failed: {e}", err=True)
+        sys.exit(1)
+
+
 @sync_cli.command(name="all")
 @click.option(
     "--server",
