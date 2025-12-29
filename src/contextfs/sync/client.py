@@ -1081,11 +1081,11 @@ class SyncClient:
         namespace_ids: list[str] | None = None,
     ) -> SyncResult:
         """
-        Full bidirectional sync.
+        Full bidirectional sync using content-addressed approach.
 
-        1. Push local changes to server
-        2. Pull server changes to local
-        3. Handle any conflicts
+        1. Get diff from server (what client needs + what server needs)
+        2. Push only what server is missing
+        3. Apply pulled changes locally
 
         Args:
             namespace_ids: Filter by namespaces
@@ -1098,42 +1098,72 @@ class SyncClient:
         start = time.time()
         errors: list[str] = []
 
-        # Push local changes
+        # Step 1: Get diff (content-addressed - tells us both directions)
         try:
-            push_result = await self.push(namespace_ids=namespace_ids)
+            diff_result = await self._get_diff(namespace_ids=namespace_ids)
         except Exception as e:
-            logger.error(f"Push failed: {e}")
-            errors.append(f"Push failed: {e}")
+            logger.error(f"Diff failed: {e}")
+            errors.append(f"Diff failed: {e}")
+            # Return empty result on diff failure
+            return SyncResult(
+                pushed=SyncPushResponse(
+                    success=False,
+                    accepted=0,
+                    rejected=0,
+                    conflicts=[],
+                    server_timestamp=datetime.now(timezone.utc),
+                    message=str(e),
+                ),
+                pulled=SyncPullResponse(
+                    success=False,
+                    memories=[],
+                    sessions=[],
+                    edges=[],
+                    server_timestamp=datetime.now(timezone.utc),
+                ),
+                duration_ms=(time.time() - start) * 1000,
+                errors=errors,
+            )
+
+        # Step 2: Push only what server is missing (content-addressed push)
+        push_result: SyncPushResponse
+        if diff_result.total_server_missing > 0:
+            try:
+                push_result = await self._push_by_ids(
+                    memory_ids=diff_result.server_missing_memory_ids,
+                    session_ids=diff_result.server_missing_session_ids,
+                    edge_ids=diff_result.server_missing_edge_ids,
+                )
+            except Exception as e:
+                logger.error(f"Push failed: {e}")
+                errors.append(f"Push failed: {e}")
+                push_result = SyncPushResponse(
+                    success=False,
+                    accepted=0,
+                    rejected=0,
+                    conflicts=[],
+                    server_timestamp=datetime.now(timezone.utc),
+                    message=str(e),
+                )
+        else:
+            # Nothing to push
             push_result = SyncPushResponse(
-                success=False,
+                success=True,
                 accepted=0,
                 rejected=0,
                 conflicts=[],
-                server_timestamp=datetime.now(timezone.utc),
-                message=str(e),
-            )
-
-        # Pull remote changes using content-addressed sync (idempotent)
-        try:
-            diff_result = await self.pull_diff(namespace_ids=namespace_ids)
-            # Convert SyncDiffResponse to SyncPullResponse for compatibility
-            pull_result = SyncPullResponse(
-                success=diff_result.success,
-                memories=diff_result.missing_memories,
-                sessions=diff_result.missing_sessions,
-                edges=diff_result.missing_edges,
                 server_timestamp=diff_result.server_timestamp,
             )
-        except Exception as e:
-            logger.error(f"Pull failed: {e}")
-            errors.append(f"Pull failed: {e}")
-            pull_result = SyncPullResponse(
-                success=False,
-                memories=[],
-                sessions=[],
-                edges=[],
-                server_timestamp=datetime.now(timezone.utc),
-            )
+
+        # Step 3: Apply pulled changes (already done in _get_diff via pull_diff)
+        # Convert SyncDiffResponse to SyncPullResponse for compatibility
+        pull_result = SyncPullResponse(
+            success=diff_result.success,
+            memories=diff_result.missing_memories,
+            sessions=diff_result.missing_sessions,
+            edges=diff_result.missing_edges,
+            server_timestamp=diff_result.server_timestamp,
+        )
 
         duration_ms = (time.time() - start) * 1000
 
@@ -1150,6 +1180,255 @@ class SyncClient:
         )
 
         return result
+
+    async def _get_diff(
+        self,
+        namespace_ids: list[str] | None = None,
+    ) -> SyncDiffResponse:
+        """Get diff without applying changes (for sync_all coordination)."""
+        # Build manifest of all local entities
+        manifest = self._build_manifest(namespace_ids=namespace_ids)
+
+        logger.info(
+            f"Sending manifest: {len(manifest.memories)} memories, "
+            f"{len(manifest.sessions)} sessions, {len(manifest.edges)} edges"
+        )
+
+        # Send manifest to server, get diff back
+        response = await self._client.post(
+            f"{self.server_url}/api/sync/diff",
+            json=manifest.model_dump(mode="json"),
+        )
+        response.raise_for_status()
+
+        diff = SyncDiffResponse.model_validate(response.json())
+
+        # Apply the diff to local database (pull)
+        if diff.missing_memories or diff.missing_sessions or diff.missing_edges:
+            pull_response = SyncPullResponse(
+                success=True,
+                memories=diff.missing_memories,
+                sessions=diff.missing_sessions,
+                edges=diff.missing_edges,
+                server_timestamp=diff.server_timestamp,
+            )
+            await self._apply_pulled_changes(pull_response)
+
+        # Handle deletions
+        for memory_id in diff.deleted_memory_ids:
+            try:
+                self.ctx.delete(memory_id)
+            except Exception:
+                pass
+
+        for session_id in diff.deleted_session_ids:
+            try:
+                self.ctx.delete_session(session_id)
+            except Exception:
+                pass
+
+        logger.info(
+            f"Diff result: {len(diff.missing_memories)} to pull, "
+            f"{diff.total_server_missing} server needs"
+        )
+        return diff
+
+    async def _push_by_ids(
+        self,
+        memory_ids: list[str],
+        session_ids: list[str],
+        edge_ids: list[str],
+    ) -> SyncPushResponse:
+        """Push specific items by ID (content-addressed push)."""
+        # Load memories by ID
+        memories = self._get_memories_by_ids(memory_ids) if memory_ids else []
+
+        # Convert to SyncedMemory format
+        synced_memories = []
+        memory_clocks: dict[str, VectorClock] = {}
+        memory_embeddings = self._get_embeddings_from_chroma([m.id for m in memories])
+
+        for m in memories:
+            clock_data = m.metadata.get("_vector_clock") if m.metadata else None
+            if isinstance(clock_data, str):
+                clock = VectorClock.from_json(clock_data)
+            elif isinstance(clock_data, dict):
+                clock = VectorClock.from_dict(clock_data)
+            else:
+                clock = VectorClock()
+
+            clock = clock.increment(self.device_id)
+            memory_clocks[m.id] = clock
+
+            paths = self._normalize_memory_paths(m)
+
+            synced_memories.append(
+                SyncedMemory(
+                    id=m.id,
+                    content=m.content,
+                    type=m.type.value if hasattr(m.type, "value") else str(m.type),
+                    tags=m.tags,
+                    summary=m.summary,
+                    namespace_id=m.namespace_id,
+                    repo_url=paths["repo_url"],
+                    repo_name=paths["repo_name"],
+                    relative_path=paths["relative_path"],
+                    source_file=m.source_file,
+                    source_repo=m.source_repo,
+                    source_tool=getattr(m, "source_tool", None),
+                    project=getattr(m, "project", None),
+                    session_id=getattr(m, "session_id", None),
+                    created_at=m.created_at,
+                    updated_at=m.updated_at,
+                    vector_clock=clock.to_dict(),
+                    content_hash=self.compute_content_hash(m.content),
+                    deleted_at=getattr(m, "deleted_at", None),
+                    metadata=m.metadata,
+                    embedding=memory_embeddings.get(m.id),
+                )
+            )
+
+        # Load sessions by ID
+        sessions = self._get_sessions_by_ids(session_ids) if session_ids else []
+
+        # Load edges by ID
+        edges = self._get_edges_by_ids(edge_ids) if edge_ids else []
+
+        request = SyncPushRequest(
+            device_id=self.device_id,
+            memories=synced_memories,
+            sessions=sessions,
+            edges=edges,
+            last_sync_timestamp=self._last_sync,
+        )
+
+        response = await self._client.post(
+            f"{self.server_url}/api/sync/push",
+            json=request.model_dump(mode="json"),
+        )
+        response.raise_for_status()
+
+        result = SyncPushResponse.model_validate(response.json())
+        self._last_sync = result.server_timestamp
+        self._last_push = result.server_timestamp
+        self._save_sync_state()
+
+        if result.accepted > 0:
+            self._update_local_vector_clocks(memories, memory_clocks)
+
+        logger.info(
+            f"Content-addressed push: {result.accepted} accepted, "
+            f"{result.rejected} rejected, {len(result.conflicts)} conflicts"
+        )
+        return result
+
+    def _get_memories_by_ids(self, memory_ids: list[str]) -> list[Memory]:
+        """Get memories by specific IDs."""
+        if not memory_ids:
+            return []
+
+        conn = sqlite3.connect(self._get_db_path())
+        conn.row_factory = sqlite3.Row
+
+        placeholders = ",".join("?" * len(memory_ids))
+        cursor = conn.execute(
+            f"SELECT * FROM memories WHERE id IN ({placeholders})",
+            memory_ids,
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [self.ctx._row_to_memory(row) for row in rows]
+
+    def _get_sessions_by_ids(self, session_ids: list[str]) -> list[SyncedSession]:
+        """Get sessions by specific IDs."""
+        if not session_ids:
+            return []
+
+        conn = sqlite3.connect(self._get_db_path())
+        conn.row_factory = sqlite3.Row
+
+        placeholders = ",".join("?" * len(session_ids))
+        cursor = conn.execute(
+            f"SELECT * FROM sessions WHERE id IN ({placeholders})",
+            session_ids,
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        sessions = []
+        for row in rows:
+            try:
+                clock_data = row["vector_clock"] or "{}"
+            except (KeyError, IndexError):
+                clock_data = "{}"
+            if isinstance(clock_data, str):
+                clock = VectorClock.from_json(clock_data) if clock_data else VectorClock()
+            else:
+                clock = VectorClock()
+            clock = clock.increment(self.device_id)
+
+            sessions.append(
+                SyncedSession(
+                    id=row["id"],
+                    label=row["label"],
+                    namespace_id=row["namespace_id"] or "global",
+                    tool=row["tool"] or "contextfs",
+                    repo_path=row["repo_path"],
+                    branch=row["branch"],
+                    started_at=datetime.fromisoformat(row["started_at"])
+                    if row["started_at"]
+                    else datetime.now(timezone.utc),
+                    ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+                    summary=row["summary"],
+                    vector_clock=clock.to_dict(),
+                )
+            )
+
+        return sessions
+
+    def _get_edges_by_ids(self, edge_ids: list[str]) -> list[SyncedEdge]:
+        """Get edges by specific IDs (format: from_id:to_id:relation)."""
+        if not edge_ids:
+            return []
+
+        conn = sqlite3.connect(self._get_db_path())
+        conn.row_factory = sqlite3.Row
+
+        edges = []
+        for edge_id in edge_ids:
+            parts = edge_id.split(":")
+            if len(parts) >= 3:
+                from_id, to_id, relation = parts[0], parts[1], ":".join(parts[2:])
+                cursor = conn.execute(
+                    "SELECT * FROM memory_edges WHERE from_id = ? AND to_id = ? AND relation = ?",
+                    (from_id, to_id, relation),
+                )
+                row = cursor.fetchone()
+                if row:
+                    try:
+                        clock_data = row["vector_clock"] or "{}"
+                    except (KeyError, IndexError):
+                        clock_data = "{}"
+                    if isinstance(clock_data, str):
+                        clock = VectorClock.from_json(clock_data) if clock_data else VectorClock()
+                    else:
+                        clock = VectorClock()
+                    clock = clock.increment(self.device_id)
+
+                    edges.append(
+                        SyncedEdge(
+                            id=edge_id,
+                            from_id=row["from_id"],
+                            to_id=row["to_id"],
+                            relation=row["relation"],
+                            weight=row["weight"] or 1.0,
+                            vector_clock=clock.to_dict(),
+                        )
+                    )
+
+        conn.close()
+        return edges
 
     # =========================================================================
     # Status

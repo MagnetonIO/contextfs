@@ -206,7 +206,7 @@ async def contextfs_sync_diff(
         namespace_ids: Optional list of namespace IDs to sync
 
     Returns:
-        Dict with diff sync result
+        Dict with diff sync result including what server is missing
     """
     from contextfs.sync import SyncClient
 
@@ -220,9 +220,13 @@ async def contextfs_sync_diff(
                 "missing_edges": len(result.missing_edges),
                 "deleted": result.total_deleted,
                 "updated": result.total_updated,
+                "server_missing_memories": len(result.server_missing_memory_ids),
+                "server_missing_sessions": len(result.server_missing_session_ids),
+                "server_missing_edges": len(result.server_missing_edge_ids),
                 "server_timestamp": result.server_timestamp.isoformat(),
                 "message": (
-                    f"Diff sync: {len(result.missing_memories)} missing memories, "
+                    f"Diff: {len(result.missing_memories)} to pull, "
+                    f"{result.total_server_missing} server needs, "
                     f"{result.total_updated} updated, {result.total_deleted} deleted"
                 ),
             }

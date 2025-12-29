@@ -648,7 +648,10 @@ async def compute_diff(
 
     This is idempotent - run it 100 times, always correct result.
     Client sends list of {id, content_hash} for all their entities.
-    Server returns what's missing, updated, or deleted.
+    Server returns:
+      - What client is missing (for pull)
+      - What server is missing (for push)
+      - What was deleted
     """
     server_timestamp = datetime.now(timezone.utc)
 
@@ -663,6 +666,9 @@ async def compute_diff(
     deleted_memory_ids: list[str] = []
     deleted_session_ids: list[str] = []
     deleted_edge_ids: list[str] = []
+    server_missing_memory_ids: list[str] = []
+    server_missing_session_ids: list[str] = []
+    server_missing_edge_ids: list[str] = []
     updated_count = 0
 
     # Query all server memories (optionally filtered by namespace)
@@ -672,7 +678,11 @@ async def compute_diff(
     result = await session.execute(memory_query)
     server_memories = result.scalars().all()
 
+    # Build server memory map for reverse lookup
+    server_memory_ids = set()
+
     for m in server_memories:
+        server_memory_ids.add(m.id)
         client_hash = client_memory_map.get(m.id)
 
         if m.deleted_at:
@@ -687,6 +697,11 @@ async def compute_diff(
             missing_memories.append(_memory_model_to_synced(m))
             updated_count += 1
 
+    # Find what server is missing (client has, server doesn't)
+    for client_id in client_memory_map:
+        if client_id not in server_memory_ids:
+            server_missing_memory_ids.append(client_id)
+
     # Query all server sessions
     session_query = select(SyncedSessionModel)
     if request.namespace_ids:
@@ -696,24 +711,42 @@ async def compute_diff(
     result = await session.execute(session_query)
     server_sessions = result.scalars().all()
 
+    # Build server session map for reverse lookup
+    server_session_ids = set()
+
     for s in server_sessions:
+        server_session_ids.add(s.id)
         if s.deleted_at:
             if s.id in client_session_ids:
                 deleted_session_ids.append(s.id)
         elif s.id not in client_session_ids:
             missing_sessions.append(_session_model_to_synced(s))
 
+    # Find what server is missing (sessions)
+    for client_id in client_session_ids:
+        if client_id not in server_session_ids:
+            server_missing_session_ids.append(client_id)
+
     # Query all server edges
     result = await session.execute(select(SyncedEdgeModel))
     server_edges = result.scalars().all()
 
+    # Build server edge map for reverse lookup
+    server_edge_ids = set()
+
     for e in server_edges:
         edge_id = f"{e.from_id}:{e.to_id}:{e.relation}"
+        server_edge_ids.add(edge_id)
         if e.deleted_at:
             if edge_id in client_edge_ids:
                 deleted_edge_ids.append(edge_id)
         elif edge_id not in client_edge_ids:
             missing_edges.append(_edge_model_to_synced(e))
+
+    # Find what server is missing (edges)
+    for client_id in client_edge_ids:
+        if client_id not in server_edge_ids:
+            server_missing_edge_ids.append(client_id)
 
     # Update device sync state
     await _update_device_sync_state(session, request.device_id, pull_at=server_timestamp)
@@ -721,10 +754,16 @@ async def compute_diff(
 
     total_missing = len(missing_memories) + len(missing_sessions) + len(missing_edges)
     total_deleted = len(deleted_memory_ids) + len(deleted_session_ids) + len(deleted_edge_ids)
+    total_server_missing = (
+        len(server_missing_memory_ids)
+        + len(server_missing_session_ids)
+        + len(server_missing_edge_ids)
+    )
 
     logger.info(
         f"Diff computed for {request.device_id}: "
-        f"{total_missing} missing, {updated_count} updated, {total_deleted} deleted"
+        f"{total_missing} missing, {updated_count} updated, {total_deleted} deleted, "
+        f"{total_server_missing} server needs"
     )
 
     return SyncDiffResponse(
@@ -735,9 +774,13 @@ async def compute_diff(
         deleted_memory_ids=deleted_memory_ids,
         deleted_session_ids=deleted_session_ids,
         deleted_edge_ids=deleted_edge_ids,
+        server_missing_memory_ids=server_missing_memory_ids,
+        server_missing_session_ids=server_missing_session_ids,
+        server_missing_edge_ids=server_missing_edge_ids,
         total_missing=total_missing,
         total_updated=updated_count,
         total_deleted=total_deleted,
+        total_server_missing=total_server_missing,
         server_timestamp=server_timestamp,
     )
 

@@ -312,15 +312,16 @@ class SyncDiffResponse(BaseModel):
 
     Content-addressed sync response - tells client exactly what
     they're missing, what's been updated, and what's been deleted.
+    Also tells client what server is missing (for content-addressed push).
     """
 
     success: bool = True
 
-    # Memories client is missing or has outdated
+    # Memories client is missing or has outdated (for pull)
     missing_memories: list[SyncedMemory] = Field(default_factory=list)
-    # Sessions client is missing or has outdated
+    # Sessions client is missing or has outdated (for pull)
     missing_sessions: list[SyncedSession] = Field(default_factory=list)
-    # Edges client is missing or has outdated
+    # Edges client is missing or has outdated (for pull)
     missing_edges: list[SyncedEdge] = Field(default_factory=list)
 
     # IDs of entities that were deleted on server
@@ -328,10 +329,16 @@ class SyncDiffResponse(BaseModel):
     deleted_session_ids: list[str] = Field(default_factory=list)
     deleted_edge_ids: list[str] = Field(default_factory=list)
 
+    # IDs of entities that server is missing (for content-addressed push)
+    server_missing_memory_ids: list[str] = Field(default_factory=list)
+    server_missing_session_ids: list[str] = Field(default_factory=list)
+    server_missing_edge_ids: list[str] = Field(default_factory=list)
+
     # Summary stats
     total_missing: int = 0
     total_updated: int = 0
     total_deleted: int = 0
+    total_server_missing: int = 0  # What server needs from client
 
     server_timestamp: datetime = Field(default_factory=utc_now)
     has_more: bool = False  # True if more pages available

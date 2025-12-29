@@ -250,9 +250,12 @@ def diff_sync(server: str, namespace: tuple[str, ...]):
     try:
         result = run_async(_diff())
         click.echo("Diff sync complete:")
-        click.echo(f"  Missing memories: {len(result.missing_memories)}")
-        click.echo(f"  Missing sessions: {len(result.missing_sessions)}")
-        click.echo(f"  Missing edges: {len(result.missing_edges)}")
+        click.echo(
+            f"  To pull: {len(result.missing_memories)} memories, {len(result.missing_sessions)} sessions"
+        )
+        click.echo(
+            f"  Server needs: {len(result.server_missing_memory_ids)} memories, {len(result.server_missing_session_ids)} sessions"
+        )
         click.echo(f"  Deleted: {result.total_deleted}")
         click.echo(f"  Updated: {result.total_updated}")
         click.echo(f"  Server time: {result.server_timestamp}")
