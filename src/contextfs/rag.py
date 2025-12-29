@@ -110,8 +110,15 @@ class RAGBackend:
     def _ensure_initialized(self) -> None:
         """Lazy initialize ChromaDB and embedding model."""
         if self._client is not None:
+            # Validate collection is still valid (handles stale references after rebuild)
+            if not self._validate_collection():
+                self._reinitialize_client()
             return
 
+        self._initialize_client()
+
+    def _initialize_client(self) -> None:
+        """Initialize ChromaDB client and collection."""
         try:
             import chromadb
             from chromadb.config import Settings
@@ -129,7 +136,34 @@ class RAGBackend:
         except ImportError:
             raise ImportError("ChromaDB not installed. Install with: pip install chromadb")
 
-        # Initialize embedding backend
+    def _validate_collection(self) -> bool:
+        """Check if collection reference is still valid."""
+        if self._collection is None:
+            return False
+        try:
+            # Try a lightweight operation to validate collection exists
+            self._collection.count()
+            return True
+        except Exception:
+            # Collection reference is stale
+            return False
+
+    def _reinitialize_client(self) -> None:
+        """Reinitialize ChromaDB client (used when collection becomes stale)."""
+        import logging
+
+        logging.getLogger(__name__).info(
+            "Reinitializing ChromaDB client (stale collection detected)"
+        )
+        self._client = None
+        self._collection = None
+        self._initialize_client()
+
+    def _ensure_embedder(self) -> None:
+        """Initialize embedding backend if not already done."""
+        if self._embedder is not None:
+            return
+
         from contextfs.embedding import create_embedder
 
         # Auto-detect GPU if not specified
@@ -148,11 +182,13 @@ class RAGBackend:
     def _get_embedding(self, text: str) -> list[float]:
         """Generate embedding for text."""
         self._ensure_initialized()
+        self._ensure_embedder()
         return self._embedder.encode_single(text)
 
     def _get_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts in batch (much faster)."""
         self._ensure_initialized()
+        self._ensure_embedder()
         return self._embedder.encode(texts)
 
     def add_memory(self, memory: Memory) -> None:

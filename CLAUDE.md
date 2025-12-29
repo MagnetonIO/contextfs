@@ -56,3 +56,25 @@ Always search contextfs memories FIRST before searching code directly:
 2. Use `contextfs_evolve` on memory ID `f9b4bb25` (API reference) to update the complete endpoint list
 3. Include: endpoint/command name, parameters, and brief description
 4. This keeps the API reference memory up-to-date for future sessions
+
+## ChromaDB and MCP Server Testing
+**The MCP server caches ChromaDB collection references.** If ChromaDB is rebuilt/reset, the MCP server will have stale references causing "Collection does not exist" errors.
+
+### Avoiding ChromaDB Issues During Testing
+1. **Use CLI for testing, not MCP tools**: `python -m contextfs.cli search "query"` instead of MCP `contextfs_search`
+2. **Never rebuild ChromaDB while MCP server is running** - it will cache stale collection IDs
+3. **If you must rebuild ChromaDB**: Restart Claude Code (or the MCP server) after rebuilding
+4. **Fast recovery without full rebuild**: `contextfs rebuild-chroma` rebuilds from SQLite (doesn't re-index files)
+
+### When ChromaDB Gets Out of Sync
+```bash
+# Fast recovery - rebuilds ChromaDB index from SQLite memories
+echo "y" | python -m contextfs.cli rebuild-chroma
+
+# Then restart Claude Code to pick up new collection
+```
+
+### Testing Best Practices
+- Always use `python -m contextfs.cli` for testing (not `contextfs` or `uv run contextfs`)
+- This ensures you're testing the local code, not an installed version
+- The CLI creates fresh ChromaDB connections, avoiding cache issues
