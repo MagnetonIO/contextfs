@@ -58,20 +58,27 @@ Always search contextfs memories FIRST before searching code directly:
 4. This keeps the API reference memory up-to-date for future sessions
 
 ## ChromaDB and MCP Server Testing
-**The MCP server caches ChromaDB collection references.** If ChromaDB is rebuilt/reset, the MCP server will have stale references causing "Collection does not exist" errors.
+**The MCP server caches ChromaDB collection references.** If you get "Collection does not exist" errors, the fix is usually just reconnecting MCP - NOT rebuilding ChromaDB.
+
+### When MCP Tools Fail with Collection Errors
+**FIRST: Try reconnecting MCP (don't rebuild!):**
+1. Run `/mcp` in Claude Code to see MCP server status
+2. Disconnect and reconnect the contextfs MCP server
+3. Or restart Claude Code entirely
+
+**Rebuilding ChromaDB should be a last resort** - it's slow and usually unnecessary.
 
 ### Avoiding ChromaDB Issues During Testing
 1. **Use CLI for testing, not MCP tools**: `python -m contextfs.cli search "query"` instead of MCP `contextfs_search`
 2. **Never rebuild ChromaDB while MCP server is running** - it will cache stale collection IDs
-3. **If you must rebuild ChromaDB**: Restart Claude Code (or the MCP server) after rebuilding
-4. **Fast recovery without full rebuild**: `contextfs rebuild-chroma` rebuilds from SQLite (doesn't re-index files)
+3. **If MCP fails**: Try `/mcp` reconnect FIRST before any rebuild
 
-### When ChromaDB Gets Out of Sync
+### Only If Reconnect Doesn't Work
 ```bash
-# Fast recovery - rebuilds ChromaDB index from SQLite memories
+# rebuild-chroma preserves ALL data (rebuilds from SQLite, no re-indexing needed)
 echo "y" | python -m contextfs.cli rebuild-chroma
 
-# Then restart Claude Code to pick up new collection
+# Then reconnect MCP via /mcp command
 ```
 
 ### Testing Best Practices
