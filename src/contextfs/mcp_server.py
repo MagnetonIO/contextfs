@@ -358,7 +358,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="contextfs_search",
-            description="Search memories using semantic similarity. Supports cross-repo search.",
+            description="Search memories using hybrid search (combines keyword + semantic). Supports cross-repo search.",
             inputSchema={
                 "type": "object",
                 "properties": {

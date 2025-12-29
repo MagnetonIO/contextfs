@@ -87,8 +87,21 @@ def search(
     namespace: str | None = typer.Option(
         None, "--namespace", "-ns", help="Filter to specific namespace (default: search all)"
     ),
+    mode: str = typer.Option(
+        "hybrid",
+        "--mode",
+        "-m",
+        help="Search mode: hybrid (default), semantic, keyword, smart",
+    ),
 ):
-    """Search memories across all repos/namespaces."""
+    """Search memories across all repos/namespaces.
+
+    Modes:
+      hybrid   - Combines keyword + semantic search (default, best overall)
+      semantic - Vector/embedding search only (good for conceptual queries)
+      keyword  - FTS5 keyword search only (fast, good for exact terms)
+      smart    - Routes to optimal backend based on memory type
+    """
     ctx = get_ctx()
 
     type_filter = MemoryType(type) if type else None
@@ -99,6 +112,7 @@ def search(
         type=type_filter,
         namespace_id=namespace,
         cross_repo=(namespace is None),
+        mode=mode,
     )
 
     if not results:
@@ -111,15 +125,21 @@ def search(
     table.add_column("Type", style="magenta")
     table.add_column("Content")
     table.add_column("Tags", style="blue")
+    # Show source column for hybrid mode
+    if mode == "hybrid":
+        table.add_column("Source", style="dim")
 
     for r in results:
-        table.add_row(
+        row = [
             r.memory.id[:8],
             f"{r.score:.2f}",
             r.memory.type.value,
             r.memory.content[:60] + "..." if len(r.memory.content) > 60 else r.memory.content,
             ", ".join(r.memory.tags) if r.memory.tags else "",
-        )
+        ]
+        if mode == "hybrid":
+            row.append(getattr(r, "source", "") or "")
+        table.add_row(*row)
 
     console.print(table)
 

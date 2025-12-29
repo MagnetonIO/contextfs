@@ -84,6 +84,12 @@ class ContextFS:
             parallel_workers=self.config.embedding_parallel_workers,
         )
 
+        # Initialize FTS and Hybrid search backends
+        from contextfs.fts import FTSBackend, HybridSearch
+
+        self._fts = FTSBackend(self._db_path)
+        self._hybrid = HybridSearch(fts_backend=self._fts, rag_backend=self.rag)
+
         # Initialize graph backend if configured
         self._graph = self._init_graph_backend()
 
@@ -736,7 +742,8 @@ class ContextFS:
         source_repo: str | None = None,
         project: str | None = None,
         cross_repo: bool = False,
-        use_semantic: bool = True,
+        mode: str = "hybrid",
+        use_semantic: bool | None = None,  # Deprecated, use mode instead
     ) -> list[SearchResult]:
         """
         Search memories.
@@ -751,12 +758,21 @@ class ContextFS:
             source_repo: Filter by source repository name
             project: Filter by project name (groups memories across repos)
             cross_repo: If True, search across all namespaces/repos
-            use_semantic: Use semantic search (vs FTS only)
+            mode: Search mode - "hybrid" (default), "semantic", "keyword", "smart"
+                  - hybrid: Combines FTS + RAG using Reciprocal Rank Fusion
+                  - semantic: RAG vector search only (good for conceptual queries)
+                  - keyword: FTS5 keyword search only (fast, good for exact terms)
+                  - smart: Routes to optimal backend based on memory type
+            use_semantic: DEPRECATED - use mode="semantic" or mode="keyword" instead
 
         Returns:
             List of SearchResult objects
         """
         import re
+
+        # Handle deprecated use_semantic parameter
+        if use_semantic is not None:
+            mode = "semantic" if use_semantic else "keyword"
 
         # Auto-detect memory ID pattern (8+ hex chars)
         # If query looks like a memory ID, use recall() instead of vector search
@@ -774,23 +790,41 @@ class ContextFS:
             None if (cross_repo or project) else (namespace_id or self.namespace_id)
         )
 
-        if use_semantic:
+        # Determine fetch limit (over-fetch for post-filtering)
+        fetch_limit = limit * 2 if (source_tool or source_repo or project) else limit
+
+        # Execute search based on mode
+        if mode == "semantic":
             results = self.rag.search(
                 query=query,
-                limit=limit * 2
-                if (source_tool or source_repo or project)
-                else limit,  # Over-fetch for filtering
+                limit=fetch_limit,
                 type=type,
                 tags=tags,
                 namespace_id=effective_namespace,
             )
-        else:
-            results = self._fts_search(
-                query,
-                limit * 2 if (source_tool or source_repo or project) else limit,
-                type,
-                tags,
-                effective_namespace,
+        elif mode == "keyword":
+            results = self._fts.search(
+                query=query,
+                limit=fetch_limit,
+                type=type,
+                tags=tags,
+                namespace_id=effective_namespace,
+            )
+        elif mode == "smart":
+            results = self._hybrid.smart_search(
+                query=query,
+                limit=fetch_limit,
+                type=type,
+                tags=tags,
+                namespace_id=effective_namespace,
+            )
+        else:  # Default: hybrid
+            results = self._hybrid.search(
+                query=query,
+                limit=fetch_limit,
+                type=type,
+                tags=tags,
+                namespace_id=effective_namespace,
             )
 
         # Post-filter by source_tool, source_repo, and project if specified
