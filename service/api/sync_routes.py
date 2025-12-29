@@ -646,6 +646,11 @@ async def _update_device_sync_state(
     if device:
         now = datetime.now(timezone.utc)
         device.last_sync_at = now
+        # Update sync_cursor on both push and pull
+        # Push: device doesn't need to pull its own pushed data
+        # Pull: device has received data up to this point
+        if push_at:
+            device.sync_cursor = push_at
         if pull_at:
             device.sync_cursor = pull_at
 
