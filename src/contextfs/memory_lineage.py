@@ -22,7 +22,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -148,7 +148,7 @@ class MemoryLineage:
             metadata={
                 **original.metadata,
                 "evolved_from": memory_id,
-                "evolution_timestamp": datetime.now().isoformat(),
+                "evolution_timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -253,7 +253,7 @@ class MemoryLineage:
                 **metadata,
                 "merged_from": [m.id for m in memories],
                 "merge_strategy": strategy.value,
-                "merge_timestamp": datetime.now().isoformat(),
+                "merge_timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -421,7 +421,7 @@ class MemoryLineage:
                     "split_from": memory_id,
                     "split_part": i + 1,
                     "split_total": len(parts),
-                    "split_timestamp": datetime.now().isoformat(),
+                    "split_timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
 
@@ -479,7 +479,7 @@ class MemoryLineage:
             metadata = {
                 "resolution": resolution.value,
                 "notes": notes,
-                "detected_at": datetime.now().isoformat(),
+                "detected_at": datetime.now(timezone.utc).isoformat(),
             }
 
             try:
@@ -528,7 +528,7 @@ class MemoryLineage:
                 relation=EdgeRelation.SUPERSEDES,
                 metadata={
                     "reason": reason,
-                    "superseded_at": datetime.now().isoformat(),
+                    "superseded_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             # Also create inverse

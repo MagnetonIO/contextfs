@@ -52,11 +52,16 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_tz_aware(dt: datetime | None) -> datetime | None:
-    """Ensure datetime is timezone-aware (assumes UTC if naive)."""
+    """Ensure datetime is timezone-aware.
+
+    SQLite stores datetimes as local time without timezone info.
+    This function converts naive datetimes (assumed local) to UTC.
+    """
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        # Naive datetime from SQLite is local time - convert to UTC
+        return dt.astimezone(timezone.utc)
     return dt
 
 

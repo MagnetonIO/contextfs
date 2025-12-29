@@ -17,7 +17,7 @@ Optionally integrates GraphBackend for memory lineage and relationships.
 import json
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -654,7 +654,7 @@ class StorageRouter(StorageBackend):
         if project is not None:
             memory.project = project
 
-        memory.updated_at = datetime.now()
+        memory.updated_at = datetime.now(timezone.utc)
 
         # Delete and re-save (simpler than partial updates)
         self.delete(memory.id)
@@ -1158,7 +1158,7 @@ class StorageRouter(StorageBackend):
             to_id=to_id,
             relation=relation,
             weight=weight,
-            created_at=datetime.now(),
+            created_at=datetime.now(timezone.utc),
             metadata=metadata or {},
         )
 

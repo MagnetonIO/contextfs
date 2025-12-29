@@ -9,7 +9,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -560,8 +560,8 @@ class ContextFS:
             "project": project,
             "session_id": self._current_session.id if self._current_session else None,
             "metadata": metadata or {},
-            "created_at": created_at or datetime.now(),
-            "updated_at": updated_at or datetime.now(),
+            "created_at": created_at or datetime.now(timezone.utc),
+            "updated_at": updated_at or datetime.now(timezone.utc),
         }
         if id is not None:
             memory_kwargs["id"] = id
@@ -1127,7 +1127,7 @@ class ContextFS:
         if metadata is not None:
             memory.metadata = metadata
 
-        memory.updated_at = datetime.now()
+        memory.updated_at = datetime.now(timezone.utc)
 
         # Update in database
         conn = sqlite3.connect(self._db_path)

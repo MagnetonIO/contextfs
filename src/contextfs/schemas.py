@@ -4,7 +4,7 @@ Schemas for ContextFS memory and session management.
 
 import hashlib
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -296,7 +296,7 @@ class Session(BaseModel):
         return msg
 
     def end(self) -> None:
-        self.ended_at = datetime.now()
+        self.ended_at = datetime.now(timezone.utc)
 
 
 class SearchResult(BaseModel):
