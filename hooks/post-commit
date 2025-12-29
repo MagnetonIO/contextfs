@@ -30,10 +30,10 @@ if [ -z "$REPO_ROOT" ]; then
 fi
 
 # Run incremental index in background to not block commit
-# Only index files, skip commits (the commit just happened)
+# Index both files and the new commit
 (
     cd "$REPO_ROOT"
-    $CONTEXTFS index --incremental --mode files_only --quiet 2>/dev/null &
+    $CONTEXTFS index --incremental --quiet 2>/dev/null &
 ) &
 
 exit 0

@@ -5,11 +5,57 @@ Provides semantic search using ChromaDB and configurable embedding backends.
 Supports FastEmbed (ONNX) or sentence-transformers with optional GPU acceleration.
 """
 
+import fcntl
 import json
 import os
 from pathlib import Path
 
 from contextfs.schemas import Memory, MemoryType, SearchResult
+
+
+class ChromaLock:
+    """File-based lock for ChromaDB multi-process safety."""
+
+    def __init__(self, lock_path: Path):
+        self.lock_path = lock_path
+        self._lock_file = None
+
+    def acquire(self, timeout: float = 30.0) -> bool:
+        """Acquire exclusive lock. Returns True if acquired."""
+        import time
+
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock_file = open(self.lock_path, "w")  # noqa: SIM115 - intentionally kept open for lock
+
+        start = time.time()
+        while True:
+            try:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                if time.time() - start > timeout:
+                    self._lock_file.close()
+                    self._lock_file = None
+                    return False
+                time.sleep(0.1)
+
+    def release(self) -> None:
+        """Release the lock."""
+        if self._lock_file:
+            try:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+                self._lock_file.close()
+            except Exception:
+                pass
+            self._lock_file = None
+
+    def __enter__(self):
+        if not self.acquire():
+            raise TimeoutError("Could not acquire ChromaDB lock")
+        return self
+
+    def __exit__(self, *args):
+        self.release()
 
 
 class RAGBackend:
@@ -52,6 +98,9 @@ class RAGBackend:
 
         self._chroma_dir = data_dir / "chroma_db"
         self._chroma_dir.mkdir(parents=True, exist_ok=True)
+
+        # File lock for multi-process safety
+        self._lock = ChromaLock(data_dir / "chroma.lock")
 
         # Lazy initialization
         self._client = None
@@ -120,27 +169,29 @@ class RAGBackend:
         if memory.summary:
             text = f"{memory.summary}\n{text}"
 
+        # Generate embedding (outside lock - slow operation)
         embedding = self._get_embedding(text)
 
-        # Store in ChromaDB
-        self._collection.add(
-            ids=[memory.id],
-            embeddings=[embedding],
-            documents=[memory.content],
-            metadatas=[
-                {
-                    "type": memory.type.value,
-                    "tags": json.dumps(memory.tags),
-                    "namespace_id": memory.namespace_id,
-                    "summary": memory.summary or "",
-                    "created_at": memory.created_at.isoformat(),
-                    "source_repo": memory.source_repo or "",
-                    "project": memory.project or "",
-                    "source_tool": memory.source_tool or "",
-                    "source_file": memory.source_file or "",
-                }
-            ],
-        )
+        # Store in ChromaDB (with lock for multi-process safety)
+        with self._lock:
+            self._collection.add(
+                ids=[memory.id],
+                embeddings=[embedding],
+                documents=[memory.content],
+                metadatas=[
+                    {
+                        "type": memory.type.value,
+                        "tags": json.dumps(memory.tags),
+                        "namespace_id": memory.namespace_id,
+                        "summary": memory.summary or "",
+                        "created_at": memory.created_at.isoformat(),
+                        "source_repo": memory.source_repo or "",
+                        "project": memory.project or "",
+                        "source_tool": memory.source_tool or "",
+                        "source_file": memory.source_file or "",
+                    }
+                ],
+            )
 
     def add_memories_batch(self, memories: list[Memory]) -> int:
         """
@@ -165,7 +216,7 @@ class RAGBackend:
                 text = f"{memory.summary}\n{text}"
             texts.append(text)
 
-        # Batch encode all texts at once (much faster)
+        # Batch encode all texts at once (outside lock - slow operation)
         embeddings = self._get_embeddings_batch(texts)
 
         # Prepare batch data for ChromaDB
@@ -186,13 +237,14 @@ class RAGBackend:
             for m in memories
         ]
 
-        # Add all at once to ChromaDB
-        self._collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas,
-        )
+        # Add all at once to ChromaDB (with lock for multi-process safety)
+        with self._lock:
+            self._collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas,
+            )
 
         return len(memories)
 
@@ -201,7 +253,8 @@ class RAGBackend:
         self._ensure_initialized()
 
         try:
-            self._collection.delete(ids=[memory_id])
+            with self._lock:
+                self._collection.delete(ids=[memory_id])
         except Exception:
             pass  # Ignore if not found
 
@@ -218,16 +271,17 @@ class RAGBackend:
         self._ensure_initialized()
 
         try:
-            # Get all memory IDs in this namespace
-            results = self._collection.get(
-                where={"namespace_id": namespace_id},
-                include=[],  # Don't need documents/embeddings, just IDs
-            )
+            with self._lock:
+                # Get all memory IDs in this namespace
+                results = self._collection.get(
+                    where={"namespace_id": namespace_id},
+                    include=[],  # Don't need documents/embeddings, just IDs
+                )
 
-            ids_to_delete = results.get("ids", [])
-            if ids_to_delete:
-                self._collection.delete(ids=ids_to_delete)
-                return len(ids_to_delete)
+                ids_to_delete = results.get("ids", [])
+                if ids_to_delete:
+                    self._collection.delete(ids=ids_to_delete)
+                    return len(ids_to_delete)
             return 0
         except Exception:
             return 0
