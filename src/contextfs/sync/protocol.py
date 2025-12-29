@@ -281,6 +281,64 @@ class SyncStatusResponse(BaseModel):
 
 
 # =============================================================================
+# Content-Addressed Sync (Merkle-style)
+# =============================================================================
+
+
+class EntityManifestEntry(BaseModel):
+    """Single entry in a sync manifest."""
+
+    id: str
+    content_hash: str | None = None
+    updated_at: datetime | None = None
+
+
+class SyncManifestRequest(BaseModel):
+    """Request containing client's manifest of entities.
+
+    Client sends list of {id, content_hash} for all entities.
+    Server compares and returns what differs.
+    """
+
+    device_id: str
+    memories: list[EntityManifestEntry] = Field(default_factory=list)
+    sessions: list[EntityManifestEntry] = Field(default_factory=list)
+    edges: list[EntityManifestEntry] = Field(default_factory=list)
+    namespace_ids: list[str] | None = None  # Optional filter
+
+
+class SyncDiffResponse(BaseModel):
+    """Response with diff between client and server state.
+
+    Content-addressed sync response - tells client exactly what
+    they're missing, what's been updated, and what's been deleted.
+    """
+
+    success: bool = True
+
+    # Memories client is missing or has outdated
+    missing_memories: list[SyncedMemory] = Field(default_factory=list)
+    # Sessions client is missing or has outdated
+    missing_sessions: list[SyncedSession] = Field(default_factory=list)
+    # Edges client is missing or has outdated
+    missing_edges: list[SyncedEdge] = Field(default_factory=list)
+
+    # IDs of entities that were deleted on server
+    deleted_memory_ids: list[str] = Field(default_factory=list)
+    deleted_session_ids: list[str] = Field(default_factory=list)
+    deleted_edge_ids: list[str] = Field(default_factory=list)
+
+    # Summary stats
+    total_missing: int = 0
+    total_updated: int = 0
+    total_deleted: int = 0
+
+    server_timestamp: datetime = Field(default_factory=utc_now)
+    has_more: bool = False  # True if more pages available
+    next_offset: int = 0  # Offset for next page
+
+
+# =============================================================================
 # Sync Result (for client-side operations)
 # =============================================================================
 

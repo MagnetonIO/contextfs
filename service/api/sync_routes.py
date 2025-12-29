@@ -15,9 +15,11 @@ from contextfs.sync.protocol import (
     ConflictInfo,
     DeviceInfo,
     DeviceRegistration,
+    SyncDiffResponse,
     SyncedEdge,
     SyncedMemory,
     SyncedSession,
+    SyncManifestRequest,
     SyncPullRequest,
     SyncPullResponse,
     SyncPushRequest,
@@ -628,6 +630,187 @@ async def get_sync_status(
         pending_push_count=0,  # Server doesn't know client state
         pending_pull_count=pending_pull,
         server_timestamp=datetime.now(timezone.utc),
+    )
+
+
+# =============================================================================
+# Content-Addressed Sync (Merkle-style)
+# =============================================================================
+
+
+@router.post("/diff", response_model=SyncDiffResponse)
+async def compute_diff(
+    request: SyncManifestRequest,
+    session: AsyncSession = Depends(get_session_dependency),
+) -> SyncDiffResponse:
+    """
+    Content-addressed sync: compare client manifest with server state.
+
+    This is idempotent - run it 100 times, always correct result.
+    Client sends list of {id, content_hash} for all their entities.
+    Server returns what's missing, updated, or deleted.
+    """
+    server_timestamp = datetime.now(timezone.utc)
+
+    # Build lookup sets from client manifest
+    client_memory_map = {e.id: e.content_hash for e in request.memories}
+    client_session_ids = {e.id for e in request.sessions}
+    client_edge_ids = {e.id for e in request.edges}
+
+    missing_memories: list[SyncedMemory] = []
+    missing_sessions: list[SyncedSession] = []
+    missing_edges: list[SyncedEdge] = []
+    deleted_memory_ids: list[str] = []
+    deleted_session_ids: list[str] = []
+    deleted_edge_ids: list[str] = []
+    updated_count = 0
+
+    # Query all server memories (optionally filtered by namespace)
+    memory_query = select(SyncedMemoryModel)
+    if request.namespace_ids:
+        memory_query = memory_query.where(SyncedMemoryModel.namespace_id.in_(request.namespace_ids))
+    result = await session.execute(memory_query)
+    server_memories = result.scalars().all()
+
+    for m in server_memories:
+        client_hash = client_memory_map.get(m.id)
+
+        if m.deleted_at:
+            # Server has this as deleted
+            if m.id in client_memory_map:
+                deleted_memory_ids.append(m.id)
+        elif client_hash is None:
+            # Client doesn't have this memory at all
+            missing_memories.append(_memory_model_to_synced(m))
+        elif client_hash != m.content_hash:
+            # Client has different content (outdated)
+            missing_memories.append(_memory_model_to_synced(m))
+            updated_count += 1
+
+    # Query all server sessions
+    session_query = select(SyncedSessionModel)
+    if request.namespace_ids:
+        session_query = session_query.where(
+            SyncedSessionModel.namespace_id.in_(request.namespace_ids)
+        )
+    result = await session.execute(session_query)
+    server_sessions = result.scalars().all()
+
+    for s in server_sessions:
+        if s.deleted_at:
+            if s.id in client_session_ids:
+                deleted_session_ids.append(s.id)
+        elif s.id not in client_session_ids:
+            missing_sessions.append(_session_model_to_synced(s))
+
+    # Query all server edges
+    result = await session.execute(select(SyncedEdgeModel))
+    server_edges = result.scalars().all()
+
+    for e in server_edges:
+        edge_id = f"{e.from_id}:{e.to_id}:{e.relation}"
+        if e.deleted_at:
+            if edge_id in client_edge_ids:
+                deleted_edge_ids.append(edge_id)
+        elif edge_id not in client_edge_ids:
+            missing_edges.append(_edge_model_to_synced(e))
+
+    # Update device sync state
+    await _update_device_sync_state(session, request.device_id, pull_at=server_timestamp)
+    await session.commit()
+
+    total_missing = len(missing_memories) + len(missing_sessions) + len(missing_edges)
+    total_deleted = len(deleted_memory_ids) + len(deleted_session_ids) + len(deleted_edge_ids)
+
+    logger.info(
+        f"Diff computed for {request.device_id}: "
+        f"{total_missing} missing, {updated_count} updated, {total_deleted} deleted"
+    )
+
+    return SyncDiffResponse(
+        success=True,
+        missing_memories=missing_memories,
+        missing_sessions=missing_sessions,
+        missing_edges=missing_edges,
+        deleted_memory_ids=deleted_memory_ids,
+        deleted_session_ids=deleted_session_ids,
+        deleted_edge_ids=deleted_edge_ids,
+        total_missing=total_missing,
+        total_updated=updated_count,
+        total_deleted=total_deleted,
+        server_timestamp=server_timestamp,
+    )
+
+
+def _memory_model_to_synced(m: SyncedMemoryModel) -> SyncedMemory:
+    """Convert database model to sync protocol model."""
+    return SyncedMemory(
+        id=m.id,
+        content=m.content,
+        type=m.type,
+        tags=m.tags or [],
+        summary=m.summary,
+        namespace_id=m.namespace_id,
+        repo_url=m.repo_url,
+        repo_name=m.repo_name,
+        relative_path=m.relative_path,
+        source_file=m.source_file,
+        source_repo=m.source_repo,
+        source_tool=m.source_tool,
+        project=m.project,
+        session_id=m.session_id,
+        created_at=m.created_at,
+        updated_at=m.updated_at,
+        vector_clock=m.vector_clock or {},
+        content_hash=m.content_hash,
+        deleted_at=m.deleted_at,
+        last_modified_by=m.last_modified_by,
+        metadata=dict(m.extra_metadata) if m.extra_metadata else {},
+        embedding=list(m.embedding)
+        if hasattr(m, "embedding") and m.embedding is not None
+        else None,
+    )
+
+
+def _session_model_to_synced(s: SyncedSessionModel) -> SyncedSession:
+    """Convert database model to sync protocol model."""
+    return SyncedSession(
+        id=s.id,
+        label=s.label,
+        namespace_id=s.namespace_id,
+        tool=s.tool,
+        repo_url=s.repo_url,
+        repo_name=s.repo_name,
+        repo_path=s.repo_path,
+        branch=s.branch,
+        started_at=s.started_at,
+        ended_at=s.ended_at,
+        summary=s.summary,
+        created_at=s.created_at,
+        updated_at=s.updated_at,
+        vector_clock=s.vector_clock or {},
+        content_hash=s.content_hash,
+        deleted_at=s.deleted_at,
+        last_modified_by=s.last_modified_by,
+        metadata=dict(s.extra_metadata) if s.extra_metadata else {},
+    )
+
+
+def _edge_model_to_synced(e: SyncedEdgeModel) -> SyncedEdge:
+    """Convert database model to sync protocol model."""
+    return SyncedEdge(
+        id=e.id,
+        from_id=e.from_id,
+        to_id=e.to_id,
+        relation=e.relation,
+        weight=e.weight,
+        created_by=e.created_by,
+        created_at=e.created_at,
+        updated_at=e.updated_at,
+        vector_clock=e.vector_clock or {},
+        deleted_at=e.deleted_at,
+        last_modified_by=e.last_modified_by,
+        metadata=dict(e.extra_metadata) if e.extra_metadata else {},
     )
 
 
