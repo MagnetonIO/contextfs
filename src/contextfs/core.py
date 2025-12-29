@@ -756,6 +756,19 @@ class ContextFS:
         Returns:
             List of SearchResult objects
         """
+        import re
+
+        # Auto-detect memory ID pattern (8+ hex chars)
+        # If query looks like a memory ID, use recall() instead of vector search
+        if re.match(r"^[a-f0-9]{8,}$", query.lower().strip()):
+            memory = self.recall(query.strip())
+            if memory:
+                # Check type filter if specified
+                if type and memory.type != type:
+                    return []
+                return [SearchResult(memory=memory, score=1.0)]
+            # If not found by ID, fall through to regular search
+
         # For cross-repo or project search, don't filter by namespace
         effective_namespace = (
             None if (cross_repo or project) else (namespace_id or self.namespace_id)
