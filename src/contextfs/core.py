@@ -214,13 +214,20 @@ class ContextFS:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 metadata TEXT,
-                structured_data TEXT
+                structured_data TEXT,
+                authoritative INTEGER DEFAULT 0
             )
         """)
 
         # Add structured_data column if it doesn't exist (for existing databases)
         try:
             cursor.execute("ALTER TABLE memories ADD COLUMN structured_data TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Add authoritative column if it doesn't exist (Phase 3)
+        try:
+            cursor.execute("ALTER TABLE memories ADD COLUMN authoritative INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # Column already exists
 
@@ -561,6 +568,7 @@ class ContextFS:
         updated_at: datetime | None = None,
         id: str | None = None,
         structured_data: dict | None = None,
+        authoritative: bool = False,
     ) -> Memory:
         """
         Save content to memory.
@@ -579,6 +587,7 @@ class ContextFS:
             updated_at: Original update timestamp (for sync, defaults to now)
             id: Memory ID (for sync, auto-generated if not provided)
             structured_data: Optional structured data validated against TYPE_SCHEMAS
+            authoritative: Whether this is the authoritative/canonical version in a lineage
 
         Returns:
             Saved Memory object
@@ -608,6 +617,7 @@ class ContextFS:
             "created_at": created_at or datetime.now(timezone.utc),
             "updated_at": updated_at or datetime.now(timezone.utc),
             "structured_data": structured_data,
+            "authoritative": authoritative,
         }
         if id is not None:
             memory_kwargs["id"] = id
@@ -620,8 +630,8 @@ class ContextFS:
         cursor.execute(
             """
             INSERT OR REPLACE INTO memories (id, content, type, tags, summary, namespace_id,
-                                  source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 memory.id,
@@ -639,6 +649,7 @@ class ContextFS:
                 memory.updated_at.isoformat(),
                 json.dumps(memory.metadata),
                 json.dumps(memory.structured_data) if memory.structured_data is not None else None,
+                1 if memory.authoritative else 0,
             ),
         )
 
@@ -722,8 +733,8 @@ class ContextFS:
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO memories (id, content, type, tags, summary, namespace_id,
-                                      source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         memory.id,
@@ -744,6 +755,10 @@ class ContextFS:
                         if hasattr(memory.updated_at, "isoformat")
                         else memory.updated_at,
                         json.dumps(memory.metadata) if memory.metadata else "{}",
+                        json.dumps(memory.structured_data)
+                        if memory.structured_data is not None
+                        else None,
+                        1 if getattr(memory, "authoritative", False) else 0,
                     ),
                 )
                 count += 1
@@ -1180,6 +1195,7 @@ class ContextFS:
         summary: str | None = None,
         project: str | None = None,
         metadata: dict | None = None,
+        authoritative: bool | None = None,
     ) -> Memory | None:
         """
         Update an existing memory.
@@ -1192,6 +1208,7 @@ class ContextFS:
             summary: New summary (optional)
             project: New project (optional)
             metadata: New metadata (optional)
+            authoritative: New authoritative flag (optional)
 
         Returns:
             Updated Memory or None if not found
@@ -1214,6 +1231,8 @@ class ContextFS:
             memory.project = project
         if metadata is not None:
             memory.metadata = metadata
+        if authoritative is not None:
+            memory.authoritative = authoritative
 
         memory.updated_at = datetime.now(timezone.utc)
 
@@ -1230,7 +1249,8 @@ class ContextFS:
                 summary = ?,
                 project = ?,
                 updated_at = ?,
-                metadata = ?
+                metadata = ?,
+                authoritative = ?
             WHERE id = ?
         """,
             (
@@ -1241,6 +1261,7 @@ class ContextFS:
                 memory.project,
                 memory.updated_at.isoformat(),
                 json.dumps(memory.metadata),
+                1 if memory.authoritative else 0,
                 memory.id,
             ),
         )
@@ -1446,6 +1467,131 @@ class ContextFS:
             ...     print(f"  <- {a['memory_id']} ({a['relation']})")
         """
         return self._lineage.get_history(memory_id)
+
+    def get_authoritative(self, memory_id: str) -> Memory | None:
+        """
+        Find the authoritative memory in a lineage chain.
+
+        Traverses the lineage of the given memory to find the one marked
+        as authoritative. If no memory is marked authoritative, returns None.
+
+        Args:
+            memory_id: Any memory ID in the lineage chain
+
+        Returns:
+            The authoritative Memory object, or None if no authoritative version exists
+
+        Example:
+            >>> auth = ctx.get_authoritative("abc123")
+            >>> if auth:
+            ...     print(f"Authoritative: {auth.id}")
+        """
+        # Get the full lineage
+        lineage = self.get_lineage(memory_id)
+        if not lineage:
+            return None
+
+        # Check current memory
+        memory = lineage.get("memory")
+        if memory and memory.authoritative:
+            return memory
+
+        # Check ancestors
+        for ancestor in lineage.get("ancestors", []):
+            ancestor_id = ancestor.get("memory_id") or ancestor.get("id")
+            if ancestor_id:
+                ancestor_mem = self.recall(ancestor_id)
+                if ancestor_mem and ancestor_mem.authoritative:
+                    return ancestor_mem
+
+        # Check descendants
+        for descendant in lineage.get("descendants", []):
+            desc_id = descendant.get("memory_id") or descendant.get("id")
+            if desc_id:
+                desc_mem = self.recall(desc_id)
+                if desc_mem and desc_mem.authoritative:
+                    return desc_mem
+
+        return None
+
+    def set_authoritative(
+        self,
+        memory_id: str,
+        exclusive: bool = True,
+    ) -> Memory | None:
+        """
+        Mark a memory as the authoritative version in its lineage.
+
+        Args:
+            memory_id: Memory ID to mark as authoritative
+            exclusive: If True, unmarks all other memories in the lineage chain
+
+        Returns:
+            Updated Memory object, or None if memory not found
+
+        Example:
+            >>> auth = ctx.set_authoritative("abc123")
+            >>> print(f"{auth.id} is now authoritative")
+        """
+        memory = self.recall(memory_id)
+        if not memory:
+            return None
+
+        # If exclusive, unmark other authoritative memories in lineage
+        if exclusive:
+            lineage = self.get_lineage(memory_id)
+            if lineage:
+                # Unmark ancestors
+                for ancestor in lineage.get("ancestors", []):
+                    ancestor_id = ancestor.get("memory_id") or ancestor.get("id")
+                    if ancestor_id and ancestor_id != memory_id:
+                        ancestor_mem = self.recall(ancestor_id)
+                        if ancestor_mem and ancestor_mem.authoritative:
+                            self._unset_authoritative(ancestor_id)
+
+                # Unmark descendants
+                for descendant in lineage.get("descendants", []):
+                    desc_id = descendant.get("memory_id") or descendant.get("id")
+                    if desc_id and desc_id != memory_id:
+                        desc_mem = self.recall(desc_id)
+                        if desc_mem and desc_mem.authoritative:
+                            self._unset_authoritative(desc_id)
+
+        # Mark the target memory as authoritative
+        return self.update(memory_id=memory_id, authoritative=True)
+
+    def _unset_authoritative(self, memory_id: str) -> None:
+        """Unmark a memory as authoritative (internal helper)."""
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE memories SET authoritative = 0 WHERE id = ?",
+            (memory_id,),
+        )
+        conn.commit()
+        conn.close()
+
+    def search_authoritative(
+        self,
+        query: str,
+        limit: int = 10,
+        **kwargs: Any,
+    ) -> list[SearchResult]:
+        """
+        Search only authoritative memories.
+
+        Args:
+            query: Search query
+            limit: Maximum results
+            **kwargs: Additional search filters
+
+        Returns:
+            List of SearchResult containing only authoritative memories
+        """
+        # Get more results than needed, then filter to authoritative
+        results = self.search(query, limit=limit * 3, **kwargs)
+        authoritative_results = [r for r in results if r.memory.authoritative]
+        return authoritative_results[:limit]
 
     def link(
         self,

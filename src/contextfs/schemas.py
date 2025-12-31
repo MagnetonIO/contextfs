@@ -988,6 +988,13 @@ class Memory(BaseModel):
     # Metadata
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    # Authoritative flag (Phase 3)
+    # Marks this memory as the canonical/official version in a lineage chain
+    authoritative: bool = Field(
+        default=False,
+        description="Whether this is the authoritative/canonical version in a lineage",
+    )
+
     # Embedding (populated by RAG backend)
     embedding: list[float] | None = None
 

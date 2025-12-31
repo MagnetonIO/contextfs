@@ -354,20 +354,28 @@ class StorageRouter(StorageBackend):
             6: source_file, 7: source_repo, 8: source_tool, 9: project,
             10: session_id, 11: created_at, 12: updated_at, 13: metadata
 
-        Additional columns may exist (sync columns, structured_data).
-        structured_data is always the last column when present.
+        Sync columns (indexes 14-20):
+            14: vector_clock, 15: content_hash, 16: deleted_at, 17: last_modified_by,
+            18: repo_url, 19: repo_name, 20: relative_path
+
+        Additional columns:
+            21: structured_data (JSON string)
+            22: authoritative (INTEGER 0/1)
         """
-        # Handle structured_data - it's the last column when present
-        # Check if the last value looks like JSON structured data
+        # Handle structured_data at index 21
         structured_data = None
-        if len(row) > 14 and row[-1] is not None:
-            last_val = row[-1]
-            # structured_data should be a JSON object string
-            if isinstance(last_val, str) and (last_val.startswith("{") or last_val == "{}"):
+        if len(row) > 21 and row[21] is not None:
+            val = row[21]
+            if isinstance(val, str) and (val.startswith("{") or val == "{}"):
                 try:
-                    structured_data = json.loads(last_val)
+                    structured_data = json.loads(val)
                 except (json.JSONDecodeError, TypeError):
                     structured_data = None
+
+        # Handle authoritative at index 22
+        authoritative = False
+        if len(row) > 22 and row[22] is not None:
+            authoritative = bool(row[22])
 
         return Memory(
             id=row[0],
@@ -385,6 +393,7 @@ class StorageRouter(StorageBackend):
             updated_at=datetime.fromisoformat(row[12]) if row[12] else datetime.now(),
             metadata=json.loads(row[13]) if row[13] else {},
             structured_data=structured_data,
+            authoritative=authoritative,
         )
 
     # ==================== Search Operations ====================
