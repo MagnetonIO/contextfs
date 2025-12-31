@@ -498,6 +498,141 @@ def find_git_root(start_path: Path) -> Path | None:
     return None
 
 
+def get_contextfs_config_path(repo_path: Path) -> Path:
+    """Get the path to .contextfs/config.yaml for a repository."""
+    return repo_path / ".contextfs" / "config.yaml"
+
+
+def is_repo_initialized(repo_path: Path) -> bool:
+    """Check if a repository has been initialized for contextfs."""
+    config_path = get_contextfs_config_path(repo_path)
+    return config_path.exists()
+
+
+def get_repo_config(repo_path: Path) -> dict | None:
+    """Get the contextfs config for a repository, if it exists."""
+    config_path = get_contextfs_config_path(repo_path)
+    if not config_path.exists():
+        return None
+    try:
+        import yaml
+
+        return yaml.safe_load(config_path.read_text())
+    except Exception:
+        return None
+
+
+def create_repo_config(
+    repo_path: Path,
+    auto_index: bool = True,
+    created_by: str = "cli",
+    max_commits: int = 100,
+) -> Path:
+    """Create .contextfs/config.yaml for a repository."""
+    from datetime import datetime, timezone
+
+    import yaml
+
+    config_dir = repo_path / ".contextfs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    config = {
+        "version": 1,
+        "auto_index": auto_index,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": created_by,
+        "max_commits": max_commits,
+    }
+
+    config_path = config_dir / "config.yaml"
+    config_path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+
+    # Add .contextfs to .gitignore if not already there
+    gitignore_path = repo_path / ".gitignore"
+    gitignore_entry = ".contextfs/"
+    if gitignore_path.exists():
+        content = gitignore_path.read_text()
+        if gitignore_entry not in content:
+            with open(gitignore_path, "a") as f:
+                if not content.endswith("\n"):
+                    f.write("\n")
+                f.write(f"\n# ContextFS local config\n{gitignore_entry}\n")
+    else:
+        gitignore_path.write_text(f"# ContextFS local config\n{gitignore_entry}\n")
+
+    return config_path
+
+
+@app.command()
+def init(
+    path: Path | None = typer.Argument(None, help="Repository path (default: current directory)"),
+    no_index: bool = typer.Option(False, "--no-index", help="Don't run index after init"),
+    auto_index: bool = typer.Option(
+        True, "--auto-index/--no-auto-index", help="Enable auto-indexing"
+    ),
+    max_commits: int = typer.Option(100, "--max-commits", help="Maximum commits to index"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Reinitialize even if already initialized"
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+):
+    """Initialize a repository for ContextFS indexing.
+
+    Creates a .contextfs/config.yaml marker file that enables auto-indexing
+    for this repository. The SessionStart hook will only index repositories
+    that have been initialized.
+
+    Examples:
+        contextfs init                    # Initialize current repo
+        contextfs init /path/to/repo      # Initialize specific repo
+        contextfs init --no-index         # Initialize without indexing
+        contextfs init --no-auto-index    # Initialize but disable auto-index
+    """
+    # Determine repo path
+    start_path = path or Path.cwd()
+    repo_path = find_git_root(start_path)
+
+    if not repo_path:
+        if not quiet:
+            console.print(f"[red]Error: Not a git repository: {start_path.resolve()}[/red]")
+            console.print("[yellow]contextfs init requires a git repository.[/yellow]")
+        raise typer.Exit(1)
+
+    # Check if already initialized
+    if is_repo_initialized(repo_path) and not force:
+        if not quiet:
+            console.print(f"[yellow]Repository already initialized: {repo_path}[/yellow]")
+            console.print("[dim]Use --force to reinitialize.[/dim]")
+        raise typer.Exit(0)
+
+    # Create config
+    config_path = create_repo_config(
+        repo_path=repo_path,
+        auto_index=auto_index,
+        created_by="cli",
+        max_commits=max_commits,
+    )
+
+    if not quiet:
+        console.print(f"[green]✅ Initialized ContextFS for: {repo_path.name}[/green]")
+        console.print(f"   Config: {config_path}")
+        if auto_index:
+            console.print("   Auto-index: [green]enabled[/green]")
+        else:
+            console.print("   Auto-index: [yellow]disabled[/yellow]")
+
+    # Run index unless --no-index
+    if not no_index:
+        if not quiet:
+            console.print()
+        ctx = get_ctx()
+        result = ctx.index_repository(repo_path=repo_path, incremental=True)
+        if not quiet:
+            console.print(
+                f"[green]✅ Indexed {result.get('files_indexed', 0)} files, {result.get('commits_indexed', 0)} commits[/green]"
+            )
+
+
 @app.command()
 def index(
     path: Path | None = typer.Argument(None, help="Repository path (auto-detects git root)"),
@@ -527,11 +662,19 @@ def index(
         "--allow-dir",
         help="Allow indexing non-git directories (use index-dir for multiple repos)",
     ),
+    require_init: bool = typer.Option(
+        False,
+        "--require-init",
+        help="Only index if repo has been initialized with 'contextfs init'",
+    ),
 ):
     """Index a repository's codebase for semantic search.
 
     By default, only indexes git repositories. Use --allow-dir to index
     non-git directories, or use 'index-dir' command to scan for multiple repos.
+
+    Use --require-init for hooks to only index repos that have been explicitly
+    initialized with 'contextfs init'.
     """
     import subprocess
     import sys
@@ -541,6 +684,16 @@ def index(
     # Determine repo path
     start_path = path or Path.cwd()
     repo_path = find_git_root(start_path)
+
+    # Check if --require-init is set and repo is not initialized
+    if require_init and repo_path and not is_repo_initialized(repo_path):
+        # Silently exit - repo not initialized for contextfs
+        if not quiet:
+            console.print(
+                f"[yellow]Skipping: {repo_path.name} not initialized for ContextFS[/yellow]"
+            )
+            console.print("[dim]Run 'contextfs init' to enable indexing for this repo.[/dim]")
+        return
 
     # Background mode: spawn subprocess and return immediately
     if background:
@@ -553,6 +706,8 @@ def index(
             cmd.extend(["--mode", mode])
         if allow_dir:
             cmd.append("--allow-dir")
+        if require_init:
+            cmd.append("--require-init")
         if repo_path:
             cmd.append(str(repo_path))
 
@@ -882,31 +1037,6 @@ def discover_repos(
         )
 
     console.print(table)
-
-
-@app.command()
-def init(
-    path: Path | None = typer.Argument(None, help="Directory to initialize"),
-):
-    """Initialize ContextFS in a directory."""
-    target = path or Path.cwd()
-    ctx_dir = target / ".contextfs"
-
-    if ctx_dir.exists():
-        console.print(f"[yellow]ContextFS already initialized at {ctx_dir}[/yellow]")
-        return
-
-    ctx_dir.mkdir(parents=True, exist_ok=True)
-
-    # Add to .gitignore
-    gitignore = target / ".gitignore"
-    if gitignore.exists():
-        content = gitignore.read_text()
-        if ".contextfs/" not in content:
-            with gitignore.open("a") as f:
-                f.write("\n# ContextFS\n.contextfs/\n")
-
-    console.print(f"[green]Initialized ContextFS at {ctx_dir}[/green]")
 
 
 @app.command()

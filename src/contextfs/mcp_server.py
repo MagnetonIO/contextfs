@@ -183,6 +183,17 @@ async def list_prompts() -> list[Prompt]:
             description="Index the current repository for semantic code search",
             arguments=[],
         ),
+        Prompt(
+            name="contextfs-init-repo",
+            description="Initialize a repository for ContextFS indexing (opt-in)",
+            arguments=[
+                PromptArgument(
+                    name="auto_index",
+                    description="Enable automatic indexing on session start (default: true)",
+                    required=False,
+                ),
+            ],
+        ),
     ]
 
 
@@ -302,6 +313,32 @@ Use the `contextfs_index` tool to index all code files in this repository. This 
 - Better context for future conversations
 
 After indexing, confirm how many files were processed.""",
+                    ),
+                )
+            ],
+        )
+
+    elif name == "contextfs-init-repo":
+        auto_index = (arguments or {}).get("auto_index", "true")
+        auto_index_str = "enabled" if auto_index.lower() in ("true", "yes", "1") else "disabled"
+
+        return GetPromptResult(
+            description="Initialize Repository for ContextFS",
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text=f"""Please initialize this repository for ContextFS indexing.
+
+Auto-indexing: {auto_index_str}
+
+Use the `contextfs_init` tool to create the initialization marker. This:
+- Creates a .contextfs/config.yaml file in the repository
+- Enables automatic indexing on session start (if auto_index is true)
+- Allows this repository to be indexed by the SessionStart hook
+
+After initialization, optionally run `contextfs_index` to index the repository immediately.""",
                     ),
                 )
             ],
@@ -523,6 +560,39 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["role", "content"],
+            },
+        ),
+        Tool(
+            name="contextfs_init",
+            description="Initialize a repository for ContextFS indexing. Creates .contextfs/config.yaml marker file to opt-in this repo for automatic indexing.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to repository to initialize. Defaults to current directory.",
+                    },
+                    "auto_index": {
+                        "type": "boolean",
+                        "description": "Enable automatic indexing on session start (default: true)",
+                        "default": True,
+                    },
+                    "max_commits": {
+                        "type": "number",
+                        "description": "Maximum commits to index (default: 100)",
+                        "default": 100,
+                    },
+                    "run_index": {
+                        "type": "boolean",
+                        "description": "Run indexing immediately after init (default: true)",
+                        "default": True,
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Reinitialize even if already initialized",
+                        "default": False,
+                    },
+                },
             },
         ),
         Tool(
@@ -1315,6 +1385,64 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     text=f"Message added to session.\nMessage ID: {msg.id}",
                 )
             ]
+
+        elif name == "contextfs_init":
+            from pathlib import Path
+
+            from contextfs.cli import create_repo_config, is_repo_initialized
+
+            repo_path_arg = arguments.get("repo_path")
+            auto_index = arguments.get("auto_index", True)
+            max_commits = arguments.get("max_commits", 100)
+            run_index = arguments.get("run_index", True)
+            force = arguments.get("force", False)
+
+            # Resolve repo path
+            repo_path = Path(repo_path_arg).resolve() if repo_path_arg else Path.cwd()
+
+            # Check if in a git repo
+            repo_name = detect_current_repo()
+            if not repo_name:
+                return [TextContent(type="text", text="Error: Not in a git repository")]
+
+            # Check if already initialized
+            if is_repo_initialized(repo_path) and not force:
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Repository '{repo_name}' already initialized for ContextFS.\n"
+                        f"Use force=true to reinitialize.",
+                    )
+                ]
+
+            # Create the config
+            config_path = create_repo_config(
+                repo_path=repo_path,
+                auto_index=auto_index,
+                created_by=get_source_tool(),
+                max_commits=int(max_commits),
+            )
+
+            output = [
+                f"Repository initialized for ContextFS: {repo_name}",
+                f"Config: {config_path}",
+                f"Auto-index: {'enabled' if auto_index else 'disabled'}",
+                f"Max commits: {max_commits}",
+            ]
+
+            # Optionally run indexing
+            if run_index:
+                try:
+                    result = ctx.index_repository(repo_path=repo_path, incremental=True)
+                    output.append("")
+                    output.append(
+                        f"Indexed: {result.get('files_indexed', 0)} files, {result.get('commits_indexed', 0)} commits"
+                    )
+                except Exception as e:
+                    output.append("")
+                    output.append(f"Indexing started but encountered error: {e}")
+
+            return [TextContent(type="text", text="\n".join(output))]
 
         elif name == "contextfs_index":
             from pathlib import Path

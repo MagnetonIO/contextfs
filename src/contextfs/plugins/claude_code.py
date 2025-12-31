@@ -86,13 +86,14 @@ class ClaudeCodePlugin:
             settings["hooks"] = {}
 
         # Add SessionStart hook (indexes on session start in background)
+        # Only indexes repos that have been initialized with 'contextfs init'
         settings["hooks"]["SessionStart"] = [
             {
                 "matcher": {},
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "uvx contextfs index --quiet --background",
+                        "command": "uvx contextfs index --quiet --background --require-init",
                     }
                 ],
             }
