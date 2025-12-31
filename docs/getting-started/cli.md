@@ -46,6 +46,42 @@ contextfs search "how to deploy"
 contextfs search "database" --type decision --limit 5
 ```
 
+### `contextfs init`
+
+Initialize a repository for ContextFS indexing. Creates a `.contextfs/config.yaml` marker file that opts the repo into automatic indexing.
+
+```bash
+contextfs init [PATH] [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--no-index` | Don't run index after init |
+| `--auto-index/--no-auto-index` | Enable/disable auto-indexing on session start (default: enabled) |
+| `--max-commits` | Maximum commits to index (default: 100) |
+| `--force, -f` | Reinitialize even if already initialized |
+| `--quiet, -q` | Minimal output |
+
+**Examples:**
+
+```bash
+# Initialize current repo for ContextFS
+contextfs init
+
+# Initialize without immediate indexing
+contextfs init --no-index
+
+# Initialize with custom settings
+contextfs init --max-commits 500 --no-auto-index
+
+# Reinitialize existing repo
+contextfs init --force
+```
+
+The config file (`.contextfs/config.yaml`) controls:
+- `auto_index`: Whether SessionStart hooks should auto-index this repo
+- `max_commits`: How much commit history to index
+
 ### `contextfs index`
 
 Index a repository for semantic code search.
@@ -58,6 +94,10 @@ contextfs index [PATH] [OPTIONS]
 |--------|-------------|
 | `--force, -f` | Force re-index even if already indexed |
 | `--incremental/--full` | Incremental (default) or full re-index |
+| `--background` | Run indexing in background subprocess |
+| `--quiet, -q` | Suppress output |
+| `--require-init` | Only index if repo has `.contextfs/config.yaml` (used by hooks) |
+| `--mode` | Index mode: `all`, `files_only`, or `commits_only` |
 
 **Examples:**
 
@@ -70,6 +110,9 @@ contextfs index /path/to/repo
 
 # Force full re-index
 contextfs index --force --full
+
+# Background indexing (for hooks)
+contextfs index --quiet --background --require-init
 ```
 
 ### `contextfs list`
@@ -136,16 +179,6 @@ Displays:
 - Vector store statistics
 - Active session info
 
-### `contextfs init`
-
-Initialize ContextFS in a directory.
-
-```bash
-contextfs init [PATH]
-```
-
-Creates a `.contextfs/` directory and updates `.gitignore`.
-
 ### `contextfs serve`
 
 Start the MCP server.
@@ -194,6 +227,46 @@ contextfs save-session [OPTIONS]
 | `--label, -l` | Session label |
 | `--transcript, -t` | Path to transcript JSONL file |
 
+### `contextfs chroma-server`
+
+Manage the ChromaDB server for multi-process safe access.
+
+```bash
+contextfs chroma-server [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--daemon` | Start server in background |
+| `--status` | Check if server is running |
+| `--install` | Install as system service (auto-start on boot) |
+| `--uninstall` | Remove system service |
+| `--port` | Port to use (default: 8000) |
+| `--path` | Data directory path |
+
+**Examples:**
+
+```bash
+# Start ChromaDB server in background
+contextfs chroma-server --daemon
+
+# Check server status
+contextfs chroma-server --status
+
+# Install as system service (macOS/Linux/Windows)
+contextfs chroma-server --install
+
+# Uninstall system service
+contextfs chroma-server --uninstall
+```
+
+**Why use ChromaDB server mode?**
+
+When multiple MCP clients (Claude Code, Claude Desktop) access ChromaDB simultaneously, the embedded mode can cause corruption. Server mode provides:
+- Safe multi-process access
+- Auto-recovery from connection issues
+- Persistent service across reboots (with `--install`)
+
 ## Environment Variables
 
 | Variable | Description | Default |
@@ -201,6 +274,9 @@ contextfs save-session [OPTIONS]
 | `CONTEXTFS_DATA_DIR` | Data storage directory | `~/.contextfs` |
 | `CONTEXTFS_SOURCE_TOOL` | Tool identifier | auto-detect |
 | `CONTEXTFS_EMBEDDING_MODEL` | Embedding model | `all-MiniLM-L6-v2` |
+| `CONTEXTFS_CHROMA_HOST` | ChromaDB server host (enables server mode) | - |
+| `CONTEXTFS_CHROMA_PORT` | ChromaDB server port | `8000` |
+| `CONTEXTFS_EMBEDDING_BACKEND` | Embedding backend: `auto`, `fastembed`, `sentence_transformers` | `auto` |
 
 ## Shell Completion
 

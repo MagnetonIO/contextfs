@@ -52,8 +52,10 @@ Or use the Python module directly:
 
 | Tool | Description |
 |------|-------------|
+| `contextfs_init` | Initialize repo for auto-indexing (creates `.contextfs/config.yaml`) |
 | `contextfs_index` | Index codebase for search |
 | `contextfs_index_status` | Check or cancel background indexing |
+| `contextfs_list_indexes` | List all indexed repositories with stats |
 | `contextfs_list_repos` | List indexed repositories |
 | `contextfs_list_tools` | List source tools (claude-code, claude-desktop, etc.) |
 | `contextfs_list_projects` | List project groupings |
@@ -69,21 +71,59 @@ Or use the Python module directly:
 | `contextfs_delete_session` | Delete session and its messages |
 | `contextfs_import_conversation` | Import JSON conversation as episodic memory |
 
-## Auto-Save Hooks
+## Lifecycle Hooks
 
-Configure Claude Code to automatically save sessions:
+ContextFS can install Claude Code hooks for automatic context capture:
 
 ```bash
-# In your shell config (.bashrc, .zshrc)
-export CLAUDE_CODE_HOOKS='{"post_session": "contextfs save-session"}'
+# Install hooks and MCP server
+python -c "from contextfs.plugins.claude_code import install_claude_code; install_claude_code()"
 ```
 
-Or create a hook script:
+This installs:
+
+| Hook | Action |
+|------|--------|
+| `SessionStart` | Auto-index initialized repos in background |
+| `PreCompact` | Save session before context compaction |
+
+### Opt-in Indexing
+
+The SessionStart hook only indexes repos that have been initialized with `contextfs init`:
 
 ```bash
-#!/bin/bash
-# ~/.claude-code/hooks/post_session.sh
-contextfs save-session --label "$CLAUDE_SESSION_ID"
+# Initialize a repo for auto-indexing
+contextfs init
+
+# Now SessionStart will auto-index this repo
+```
+
+This prevents unwanted indexing of random directories. The hook runs:
+```bash
+contextfs index --quiet --background --require-init
+```
+
+### Manual Hook Configuration
+
+To manually configure hooks in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{
+      "hooks": [{
+        "type": "command",
+        "command": "uvx contextfs index --quiet --background --require-init"
+      }]
+    }],
+    "PreCompact": [{
+      "hooks": [{
+        "type": "command",
+        "command": "uvx contextfs save-session --label 'auto-compact'"
+      }]
+    }]
+  }
+}
 ```
 
 ## Workflow Examples
@@ -155,7 +195,18 @@ contextfs_sessions(label="auth")
 
 ## Best Practices
 
-### 1. Index Early
+### 1. Initialize Repos for Auto-Indexing
+
+Initialize repositories you work with frequently:
+
+```bash
+# One-time setup per repo
+contextfs init
+```
+
+This enables automatic indexing when you start Claude Code sessions.
+
+### 2. Index Early
 
 Index your repository at the start of a project:
 
@@ -163,7 +214,7 @@ Index your repository at the start of a project:
 Please index this repository so we can search the codebase
 ```
 
-### 2. Save Decisions Explicitly
+### 3. Save Decisions Explicitly
 
 When making important choices:
 
@@ -172,7 +223,7 @@ We decided to use SQLAlchemy 2.0 with async support.
 Please save this decision with tags: database, orm, async
 ```
 
-### 3. Reference Prior Context
+### 4. Reference Prior Context
 
 Before implementing:
 
@@ -181,7 +232,7 @@ Before we implement the payment system, search our memory
 for any payment-related decisions or patterns
 ```
 
-### 4. Document Errors
+### 5. Document Errors
 
 When you fix bugs:
 
@@ -190,7 +241,7 @@ Save this fix to memory as an error type:
 "TypeError in user serialization - fixed by adding null check"
 ```
 
-### 5. Use Projects for Multi-Repo
+### 6. Use Projects for Multi-Repo
 
 Group related repositories:
 

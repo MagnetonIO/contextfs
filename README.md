@@ -137,8 +137,10 @@ Or with Python directly:
 | `contextfs_list` | List recent memories |
 | `contextfs_update` | Update existing memory content, type, tags, or project |
 | `contextfs_delete` | Delete a memory by ID |
+| `contextfs_init` | Initialize repo for auto-indexing (opt-in) |
 | `contextfs_index` | Index current repository for code search |
 | `contextfs_index_status` | Check or cancel background indexing progress |
+| `contextfs_list_indexes` | List all indexed repositories with stats |
 | `contextfs_list_repos` | List all repositories with memories |
 | `contextfs_list_tools` | List source tools (claude-code, claude-desktop, etc.) |
 | `contextfs_list_projects` | List all projects |
@@ -154,6 +156,7 @@ Or with Python directly:
 | Prompt | Description |
 |--------|-------------|
 | `contextfs-save-memory` | Guided memory save with type selection |
+| `contextfs-init-repo` | Initialize repo for auto-indexing |
 | `contextfs-index` | Index repository for semantic search |
 | `contextfs-session-guide` | Instructions for session capture |
 | `contextfs-save-session` | Save current session |
