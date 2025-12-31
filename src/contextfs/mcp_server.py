@@ -20,7 +20,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import GetPromptResult, Prompt, PromptArgument, PromptMessage, TextContent, Tool
 
 from contextfs.core import ContextFS
-from contextfs.schemas import MemoryType, get_memory_type_values
+from contextfs.schemas import TYPE_SCHEMAS, MemoryType, get_memory_type_values, get_type_schema
 
 # Memory type enum values - generated from schema (single source of truth)
 MEMORY_TYPE_ENUM = get_memory_type_values()
@@ -389,8 +389,29 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Label for session",
                     },
+                    "structured_data": {
+                        "type": "object",
+                        "description": "Optional structured data validated against the type's JSON schema. "
+                        "Use for typed memories with specific fields (e.g., decision with rationale, procedure with steps). "
+                        "See TYPE_SCHEMAS in schemas.py for available schemas per type.",
+                    },
                 },
                 "required": [],
+            },
+        ),
+        Tool(
+            name="contextfs_get_type_schema",
+            description="Get the JSON schema for a memory type. Use to understand what structured_data fields are available for each type.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_type": {
+                        "type": "string",
+                        "enum": MEMORY_TYPE_ENUM,
+                        "description": "Memory type to get schema for",
+                    },
+                },
+                "required": ["memory_type"],
             },
         ),
         Tool(
@@ -1111,6 +1132,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             memory_type = MemoryType(arguments.get("type", "fact"))
             tags = arguments.get("tags", [])
             summary = arguments.get("summary")
+            structured_data = arguments.get("structured_data")
 
             project = arguments.get("project")
 
@@ -1136,6 +1158,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 source_tool=get_source_tool(),
                 source_repo=source_repo,
                 project=project,
+                structured_data=structured_data,
             )
 
             # Also log to current session (best-effort, don't fail the save)
@@ -1151,10 +1174,42 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             response = f"Memory saved successfully.\nID: {memory.id}\nType: {memory.type.value}"
             if source_repo:
                 response += f"\nRepo: {source_repo}"
+            if memory.structured_data:
+                response += f"\nStructured: Yes ({len(memory.structured_data)} fields)"
             if index_result and index_result.get("files_indexed", 0) > 0:
                 response += f"\nIndexed: {index_result['files_indexed']} files"
 
             return [TextContent(type="text", text=response)]
+
+        elif name == "contextfs_get_type_schema":
+            memory_type = arguments.get("memory_type", "")
+            if not memory_type:
+                return [TextContent(type="text", text="Error: memory_type is required")]
+
+            schema = get_type_schema(memory_type)
+            if not schema:
+                types_with_schemas = list(TYPE_SCHEMAS.keys())
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"No schema defined for type '{memory_type}'.\n"
+                        f"Types with schemas: {', '.join(types_with_schemas)}",
+                    )
+                ]
+
+            import json
+
+            output = [
+                f"JSON Schema for type '{memory_type}':",
+                "",
+                json.dumps(schema, indent=2),
+                "",
+                "Required fields: " + ", ".join(schema.get("required", []))
+                if schema.get("required")
+                else "No required fields",
+            ]
+
+            return [TextContent(type="text", text="\n".join(output))]
 
         elif name == "contextfs_search":
             query = arguments.get("query", "")
@@ -1276,6 +1331,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if memory.tags:
                 output.append(f"Tags: {', '.join(memory.tags)}")
             output.append(f"\nContent:\n{memory.content}")
+
+            # Show structured data if present
+            if memory.structured_data:
+                import json
+
+                output.append("\nStructured Data:")
+                output.append(json.dumps(memory.structured_data, indent=2))
 
             return [TextContent(type="text", text="\n".join(output))]
 

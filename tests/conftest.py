@@ -332,7 +332,8 @@ def fts_backend(temp_dir: Path):
             session_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            metadata TEXT
+            metadata TEXT,
+            structured_data TEXT
         )
     """)
     conn.commit()

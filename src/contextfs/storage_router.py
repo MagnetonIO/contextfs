@@ -160,8 +160,8 @@ class StorageRouter(StorageBackend):
                 INSERT OR REPLACE INTO memories
                 (id, content, type, tags, summary, namespace_id,
                  source_file, source_repo, source_tool, project,
-                 session_id, created_at, updated_at, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 session_id, created_at, updated_at, metadata, structured_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     memory.id,
@@ -178,6 +178,9 @@ class StorageRouter(StorageBackend):
                     memory.created_at.isoformat(),
                     memory.updated_at.isoformat(),
                     json.dumps(memory.metadata),
+                    json.dumps(memory.structured_data)
+                    if memory.structured_data is not None
+                    else None,
                 ),
             )
 
@@ -220,6 +223,7 @@ class StorageRouter(StorageBackend):
                     m.created_at.isoformat(),
                     m.updated_at.isoformat(),
                     json.dumps(m.metadata),
+                    json.dumps(m.structured_data) if m.structured_data is not None else None,
                 )
                 for m in memories
             ]
@@ -232,8 +236,8 @@ class StorageRouter(StorageBackend):
                 INSERT OR REPLACE INTO memories
                 (id, content, type, tags, summary, namespace_id,
                  source_file, source_repo, source_tool, project,
-                 session_id, created_at, updated_at, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 session_id, created_at, updated_at, metadata, structured_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 memory_rows,
             )
@@ -343,7 +347,28 @@ class StorageRouter(StorageBackend):
         )
 
     def _row_to_memory(self, row: tuple) -> Memory:
-        """Convert SQLite row to Memory object."""
+        """Convert SQLite row to Memory object.
+
+        Core columns (indexes 0-13):
+            0: id, 1: content, 2: type, 3: tags, 4: summary, 5: namespace_id,
+            6: source_file, 7: source_repo, 8: source_tool, 9: project,
+            10: session_id, 11: created_at, 12: updated_at, 13: metadata
+
+        Additional columns may exist (sync columns, structured_data).
+        structured_data is always the last column when present.
+        """
+        # Handle structured_data - it's the last column when present
+        # Check if the last value looks like JSON structured data
+        structured_data = None
+        if len(row) > 14 and row[-1] is not None:
+            last_val = row[-1]
+            # structured_data should be a JSON object string
+            if isinstance(last_val, str) and (last_val.startswith("{") or last_val == "{}"):
+                try:
+                    structured_data = json.loads(last_val)
+                except (json.JSONDecodeError, TypeError):
+                    structured_data = None
+
         return Memory(
             id=row[0],
             content=row[1],
@@ -359,6 +384,7 @@ class StorageRouter(StorageBackend):
             created_at=datetime.fromisoformat(row[11]) if row[11] else datetime.now(),
             updated_at=datetime.fromisoformat(row[12]) if row[12] else datetime.now(),
             metadata=json.loads(row[13]) if row[13] else {},
+            structured_data=structured_data,
         )
 
     # ==================== Search Operations ====================
@@ -483,21 +509,27 @@ class StorageRouter(StorageBackend):
                 if not any(t in memory_tags for t in tags):
                     continue
 
-            memory = Memory(
-                id=memory_id,
-                content=documents[i] if i < len(documents) else "",
-                type=MemoryType(metadata.get("type", "fact")),
-                tags=json.loads(metadata.get("tags", "[]")),
-                summary=metadata.get("summary") or None,
-                namespace_id=metadata.get("namespace_id", "global"),
-                created_at=datetime.fromisoformat(
-                    metadata.get("created_at", datetime.now().isoformat())
-                ),
-                source_repo=metadata.get("source_repo") or None,
-                project=metadata.get("project") or None,
-                source_tool=metadata.get("source_tool") or None,
-                source_file=metadata.get("source_file") or None,
-            )
+            # Try to get the full memory from SQLite (includes structured_data)
+            full_memory = self._recall_from_sqlite(memory_id)
+            if full_memory:
+                memory = full_memory
+            else:
+                # Fall back to ChromaDB metadata
+                memory = Memory(
+                    id=memory_id,
+                    content=documents[i] if i < len(documents) else "",
+                    type=MemoryType(metadata.get("type", "fact")),
+                    tags=json.loads(metadata.get("tags", "[]")),
+                    summary=metadata.get("summary") or None,
+                    namespace_id=metadata.get("namespace_id", "global"),
+                    created_at=datetime.fromisoformat(
+                        metadata.get("created_at", datetime.now().isoformat())
+                    ),
+                    source_repo=metadata.get("source_repo") or None,
+                    project=metadata.get("project") or None,
+                    source_tool=metadata.get("source_tool") or None,
+                    source_file=metadata.get("source_file") or None,
+                )
 
             search_results.append(SearchResult(memory=memory, score=score))
 

@@ -228,7 +228,7 @@ class FTSBackend:
             SELECT
                 m.id, m.content, m.type, m.tags, m.summary, m.namespace_id,
                 m.source_file, m.source_repo, m.session_id, m.created_at,
-                m.updated_at, m.metadata,
+                m.updated_at, m.metadata, m.structured_data,
                 bm25(memories_fts, 0, 10.0, 5.0, 2.0, 0, 0) as rank
             FROM memories m
             JOIN memories_fts fts ON m.id = fts.id
@@ -376,7 +376,7 @@ class FTSBackend:
 
         sql = """SELECT id, content, type, tags, summary, namespace_id,
                 source_file, source_repo, session_id, created_at,
-                updated_at, metadata
+                updated_at, metadata, structured_data
                 FROM memories WHERE (content LIKE ? OR summary LIKE ?)"""
         params = [f"%{query}%", f"%{query}%"]
 
@@ -418,7 +418,20 @@ class FTSBackend:
         return highlights[:3]  # Max 3 highlights
 
     def _row_to_memory(self, row) -> Memory:
-        """Convert database row to Memory object."""
+        """Convert database row to Memory object.
+
+        Columns: id, content, type, tags, summary, namespace_id,
+                 source_file, source_repo, session_id, created_at,
+                 updated_at, metadata, structured_data
+        """
+        # Handle structured_data (index 12) if present
+        structured_data = None
+        if len(row) > 12 and row[12]:
+            try:
+                structured_data = json.loads(row[12])
+            except (json.JSONDecodeError, TypeError):
+                structured_data = None
+
         return Memory(
             id=row[0],
             content=row[1],
@@ -432,6 +445,7 @@ class FTSBackend:
             created_at=datetime.fromisoformat(row[9]),
             updated_at=datetime.fromisoformat(row[10]),
             metadata=json.loads(row[11]) if row[11] else {},
+            structured_data=structured_data,
         )
 
     def get_stats(self) -> dict:

@@ -41,6 +41,10 @@ class MemoryCreate(BaseModel):
     summary: str | None = None
     namespace_id: str | None = None
     metadata: dict = Field(default_factory=dict)
+    structured_data: dict | None = Field(
+        default=None,
+        description="Optional structured data validated against the type's JSON schema",
+    )
 
 
 class MemoryUpdate(BaseModel):
@@ -69,6 +73,7 @@ class MemoryResponse(BaseModel):
     created_at: str
     updated_at: str
     metadata: dict
+    structured_data: dict | None = None
 
 
 class SearchResultResponse(BaseModel):
@@ -374,6 +379,7 @@ def create_app(
                 summary=data.summary,
                 namespace_id=data.namespace_id,
                 metadata=data.metadata,
+                structured_data=data.structured_data,
             )
 
             # Notify WebSocket clients
@@ -891,6 +897,7 @@ def serialize_memory(memory: Memory) -> dict:
         "created_at": memory.created_at.isoformat(),
         "updated_at": memory.updated_at.isoformat(),
         "metadata": memory.metadata,
+        "structured_data": memory.structured_data,
     }
 
 
@@ -957,6 +964,10 @@ def mcp_tools_list() -> dict:
                         },
                         "tags": {"type": "array", "items": {"type": "string"}},
                         "summary": {"type": "string"},
+                        "structured_data": {
+                            "type": "object",
+                            "description": "Optional structured data validated against type's JSON schema",
+                        },
                     },
                     "required": ["content"],
                 },
@@ -1036,8 +1047,12 @@ async def mcp_tools_call(
             type=MemoryType(arguments.get("type", "fact")),
             tags=arguments.get("tags", []),
             summary=arguments.get("summary"),
+            structured_data=arguments.get("structured_data"),
         )
-        return {"content": [{"type": "text", "text": f"Saved memory {memory.id}"}]}
+        response_text = f"Saved memory {memory.id}"
+        if memory.structured_data:
+            response_text += f" with {len(memory.structured_data)} structured fields"
+        return {"content": [{"type": "text", "text": response_text}]}
 
     elif tool_name == "contextfs_search":
         use_semantic = arguments.get("semantic", True)

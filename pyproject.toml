@@ -53,6 +53,9 @@ dependencies = [
     # Utilities
     "python-dotenv>=1.0.1",
 
+    # JSON Schema validation
+    "jsonschema>=4.23.0",
+
     # Database migrations
     "alembic>=1.14.0",
 ]

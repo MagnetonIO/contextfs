@@ -213,9 +213,16 @@ class ContextFS:
                 session_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                metadata TEXT
+                metadata TEXT,
+                structured_data TEXT
             )
         """)
+
+        # Add structured_data column if it doesn't exist (for existing databases)
+        try:
+            cursor.execute("ALTER TABLE memories ADD COLUMN structured_data TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         # Sessions table
         cursor.execute("""
@@ -553,6 +560,7 @@ class ContextFS:
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
         id: str | None = None,
+        structured_data: dict | None = None,
     ) -> Memory:
         """
         Save content to memory.
@@ -570,6 +578,7 @@ class ContextFS:
             created_at: Original creation timestamp (for sync, defaults to now)
             updated_at: Original update timestamp (for sync, defaults to now)
             id: Memory ID (for sync, auto-generated if not provided)
+            structured_data: Optional structured data validated against TYPE_SCHEMAS
 
         Returns:
             Saved Memory object
@@ -598,6 +607,7 @@ class ContextFS:
             "metadata": metadata or {},
             "created_at": created_at or datetime.now(timezone.utc),
             "updated_at": updated_at or datetime.now(timezone.utc),
+            "structured_data": structured_data,
         }
         if id is not None:
             memory_kwargs["id"] = id
@@ -610,8 +620,8 @@ class ContextFS:
         cursor.execute(
             """
             INSERT OR REPLACE INTO memories (id, content, type, tags, summary, namespace_id,
-                                  source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 memory.id,
@@ -628,6 +638,7 @@ class ContextFS:
                 memory.created_at.isoformat(),
                 memory.updated_at.isoformat(),
                 json.dumps(memory.metadata),
+                json.dumps(memory.structured_data) if memory.structured_data is not None else None,
             ),
         )
 

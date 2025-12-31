@@ -54,8 +54,21 @@ def save(
     type: str = typer.Option("fact", "--type", "-t", help="Memory type"),
     tags: str | None = typer.Option(None, "--tags", help="Comma-separated tags"),
     summary: str | None = typer.Option(None, "--summary", "-s", help="Brief summary"),
+    structured: str | None = typer.Option(
+        None,
+        "--structured",
+        help="JSON structured data validated against type's schema",
+    ),
 ):
-    """Save a memory."""
+    """Save a memory.
+
+    Use --structured to add typed structured data. For example:
+        contextfs save "Auth decision" -t decision --structured '{"decision": "Use JWT", "rationale": "Stateless auth"}'
+
+    To see available schemas for each type, use: contextfs type-schema <type>
+    """
+    import json
+
     ctx = get_ctx()
 
     tag_list = [t.strip() for t in tags.split(",")] if tags else []
@@ -66,17 +79,68 @@ def save(
         console.print(f"[red]Invalid type: {type}[/red]")
         raise typer.Exit(1)
 
-    memory = ctx.save(
-        content=content,
-        type=memory_type,
-        tags=tag_list,
-        summary=summary,
-        source_tool="contextfs-cli",
-    )
+    # Parse structured data JSON
+    structured_data = None
+    if structured:
+        try:
+            structured_data = json.loads(structured)
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Invalid JSON in --structured: {e}[/red]")
+            raise typer.Exit(1)
+
+    try:
+        memory = ctx.save(
+            content=content,
+            type=memory_type,
+            tags=tag_list,
+            summary=summary,
+            source_tool="contextfs-cli",
+            structured_data=structured_data,
+        )
+    except ValueError as e:
+        # Schema validation error
+        console.print(f"[red]Schema validation error: {e}[/red]")
+        raise typer.Exit(1)
 
     console.print("[green]Memory saved[/green]")
     console.print(f"ID: {memory.id}")
     console.print(f"Type: {memory.type.value}")
+    if memory.structured_data:
+        console.print(f"Structured: {len(memory.structured_data)} fields")
+
+
+@app.command("type-schema")
+def type_schema(
+    memory_type: str = typer.Argument(..., help="Memory type to show schema for"),
+):
+    """Show the JSON schema for a memory type's structured_data.
+
+    This helps you understand what fields are available for each type.
+
+    Example:
+        contextfs type-schema decision
+        contextfs type-schema error
+    """
+    import json
+
+    from contextfs.schemas import TYPE_SCHEMAS, get_type_schema
+
+    schema = get_type_schema(memory_type)
+    if not schema:
+        types_with_schemas = list(TYPE_SCHEMAS.keys())
+        console.print(f"[yellow]No schema defined for type '{memory_type}'[/yellow]")
+        console.print(f"\nTypes with schemas: {', '.join(types_with_schemas)}")
+        return
+
+    console.print(f"[cyan]JSON Schema for type '{memory_type}':[/cyan]\n")
+    console.print(json.dumps(schema, indent=2))
+
+    # Show required fields
+    required = schema.get("required", [])
+    if required:
+        console.print(f"\n[green]Required fields:[/green] {', '.join(required)}")
+    else:
+        console.print("\n[green]No required fields[/green]")
 
 
 @app.command()
@@ -164,6 +228,13 @@ def recall(
     if memory.tags:
         console.print(f"[cyan]Tags:[/cyan] {', '.join(memory.tags)}")
     console.print(f"\n[cyan]Content:[/cyan]\n{memory.content}")
+
+    # Show structured data if present
+    if memory.structured_data:
+        import json
+
+        console.print("\n[cyan]Structured Data:[/cyan]")
+        console.print(json.dumps(memory.structured_data, indent=2))
 
 
 @app.command("list")
