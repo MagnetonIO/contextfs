@@ -394,6 +394,6 @@ class TestAllTypesHaveStructuredSchemas:
     def test_all_memory_types_have_schema(self):
         """Test that all MemoryType enum values have a schema."""
         for mem_type in MemoryType:
-            assert (
-                mem_type.value in STRUCTURED_DATA_CLASSES
-            ), f"Missing schema for type: {mem_type.value}"
+            assert mem_type.value in STRUCTURED_DATA_CLASSES, (
+                f"Missing schema for type: {mem_type.value}"
+            )
