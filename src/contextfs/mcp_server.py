@@ -1097,6 +1097,115 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        # =====================================================================
+        # Workflow/Agent Tools
+        # =====================================================================
+        Tool(
+            name="contextfs_workflow_create",
+            description="Create a new workflow definition. Returns workflow memory ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Workflow name (required)",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Workflow description",
+                    },
+                    "tasks": {
+                        "type": "array",
+                        "description": "List of task definitions",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "depends_on": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                        },
+                    },
+                },
+                "required": ["name"],
+            },
+        ),
+        Tool(
+            name="contextfs_workflow_list",
+            description="List all workflows with their status.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["draft", "active", "paused", "completed", "failed"],
+                        "description": "Filter by workflow status",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results (default: 10)",
+                        "default": 10,
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_workflow_get",
+            description="Get workflow details including tasks and status.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "Workflow memory ID (can be partial)",
+                    },
+                },
+                "required": ["workflow_id"],
+            },
+        ),
+        Tool(
+            name="contextfs_task_list",
+            description="List tasks in a workflow.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "Workflow memory ID to list tasks for",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "running", "completed", "failed", "skipped"],
+                        "description": "Filter by task status",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_agent_runs",
+            description="List agent execution records.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Filter by agent name",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["running", "completed", "failed", "timeout"],
+                        "description": "Filter by run status",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results (default: 10)",
+                        "default": 10,
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -2448,6 +2557,238 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         text=f"Repository reindexed!\nFiles indexed: {result.get('files_indexed', 0)}\nMemories created: {result.get('memories_created', 0)}",
                     )
                 ]
+
+        # =====================================================================
+        # Workflow Tool Handlers
+        # =====================================================================
+        elif name == "contextfs_workflow_create":
+            workflow_name = arguments.get("name")
+            description = arguments.get("description")
+            tasks = arguments.get("tasks", [])
+
+            if not workflow_name:
+                return [TextContent(type="text", text="Error: 'name' is required")]
+
+            from contextfs.schemas import Memory
+
+            # Build task list for structured data
+            task_names = [t.get("name", f"task_{i}") for i, t in enumerate(tasks)]
+
+            # Build dependencies map
+            dependencies: dict[str, list[str]] = {}
+            for task_def in tasks:
+                task_name = task_def.get("name", "")
+                deps = task_def.get("depends_on", [])
+                if deps:
+                    dependencies[task_name] = deps
+
+            # Create workflow memory
+            memory = ctx.save(
+                Memory.workflow(
+                    content=f"Workflow: {workflow_name}",
+                    name=workflow_name,
+                    status="draft",
+                    description=description,
+                    steps=task_names,
+                    dependencies=dependencies,
+                    summary=f"Workflow '{workflow_name}' with {len(tasks)} tasks",
+                )
+            )
+
+            output = [
+                f"Workflow created: {workflow_name}",
+                f"ID: {memory.id}",
+                f"Tasks: {len(tasks)}",
+            ]
+            if description:
+                output.append(f"Description: {description}")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_workflow_list":
+            status_filter = arguments.get("status")
+            limit = arguments.get("limit", 10)
+
+            # Search for workflow memories
+            results = ctx.search("", type="workflow", limit=limit)
+
+            if status_filter:
+                results = [
+                    r
+                    for r in results
+                    if r.get("structured_data", {}).get("status") == status_filter
+                ]
+
+            if not results:
+                return [TextContent(type="text", text="No workflows found")]
+
+            output = [f"Found {len(results)} workflow(s):\n"]
+            for wf in results:
+                wf_id = wf.get("id", "")[:12]
+                data = wf.get("structured_data", {})
+                name = data.get("name", wf.get("summary", "Unknown"))
+                status = data.get("status", "unknown")
+                steps = data.get("steps", [])
+                output.append(f"• {name} ({status})")
+                output.append(f"  ID: {wf_id}...")
+                output.append(f"  Tasks: {len(steps)}")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_workflow_get":
+            workflow_id = arguments.get("workflow_id")
+
+            if not workflow_id:
+                return [TextContent(type="text", text="Error: 'workflow_id' is required")]
+
+            memory = ctx.recall(workflow_id)
+            if not memory:
+                return [TextContent(type="text", text=f"Workflow not found: {workflow_id}")]
+
+            data = memory.structured_data or {}
+            output = [
+                f"Workflow: {data.get('name', 'Unknown')}",
+                f"ID: {memory.id}",
+                f"Status: {data.get('status', 'unknown')}",
+            ]
+
+            if data.get("description"):
+                output.append(f"Description: {data['description']}")
+
+            steps = data.get("steps", [])
+            if steps:
+                output.append(f"\nTasks ({len(steps)}):")
+                for step in steps:
+                    output.append(f"  • {step}")
+
+            deps = data.get("dependencies", {})
+            if deps:
+                output.append("\nDependencies:")
+                for task, dep_list in deps.items():
+                    output.append(f"  {task} ← {', '.join(dep_list)}")
+
+            if data.get("started_at"):
+                output.append(f"\nStarted: {data['started_at']}")
+            if data.get("completed_at"):
+                output.append(f"Completed: {data['completed_at']}")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_task_list":
+            workflow_id = arguments.get("workflow_id")
+            status_filter = arguments.get("status")
+            limit = arguments.get("limit", 20)
+
+            # Search for task memories
+            query = workflow_id if workflow_id else ""
+            results = ctx.search(query, type="task", limit=limit)
+
+            if workflow_id:
+                results = [
+                    r
+                    for r in results
+                    if r.get("structured_data", {}).get("workflow_id") == workflow_id
+                ]
+
+            if status_filter:
+                results = [
+                    r
+                    for r in results
+                    if r.get("structured_data", {}).get("status") == status_filter
+                ]
+
+            if not results:
+                msg = "No tasks found"
+                if workflow_id:
+                    msg += f" for workflow {workflow_id[:12]}..."
+                return [TextContent(type="text", text=msg)]
+
+            output = [f"Found {len(results)} task(s):\n"]
+            for task in results:
+                task_id = task.get("id", "")[:12]
+                data = task.get("structured_data", {})
+                name = data.get("name", task.get("summary", "Unknown"))
+                status = data.get("status", "unknown")
+                retries = data.get("retries", 0)
+                max_retries = data.get("max_retries", 3)
+
+                status_icon = {
+                    "pending": "○",
+                    "running": "◐",
+                    "completed": "●",
+                    "failed": "✗",
+                    "skipped": "⊘",
+                    "cancelled": "⊗",
+                }.get(status, "?")
+
+                output.append(f"{status_icon} {name} ({status})")
+                output.append(f"  ID: {task_id}...")
+                if retries > 0:
+                    output.append(f"  Retries: {retries}/{max_retries}")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_agent_runs":
+            agent_name = arguments.get("agent_name")
+            status_filter = arguments.get("status")
+            limit = arguments.get("limit", 10)
+
+            # Search for agent_run memories
+            query = agent_name if agent_name else ""
+            results = ctx.search(query, type="agent_run", limit=limit)
+
+            if agent_name:
+                results = [
+                    r
+                    for r in results
+                    if r.get("structured_data", {}).get("agent_name") == agent_name
+                ]
+
+            if status_filter:
+                results = [
+                    r
+                    for r in results
+                    if r.get("structured_data", {}).get("status") == status_filter
+                ]
+
+            if not results:
+                msg = "No agent runs found"
+                if agent_name:
+                    msg += f" for agent '{agent_name}'"
+                return [TextContent(type="text", text=msg)]
+
+            output = [f"Found {len(results)} agent run(s):\n"]
+            for run in results:
+                run_id = run.get("id", "")[:12]
+                data = run.get("structured_data", {})
+                name = data.get("agent_name", "Unknown")
+                model = data.get("model", "unknown")
+                status = data.get("status", "unknown")
+                tool_calls = data.get("tool_calls", [])
+
+                status_icon = {
+                    "running": "◐",
+                    "completed": "●",
+                    "failed": "✗",
+                    "timeout": "⏱",
+                    "cancelled": "⊗",
+                }.get(status, "?")
+
+                output.append(f"{status_icon} {name} ({status})")
+                output.append(f"  ID: {run_id}...")
+                output.append(f"  Model: {model}")
+                if tool_calls:
+                    output.append(f"  Tool calls: {len(tool_calls)}")
+
+                # Token usage
+                prompt_tokens = data.get("prompt_tokens")
+                completion_tokens = data.get("completion_tokens")
+                if prompt_tokens or completion_tokens:
+                    output.append(
+                        f"  Tokens: {prompt_tokens or 0} in / {completion_tokens or 0} out"
+                    )
+
+            return [TextContent(type="text", text="\n".join(output))]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

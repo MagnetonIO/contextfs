@@ -45,6 +45,12 @@ class MemoryType(str, Enum):
     DEPENDENCY = "dependency"  # Package versions
     DOC = "doc"  # Documentation
 
+    # Workflow/Agent types
+    WORKFLOW = "workflow"  # Workflow definitions
+    TASK = "task"  # Individual workflow tasks
+    STEP = "step"  # Execution steps within tasks
+    AGENT_RUN = "agent_run"  # LLM agent execution records
+
 
 # Centralized type configuration - single source of truth
 # To add a new type: 1) Add to MemoryType enum above, 2) Add config here
@@ -778,6 +784,197 @@ class SchemaData(BaseStructuredData):
     relationships: list[str] = Field(default_factory=list, description="Related schemas/tables")
 
 
+# ============================================================================
+# Additional structured data types for complete type coverage
+# ============================================================================
+
+
+class FactData(BaseStructuredData):
+    """Structured data for fact memories."""
+
+    type: Literal["fact"] = "fact"
+    category: str | None = Field(
+        None, description="Category of fact (e.g., 'configuration', 'constant', 'rule')"
+    )
+    source: str | None = Field(None, description="Where this fact came from")
+    confidence: float | None = Field(None, ge=0.0, le=1.0, description="Confidence level (0.0-1.0)")
+    verified_at: str | None = Field(None, description="When the fact was verified (ISO timestamp)")
+    valid_until: str | None = Field(None, description="Expiration date if applicable")
+
+
+class EpisodicData(BaseStructuredData):
+    """Structured data for episodic memories (sessions/conversations)."""
+
+    type: Literal["episodic"] = "episodic"
+    session_type: str | None = Field(
+        None, description="Type of session (e.g., 'conversation', 'debug', 'review')"
+    )
+    participants: list[str] = Field(
+        default_factory=list, description="Participants (e.g., ['user', 'claude'])"
+    )
+    duration_seconds: int | None = Field(None, description="Session duration in seconds")
+    outcome: Literal["resolved", "ongoing", "abandoned", "deferred"] | None = Field(
+        None, description="Session outcome"
+    )
+    tool: str | None = Field(None, description="Tool used (e.g., 'claude-code', 'cursor')")
+    messages_count: int | None = Field(None, description="Number of messages in session")
+
+
+class UserData(BaseStructuredData):
+    """Structured data for user preference memories."""
+
+    type: Literal["user"] = "user"
+    preference_key: str = Field(..., description="The preference identifier")
+    preference_value: str | None = Field(None, description="The preference value")
+    scope: Literal["global", "project", "session", "repo"] | None = Field(
+        None, description="Scope of the preference"
+    )
+    priority: int | None = Field(None, description="Override priority (higher wins)")
+    expires_at: str | None = Field(None, description="Expiration time if temporary")
+
+
+class CodeData(BaseStructuredData):
+    """Structured data for code snippet memories."""
+
+    type: Literal["code"] = "code"
+    language: str | None = Field(None, description="Programming language")
+    purpose: Literal["snippet", "pattern", "example", "template", "fix"] | None = Field(
+        None, description="Purpose of the code"
+    )
+    file_path: str | None = Field(None, description="Source file path")
+    line_start: int | None = Field(None, description="Starting line number")
+    line_end: int | None = Field(None, description="Ending line number")
+    dependencies: list[str] = Field(
+        default_factory=list, description="Required imports/dependencies"
+    )
+    framework: str | None = Field(None, description="Framework context (e.g., 'react', 'fastapi')")
+
+
+class CommitData(BaseStructuredData):
+    """Structured data for git commit memories."""
+
+    type: Literal["commit"] = "commit"
+    sha: str | None = Field(None, description="Commit SHA hash")
+    short_sha: str | None = Field(None, description="Short commit SHA (7 chars)")
+    author: str | None = Field(None, description="Commit author")
+    author_email: str | None = Field(None, description="Author email")
+    message: str | None = Field(None, description="Commit message")
+    files_changed: list[str] = Field(default_factory=list, description="Files modified")
+    insertions: int | None = Field(None, description="Lines added")
+    deletions: int | None = Field(None, description="Lines removed")
+    branch: str | None = Field(None, description="Branch name")
+    timestamp: str | None = Field(None, description="Commit timestamp (ISO)")
+
+
+class DocData(BaseStructuredData):
+    """Structured data for documentation reference memories."""
+
+    type: Literal["doc"] = "doc"
+    doc_type: Literal["readme", "api", "tutorial", "reference", "guide", "changelog"] | None = (
+        Field(None, description="Type of documentation")
+    )
+    title: str | None = Field(None, description="Document title")
+    url: str | None = Field(None, description="URL to documentation")
+    version: str | None = Field(None, description="Documentation version")
+    last_updated: str | None = Field(None, description="Last update timestamp (ISO)")
+    format: Literal["markdown", "html", "pdf", "rst", "asciidoc"] | None = Field(
+        None, description="Document format"
+    )
+    sections: list[str] = Field(default_factory=list, description="Key sections covered")
+
+
+# ============================================================================
+# Workflow/Agent structured data types
+# ============================================================================
+
+
+class WorkflowData(BaseStructuredData):
+    """Structured data for workflow definitions."""
+
+    type: Literal["workflow"] = "workflow"
+    name: str = Field(..., description="Workflow name")
+    status: Literal["draft", "active", "paused", "completed", "failed"] = Field(
+        "draft", description="Workflow execution status"
+    )
+    description: str | None = Field(None, description="Workflow description")
+    steps: list[str] = Field(default_factory=list, description="Ordered step/task IDs")
+    parallel_groups: list[list[str]] = Field(
+        default_factory=list, description="Groups of steps to run in parallel"
+    )
+    dependencies: dict[str, list[str]] = Field(
+        default_factory=dict, description="Step dependencies: step_id -> [dependency_ids]"
+    )
+    created_by: str | None = Field(None, description="Creator of workflow")
+    started_at: str | None = Field(None, description="Start time (ISO)")
+    completed_at: str | None = Field(None, description="Completion time (ISO)")
+    error: str | None = Field(None, description="Error message if failed")
+
+
+class TaskData(BaseStructuredData):
+    """Structured data for workflow tasks."""
+
+    type: Literal["task"] = "task"
+    name: str = Field(..., description="Task name")
+    workflow_id: str | None = Field(None, description="Parent workflow ID")
+    status: Literal["pending", "running", "completed", "failed", "skipped", "cancelled"] = Field(
+        "pending", description="Task execution status"
+    )
+    assigned_agent: str | None = Field(None, description="Agent assigned to this task")
+    input_data: dict[str, Any] = Field(default_factory=dict, description="Task input data")
+    output_data: dict[str, Any] = Field(default_factory=dict, description="Task output/result")
+    error: str | None = Field(None, description="Error message if failed")
+    retries: int = Field(0, description="Number of retry attempts made")
+    max_retries: int = Field(3, description="Maximum retry attempts allowed")
+    timeout_seconds: int | None = Field(None, description="Task timeout in seconds")
+    started_at: str | None = Field(None, description="Start time (ISO)")
+    completed_at: str | None = Field(None, description="Completion time (ISO)")
+    depends_on: list[str] = Field(default_factory=list, description="Task IDs this depends on")
+
+
+class StepData(BaseStructuredData):
+    """Structured data for execution steps within tasks."""
+
+    type: Literal["step"] = "step"
+    task_id: str = Field(..., description="Parent task ID")
+    step_number: int = Field(0, description="Step sequence number")
+    action: Literal["tool_call", "llm_response", "decision", "observation", "error"] | None = Field(
+        None, description="Type of action taken"
+    )
+    input: dict[str, Any] = Field(default_factory=dict, description="Step input")
+    output: dict[str, Any] = Field(default_factory=dict, description="Step output")
+    duration_ms: int | None = Field(None, description="Step duration in milliseconds")
+    tokens_used: int | None = Field(None, description="LLM tokens consumed")
+    reason: Literal["observation", "inference", "correction", "decay"] | None = Field(
+        None, description="ChangeReason for this step"
+    )
+    tool_name: str | None = Field(None, description="Tool name if action=tool_call")
+    error: str | None = Field(None, description="Error message if step failed")
+
+
+class AgentRunData(BaseStructuredData):
+    """Structured data for LLM agent execution records."""
+
+    type: Literal["agent_run"] = "agent_run"
+    agent_name: str = Field(..., description="Agent identifier/name")
+    model: str | None = Field(None, description="LLM model used (e.g., 'claude-opus-4-5-20251101')")
+    provider: str | None = Field(None, description="LLM provider (e.g., 'anthropic', 'openai')")
+    workflow_id: str | None = Field(None, description="Parent workflow ID if part of workflow")
+    task_id: str | None = Field(None, description="Parent task ID if part of task")
+    prompt_tokens: int | None = Field(None, description="Input tokens consumed")
+    completion_tokens: int | None = Field(None, description="Output tokens generated")
+    total_tokens: int | None = Field(None, description="Total tokens used")
+    tool_calls: list[dict[str, Any]] = Field(
+        default_factory=list, description="Tool calls made: [{name, input, output}]"
+    )
+    status: Literal["running", "completed", "failed", "timeout", "cancelled"] = Field(
+        "running", description="Agent run status"
+    )
+    started_at: str | None = Field(None, description="Start time (ISO)")
+    completed_at: str | None = Field(None, description="Completion time (ISO)")
+    error: str | None = Field(None, description="Error message if failed")
+    system_prompt: str | None = Field(None, description="System prompt used")
+
+
 # Union of all typed structured data models
 # Use this for type hints when you want any typed structured data
 TypedStructuredData = (
@@ -793,22 +990,51 @@ TypedStructuredData = (
     | ReleaseData
     | ReviewData
     | SchemaData
+    | FactData
+    | EpisodicData
+    | UserData
+    | CodeData
+    | CommitData
+    | DocData
+    # Workflow/Agent types
+    | WorkflowData
+    | TaskData
+    | StepData
+    | AgentRunData
 )
 
 # Mapping from memory type to its structured data class
+# All 22 memory types now have structured schemas for complete type coverage
 STRUCTURED_DATA_CLASSES: dict[str, type[BaseStructuredData]] = {
+    # Core types
+    "fact": FactData,
     "decision": DecisionData,
     "procedural": ProceduralData,
+    "episodic": EpisodicData,
+    "user": UserData,
+    # Code types
+    "code": CodeData,
     "error": ErrorData,
-    "api": APIData,
+    "commit": CommitData,
+    # Task management types
     "todo": TodoData,
     "issue": IssueData,
+    # API/Schema types
+    "api": APIData,
+    "schema": SchemaData,
+    # Testing types
     "test": TestData,
+    "review": ReviewData,
+    # Ops types
     "config": ConfigData,
     "dependency": DependencyData,
     "release": ReleaseData,
-    "review": ReviewData,
-    "schema": SchemaData,
+    "doc": DocData,
+    # Workflow/Agent types
+    "workflow": WorkflowData,
+    "task": TaskData,
+    "step": StepData,
+    "agent_run": AgentRunData,
 }
 
 
@@ -1152,6 +1378,404 @@ class Memory(BaseModel):
         return cls(
             content=content,
             type=MemoryType.TODO,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def fact(
+        cls,
+        content: str,
+        category: str | None = None,
+        source: str | None = None,
+        confidence: float | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a fact memory with typed structured_data."""
+        structured: dict[str, Any] = {}
+        if category:
+            structured["category"] = category
+        if source:
+            structured["source"] = source
+        if confidence is not None:
+            structured["confidence"] = confidence
+        return cls(
+            content=content,
+            type=MemoryType.FACT,
+            structured_data=structured if structured else None,
+            **kwargs,
+        )
+
+    @classmethod
+    def episodic(
+        cls,
+        content: str,
+        session_type: str | None = None,
+        participants: list[str] | None = None,
+        outcome: str | None = None,
+        tool: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create an episodic memory with typed structured_data."""
+        structured: dict[str, Any] = {}
+        if session_type:
+            structured["session_type"] = session_type
+        if participants:
+            structured["participants"] = participants
+        if outcome:
+            structured["outcome"] = outcome
+        if tool:
+            structured["tool"] = tool
+        return cls(
+            content=content,
+            type=MemoryType.EPISODIC,
+            structured_data=structured if structured else None,
+            **kwargs,
+        )
+
+    @classmethod
+    def user(
+        cls,
+        content: str,
+        preference_key: str,
+        preference_value: str | None = None,
+        scope: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a user preference memory with typed structured_data."""
+        structured: dict[str, Any] = {"preference_key": preference_key}
+        if preference_value:
+            structured["preference_value"] = preference_value
+        if scope:
+            structured["scope"] = scope
+        return cls(
+            content=content,
+            type=MemoryType.USER,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def code(
+        cls,
+        content: str,
+        language: str | None = None,
+        purpose: str | None = None,
+        file_path: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a code memory with typed structured_data."""
+        structured: dict[str, Any] = {}
+        if language:
+            structured["language"] = language
+        if purpose:
+            structured["purpose"] = purpose
+        if file_path:
+            structured["file_path"] = file_path
+        return cls(
+            content=content,
+            type=MemoryType.CODE,
+            structured_data=structured if structured else None,
+            **kwargs,
+        )
+
+    @classmethod
+    def commit(
+        cls,
+        content: str,
+        sha: str | None = None,
+        author: str | None = None,
+        message: str | None = None,
+        files_changed: list[str] | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a commit memory with typed structured_data."""
+        structured: dict[str, Any] = {}
+        if sha:
+            structured["sha"] = sha
+            structured["short_sha"] = sha[:7] if len(sha) >= 7 else sha
+        if author:
+            structured["author"] = author
+        if message:
+            structured["message"] = message
+        if files_changed:
+            structured["files_changed"] = files_changed
+        return cls(
+            content=content,
+            type=MemoryType.COMMIT,
+            structured_data=structured if structured else None,
+            **kwargs,
+        )
+
+    @classmethod
+    def doc(
+        cls,
+        content: str,
+        doc_type: str | None = None,
+        title: str | None = None,
+        url: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a documentation reference memory with typed structured_data."""
+        structured: dict[str, Any] = {}
+        if doc_type:
+            structured["doc_type"] = doc_type
+        if title:
+            structured["title"] = title
+        if url:
+            structured["url"] = url
+        return cls(
+            content=content,
+            type=MemoryType.DOC,
+            structured_data=structured if structured else None,
+            **kwargs,
+        )
+
+    # =========================================================================
+    # Workflow/Agent Factory Methods
+    # =========================================================================
+
+    @classmethod
+    def workflow(
+        cls,
+        content: str,
+        name: str,
+        status: str = "draft",
+        description: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a workflow memory with typed structured_data."""
+        structured: dict[str, Any] = {"name": name, "status": status}
+        if description:
+            structured["description"] = description
+        return cls(
+            content=content,
+            type=MemoryType.WORKFLOW,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def task(
+        cls,
+        content: str,
+        name: str,
+        workflow_id: str | None = None,
+        status: str = "pending",
+        assigned_agent: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a task memory with typed structured_data."""
+        structured: dict[str, Any] = {"name": name, "status": status}
+        if workflow_id:
+            structured["workflow_id"] = workflow_id
+        if assigned_agent:
+            structured["assigned_agent"] = assigned_agent
+        return cls(
+            content=content,
+            type=MemoryType.TASK,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def step(
+        cls,
+        content: str,
+        task_id: str,
+        step_number: int = 0,
+        action: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a step memory with typed structured_data."""
+        structured: dict[str, Any] = {"task_id": task_id, "step_number": step_number}
+        if action:
+            structured["action"] = action
+        return cls(
+            content=content,
+            type=MemoryType.STEP,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def agent_run(
+        cls,
+        content: str,
+        agent_name: str,
+        model: str | None = None,
+        status: str = "running",
+        workflow_id: str | None = None,
+        task_id: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create an agent run memory with typed structured_data."""
+        structured: dict[str, Any] = {"agent_name": agent_name, "status": status}
+        if model:
+            structured["model"] = model
+        if workflow_id:
+            structured["workflow_id"] = workflow_id
+        if task_id:
+            structured["task_id"] = task_id
+        return cls(
+            content=content,
+            type=MemoryType.AGENT_RUN,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def issue(
+        cls,
+        content: str,
+        title: str,
+        severity: str | None = None,
+        status: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create an issue memory with typed structured_data."""
+        structured: dict[str, Any] = {"title": title}
+        if severity:
+            structured["severity"] = severity
+        if status:
+            structured["status"] = status
+        return cls(
+            content=content,
+            type=MemoryType.ISSUE,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def schema_def(
+        cls,
+        content: str,
+        name: str,
+        schema_type: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a schema memory with typed structured_data.
+
+        Note: Named schema_def to avoid conflict with Pydantic's schema() method.
+        """
+        structured: dict[str, Any] = {"name": name}
+        if schema_type:
+            structured["schema_type"] = schema_type
+        return cls(
+            content=content,
+            type=MemoryType.SCHEMA,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def test_case(
+        cls,
+        content: str,
+        name: str,
+        test_type: str | None = None,
+        status: str | None = None,
+        file: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a test memory with typed structured_data.
+
+        Note: Named test_case to avoid conflict with pytest.
+        """
+        structured: dict[str, Any] = {"name": name}
+        if test_type:
+            structured["test_type"] = test_type
+        if status:
+            structured["status"] = status
+        if file:
+            structured["file"] = file
+        return cls(
+            content=content,
+            type=MemoryType.TEST,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def review(
+        cls,
+        content: str,
+        pr_number: int,
+        reviewer: str | None = None,
+        status: str = "pending",
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a review memory with typed structured_data."""
+        structured: dict[str, Any] = {"pr_number": pr_number, "status": status}
+        if reviewer:
+            structured["reviewer"] = reviewer
+        return cls(
+            content=content,
+            type=MemoryType.REVIEW,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def release(
+        cls,
+        content: str,
+        version: str,
+        date: str | None = None,
+        changes: list[str] | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a release memory with typed structured_data."""
+        structured: dict[str, Any] = {"version": version}
+        if date:
+            structured["date"] = date
+        if changes:
+            structured["changes"] = changes
+        return cls(
+            content=content,
+            type=MemoryType.RELEASE,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def config(
+        cls,
+        content: str,
+        name: str,
+        environment: str | None = None,
+        settings: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a config memory with typed structured_data."""
+        structured: dict[str, Any] = {"name": name}
+        if environment:
+            structured["environment"] = environment
+        if settings:
+            structured["settings"] = settings
+        return cls(
+            content=content,
+            type=MemoryType.CONFIG,
+            structured_data=structured,
+            **kwargs,
+        )
+
+    @classmethod
+    def dependency(
+        cls,
+        content: str,
+        name: str,
+        version: str = "unknown",
+        dep_type: str | None = None,
+        **kwargs: Any,
+    ) -> "Memory":
+        """Create a dependency memory with typed structured_data."""
+        structured: dict[str, Any] = {"name": name, "version": version}
+        if dep_type:
+            structured["dep_type"] = dep_type
+        return cls(
+            content=content,
+            type=MemoryType.DEPENDENCY,
             structured_data=structured,
             **kwargs,
         )

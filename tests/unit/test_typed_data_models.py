@@ -242,7 +242,7 @@ class TestParseStructuredData:
     def test_parse_unknown_type_returns_dict(self):
         """Test parsing unknown type returns raw dict."""
         raw = {"custom": "data"}
-        result = parse_structured_data("fact", raw)  # 'fact' has no schema
+        result = parse_structured_data("unknown_type_xyz", raw)  # Unknown type has no schema
         assert isinstance(result, dict)
         assert result == raw
 
@@ -328,11 +328,16 @@ class TestMemoryTypedDataProperty:
         memory = Memory(
             content="A fact",
             type=MemoryType.FACT,
-            structured_data={"custom": "data"},
+            structured_data={"category": "config", "custom": "data"},
         )
         typed = memory.typed_data
-        assert isinstance(typed, dict)
-        assert typed["custom"] == "data"
+        # FACT now has a schema, so it returns FactData (which allows extra fields)
+        from contextfs.schemas import FactData
+
+        assert isinstance(typed, FactData)
+        assert typed.category == "config"
+        # Extra fields are preserved due to extra="allow" config
+        assert getattr(typed, "custom", None) == "data"
 
     def test_typed_data_returns_none_when_empty(self):
         """Test typed_data returns None when structured_data is None."""
