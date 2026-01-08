@@ -11,9 +11,13 @@ import hashlib
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+if TYPE_CHECKING:
+    from contextfs.types.memory import Mem
+    from contextfs.types.versioned import VersionedMem
 
 
 class MemoryType(str, Enum):
@@ -1156,7 +1160,7 @@ class Memory(BaseModel):
     # Formal Type System Integration
     # =========================================================================
 
-    def as_typed(self, schema_type: type) -> Any:
+    def as_typed(self, schema_type: type) -> "Mem":
         """
         Convert to schema-indexed Mem[S] type for type-safe structured_data access.
 
@@ -1185,7 +1189,7 @@ class Memory(BaseModel):
 
         return Mem.wrap(self, schema_type)
 
-    def as_versioned(self, schema_type: type) -> Any:
+    def as_versioned(self, schema_type: type) -> "VersionedMem":
         """
         Get versioned wrapper with timeline support for evolution tracking.
 
