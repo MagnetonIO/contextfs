@@ -1,6 +1,6 @@
 [project]
 name = "contextfs"
-version = "0.2.0"
+version = "0.2.1"
 description = "Universal AI memory layer - cross-client, cross-repo context management with RAG"
 readme = "README.md"
 license = { text = "MIT" }
