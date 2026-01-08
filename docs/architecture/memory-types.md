@@ -234,3 +234,54 @@ ctx.save(
     type=MemoryType.PROCEDURAL
 )
 ```
+
+## Formal Type System
+
+ContextFS implements a formal type-theoretic memory system based on Definition 5.1 Type Grammar. This enables type-safe access to `structured_data` with both runtime (Pydantic) and static (mypy/pyright) enforcement.
+
+### Type-Safe Memory Access
+
+Convert any memory to a typed wrapper for IDE autocomplete and type checking:
+
+```python
+from contextfs.schemas import Memory, DecisionData
+from contextfs.types import Mem
+
+# Create memory
+memory = Memory.decision("DB choice", decision="PostgreSQL")
+
+# Type-safe access
+typed: Mem[DecisionData] = memory.as_typed(DecisionData)
+print(typed.data.decision)  # IDE knows this is str
+```
+
+### Versioned Memory with Timeline
+
+Track memory evolution with formal change reasons:
+
+```python
+from contextfs.types import VersionedMem, ChangeReason
+
+versioned = memory.as_versioned(DecisionData)
+
+# Evolve with reason tracking
+versioned.evolve(
+    DecisionData(decision="SQLite"),
+    reason=ChangeReason.CORRECTION
+)
+
+# Query history
+print(versioned.timeline.root.content.decision)     # "PostgreSQL"
+print(versioned.timeline.current.content.decision)  # "SQLite"
+```
+
+### Change Reasons
+
+| Reason | When to Use |
+|--------|-------------|
+| `OBSERVATION` | New external information |
+| `INFERENCE` | Derived from existing knowledge |
+| `CORRECTION` | Fixing an error |
+| `DECAY` | Knowledge becoming stale |
+
+For full documentation, see [Formal Type System](../research/formal-type-system.md).

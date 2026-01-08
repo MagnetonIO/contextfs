@@ -222,6 +222,46 @@ From type theory:
 - Implement chaperone patterns for reliability
 - Design for progressive type refinement
 
+## ContextFS Implementation
+
+ContextFS implements these theoretical foundations through a formal type system based on **Definition 5.1 Type Grammar**:
+
+```
+MemoryType    ::= Mem Schema           -- Schema-indexed memory
+VersionedType ::= Versioned MemoryType -- Timeline with ChangeReason
+```
+
+### Mem[S] - Type-Safe Memory
+
+```python
+from contextfs.types import Mem
+from contextfs.schemas import DecisionData
+
+# Type-safe access to structured_data
+typed: Mem[DecisionData] = memory.as_typed(DecisionData)
+print(typed.data.decision)  # IDE knows this is str
+```
+
+### VersionedMem[S] - Evolution Tracking
+
+Memory evolution follows four formal change reasons:
+
+| ChangeReason | Type-Theoretic Meaning |
+|--------------|------------------------|
+| `OBSERVATION` | New axiom added to context |
+| `INFERENCE` | Derived theorem from premises |
+| `CORRECTION` | Contradiction resolution |
+| `DECAY` | Axiom confidence reduction |
+
+```python
+from contextfs.types import VersionedMem, ChangeReason
+
+versioned = memory.as_versioned(DecisionData)
+versioned.evolve(new_data, reason=ChangeReason.CORRECTION)
+```
+
+For implementation details, see [Formal Type System](formal-type-system.md).
+
 ## References
 
 1. Anfinsen, C. B. (1973). Principles that govern the folding of protein chains. *Science*.
@@ -233,3 +273,5 @@ From type theory:
 4. Martin-Löf, P. (1984). *Intuitionistic Type Theory*.
 
 5. Long, M. & YonedaAI Collaboration. (2025). Type-Safe Context Engineering. *Preprint*.
+
+6. Long, M. (2025). [Typed Memory Paper](../paper/typed-memory-paper.pdf). Definition 5.1 Type Grammar.
