@@ -1152,6 +1152,68 @@ class Memory(BaseModel):
             **kwargs,
         )
 
+    # =========================================================================
+    # Formal Type System Integration
+    # =========================================================================
+
+    def as_typed(self, schema_type: type) -> Any:
+        """
+        Convert to schema-indexed Mem[S] type for type-safe structured_data access.
+
+        This method wraps the Memory in a Mem[S] container that provides:
+        - Type-safe access to structured_data via the .data property
+        - Schema validation ensuring structured_data matches type S
+        - Generic type parameter for static type checking
+
+        Args:
+            schema_type: The schema type (must be BaseSchema subclass).
+
+        Returns:
+            Mem[S] wrapper around this memory.
+
+        Raises:
+            ValueError: If structured_data doesn't match schema.
+
+        Example:
+            >>> from contextfs.schemas import DecisionData
+            >>> memory = Memory.decision("DB choice", decision="PostgreSQL")
+            >>> typed = memory.as_typed(DecisionData)
+            >>> typed.data.decision  # Type-safe: str
+            'PostgreSQL'
+        """
+        from contextfs.types.memory import Mem
+
+        return Mem.wrap(self, schema_type)
+
+    def as_versioned(self, schema_type: type) -> Any:
+        """
+        Get versioned wrapper with timeline support for evolution tracking.
+
+        This method wraps the Memory in a VersionedMem[S] container that provides:
+        - Timeline of version entries with ChangeReason tracking
+        - Type-safe evolution operations
+        - Integration with memory lineage system
+
+        Args:
+            schema_type: The schema type (must be BaseSchema subclass).
+
+        Returns:
+            VersionedMem[S] wrapper with timeline support.
+
+        Example:
+            >>> from contextfs.schemas import DecisionData
+            >>> from contextfs.types import ChangeReason
+            >>> memory = Memory.decision("DB choice", decision="PostgreSQL")
+            >>> versioned = memory.as_versioned(DecisionData)
+            >>> versioned.evolve(
+            ...     DecisionData(decision="SQLite"),
+            ...     reason=ChangeReason.CORRECTION
+            ... )
+        """
+        from contextfs.types.versioned import VersionedMem
+
+        return VersionedMem.from_memory(self, schema_type)
+
 
 class SessionMessage(BaseModel):
     """A message in a session."""

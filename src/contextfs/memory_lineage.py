@@ -32,6 +32,7 @@ from contextfs.storage_protocol import (
     GraphBackend,
     MemoryEdge,
 )
+from contextfs.types.versioned import ChangeReason
 
 if TYPE_CHECKING:
     from contextfs.storage_router import StorageRouter
@@ -95,6 +96,7 @@ class MemoryLineage:
         summary: str | None = None,
         preserve_tags: bool = True,
         additional_tags: list[str] | None = None,
+        reason: ChangeReason = ChangeReason.OBSERVATION,
     ) -> Memory:
         """
         Evolve a memory by creating an updated version while preserving history.
@@ -108,6 +110,7 @@ class MemoryLineage:
             summary: Optional new summary
             preserve_tags: Whether to copy tags from original
             additional_tags: Additional tags for new memory
+            reason: Why this evolution occurred (from formal type system)
 
         Returns:
             New evolved Memory object
@@ -116,7 +119,11 @@ class MemoryLineage:
             ValueError: If original memory not found
 
         Example:
-            >>> evolved = lineage.evolve("abc123", "Updated documentation...")
+            >>> evolved = lineage.evolve(
+            ...     "abc123",
+            ...     "Updated documentation...",
+            ...     reason=ChangeReason.CORRECTION
+            ... )
             >>> print(evolved.metadata["evolved_from"])
             'abc123'
         """
@@ -149,6 +156,7 @@ class MemoryLineage:
                 **original.metadata,
                 "evolved_from": memory_id,
                 "evolution_timestamp": datetime.now(timezone.utc).isoformat(),
+                "change_reason": reason.value,
             },
         )
 
