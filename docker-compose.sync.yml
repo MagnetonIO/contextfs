@@ -15,14 +15,14 @@ services:
     environment:
       POSTGRES_USER: contextfs
       POSTGRES_PASSWORD: contextfs
-      POSTGRES_DB: contextfs_sync
+      POSTGRES_DB: contextfs
     ports:
       - "5433:5432"
     volumes:
       - sync_postgres_data:/var/lib/postgresql/data
       - ./migrations/sync-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U contextfs -d contextfs_sync"]
+      test: ["CMD-SHELL", "pg_isready -U contextfs -d contextfs"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -38,7 +38,7 @@ services:
       dockerfile: docker/Dockerfile.sync
     container_name: contextfs-sync-api
     environment:
-      CONTEXTFS_POSTGRES_URL: postgresql://contextfs:contextfs@sync-postgres:5432/contextfs_sync
+      CONTEXTFS_POSTGRES_URL: postgresql://contextfs:contextfs@sync-postgres:5432/contextfs
       CONTEXTFS_SYNC_PORT: "8766"
       CONTEXTFS_SYNC_HOST: "0.0.0.0"
       CORS_ORIGINS: "*"

@@ -6,12 +6,14 @@ and graph traversal without requiring external graph database.
 Revision ID: 003
 Revises: 002
 Create Date: 2024-12-18
+
+Supports both SQLite and PostgreSQL.
 """
 
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 # revision identifiers, used by Alembic.
 revision: str = "003"
@@ -20,15 +22,33 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def get_dialect() -> str:
+    """Get the database dialect name."""
+    return context.get_context().dialect.name
+
+
+def table_exists(conn, table_name: str) -> bool:
+    """Check if a table exists in the database."""
+    dialect = get_dialect()
+    if dialect == "postgresql":
+        result = conn.execute(
+            sa.text("SELECT 1 FROM information_schema.tables WHERE table_name = :name"),
+            {"name": table_name},
+        )
+    else:  # sqlite
+        result = conn.execute(
+            sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
+            {"name": table_name},
+        )
+    return result.fetchone() is not None
+
+
 def upgrade() -> None:
     """Create memory_edges table for graph relationships."""
     conn = op.get_bind()
 
     # Check if memory_edges table already exists
-    result = conn.execute(
-        sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_edges'")
-    )
-    if result.fetchone() is not None:
+    if table_exists(conn, "memory_edges"):
         return  # Table already exists
 
     # Create memory_edges table

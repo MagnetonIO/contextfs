@@ -165,6 +165,31 @@ TYPE_CONFIG: dict[str, dict[str, Any]] = {
         "description": "Documentation",
         "category": "extended",
     },
+    # Workflow/Agent types
+    "workflow": {
+        "label": "Workflow",
+        "color": "#7c3aed",
+        "description": "Workflow definitions",
+        "category": "workflow",
+    },
+    "task": {
+        "label": "Task",
+        "color": "#2563eb",
+        "description": "Individual workflow tasks",
+        "category": "workflow",
+    },
+    "step": {
+        "label": "Step",
+        "color": "#0891b2",
+        "description": "Execution steps within tasks",
+        "category": "workflow",
+    },
+    "agent_run": {
+        "label": "Agent Run",
+        "color": "#059669",
+        "description": "LLM agent execution records",
+        "category": "workflow",
+    },
 }
 
 

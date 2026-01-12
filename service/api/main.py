@@ -12,6 +12,9 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from contextfs.auth import init_auth_middleware
+from service.api.auth_routes import router as auth_router
+from service.api.billing_routes import router as billing_router
 from service.api.sync_routes import router as sync_router
 from service.db.session import close_db, create_tables, init_db
 
@@ -32,6 +35,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     await create_tables()
     logger.info("Database initialized")
+
+    # Initialize auth middleware
+    db_path = os.environ.get("CONTEXTFS_DB_PATH", "contextfs.db")
+    init_auth_middleware(db_path)
+    logger.info("Auth middleware initialized")
 
     yield
 
@@ -56,8 +64,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include sync routes
+# Include routers
 app.include_router(sync_router)
+app.include_router(auth_router)
+app.include_router(billing_router)
 
 
 # =============================================================================
@@ -80,14 +90,30 @@ async def root():
     """Root endpoint with API info."""
     return {
         "service": "ContextFS Sync Service",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "docs": "/docs",
         "health": "/health",
         "endpoints": {
-            "register": "POST /api/sync/register",
-            "push": "POST /api/sync/push",
-            "pull": "POST /api/sync/pull",
-            "status": "POST /api/sync/status",
+            "sync": {
+                "register": "POST /api/sync/register",
+                "push": "POST /api/sync/push",
+                "pull": "POST /api/sync/pull",
+                "status": "POST /api/sync/status",
+            },
+            "auth": {
+                "me": "GET /api/auth/me",
+                "api_keys": "GET /api/auth/api-keys",
+                "create_key": "POST /api/auth/api-keys",
+                "oauth_init": "POST /api/auth/oauth/init",
+                "oauth_callback": "POST /api/auth/oauth/callback",
+            },
+            "billing": {
+                "checkout": "POST /api/billing/checkout",
+                "portal": "POST /api/billing/portal",
+                "subscription": "GET /api/billing/subscription",
+                "usage": "GET /api/billing/usage",
+                "webhook": "POST /api/billing/webhook",
+            },
         },
     }
 

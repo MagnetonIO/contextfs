@@ -58,6 +58,18 @@ dependencies = [
 
     # Database migrations
     "alembic>=1.14.0",
+
+    # Async SQLite for auth/billing
+    "aiosqlite>=0.19.0",
+
+    # Encryption for E2EE
+    "cryptography>=42.0.0",
+
+    # Password hashing
+    "bcrypt>=4.2.0",
+
+    # JWT tokens
+    "pyjwt>=2.9.0",
 ]
 
 [project.optional-dependencies]
@@ -78,8 +90,11 @@ fast = [
 gpu = [
     "fastembed-gpu>=0.4.0",
 ]
+cloud = [
+    "stripe>=8.0.0",
+]
 all = [
-    "contextfs[web,postgres,fast]",
+    "contextfs[web,postgres,fast,cloud]",
 ]
 dev = [
     "pytest>=8.3.0",

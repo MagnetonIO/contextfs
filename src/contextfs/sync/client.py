@@ -49,6 +49,7 @@ from contextfs.sync.vector_clock import DeviceTracker, VectorClock
 
 if TYPE_CHECKING:
     from contextfs import ContextFS
+    from contextfs.encryption import ClientCrypto
     from contextfs.schemas import Memory
 
 logger = logging.getLogger(__name__)
@@ -99,23 +100,38 @@ class SyncClient:
         ctx: ContextFS | None = None,
         device_id: str | None = None,
         timeout: float = 30.0,
+        api_key: str | None = None,
     ):
         """
         Initialize sync client.
+
+        E2EE is automatic - the encryption key is derived from the API key + salt.
+        The salt is fetched from the server on first sync operation.
 
         Args:
             server_url: Base URL of sync server (e.g., http://localhost:8766)
             ctx: ContextFS instance for local storage (auto-created if not provided)
             device_id: Unique device identifier (auto-generated if not provided)
             timeout: HTTP request timeout in seconds
+            api_key: API key for cloud authentication (X-API-Key header)
         """
         self.server_url = server_url.rstrip("/")
         self._ctx = ctx
         self.device_id = device_id or self._get_or_create_device_id()
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._api_key = api_key
         self._path_resolver = PathResolver()
         self._device_tracker = DeviceTracker()
         self._server_url = server_url
+
+        # Setup HTTP client with optional auth header
+        headers = {}
+        if api_key:
+            headers["X-API-Key"] = api_key
+        self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
+
+        # E2EE encryption - auto-initialized on first use
+        self._crypto: ClientCrypto | None = None
+        self._e2ee_initialized = False
 
         # Sync state (loaded from SQLite)
         self._last_sync: datetime | None = None
@@ -282,6 +298,72 @@ class SyncClient:
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
     # =========================================================================
+    # E2EE Encryption
+    # =========================================================================
+
+    async def _ensure_e2ee_initialized(self) -> None:
+        """Auto-initialize E2EE by fetching salt from server.
+
+        E2EE is automatic - the encryption key is derived from the API key + salt.
+        This method fetches the salt from the server on first call.
+        """
+        if self._e2ee_initialized:
+            return
+
+        if not self._api_key:
+            self._e2ee_initialized = True
+            return
+
+        try:
+            response = await self._client.get(f"{self.server_url}/api/auth/encryption-salt")
+            if response.status_code == 200:
+                salt = response.json().get("salt")
+                if salt:
+                    from contextfs.encryption import ClientCrypto
+
+                    self._crypto = ClientCrypto.from_api_key(self._api_key, salt)
+                    logger.info("E2EE auto-initialized from API key + salt")
+            elif response.status_code == 404:
+                # No salt found - API key may not have E2EE enabled (legacy key)
+                logger.debug("No encryption salt found for API key")
+        except Exception as e:
+            logger.warning(f"Failed to fetch encryption salt: {e}")
+
+        self._e2ee_initialized = True
+
+    def _encrypt_content(self, content: str) -> str:
+        """Encrypt content for cloud sync (if encryption is configured).
+
+        Args:
+            content: Plaintext content
+
+        Returns:
+            Encrypted content (base64) if encryption configured, otherwise original
+        """
+        if self._crypto is None or not content:
+            return content
+        return self._crypto.encrypt(content)
+
+    def _decrypt_content(self, content: str, encrypted: bool = False) -> str:
+        """Decrypt content from cloud sync (if encryption is configured).
+
+        Args:
+            content: Content to decrypt
+            encrypted: Whether the content is encrypted
+
+        Returns:
+            Decrypted content if encrypted, otherwise original
+        """
+        if self._crypto is None or not encrypted or not content:
+            return content
+        return self._crypto.decrypt(content)
+
+    @property
+    def is_encrypted(self) -> bool:
+        """Check if E2EE encryption is configured."""
+        return self._crypto is not None
+
+    # =========================================================================
     # Path Normalization
     # =========================================================================
 
@@ -344,6 +426,9 @@ class SyncClient:
         Returns:
             SyncPushResponse with accepted/rejected counts and conflicts
         """
+        # Auto-initialize E2EE from API key + salt
+        await self._ensure_e2ee_initialized()
+
         if memories is None:
             # Query local memories changed since last sync (or all if push_all)
             memories = self._get_local_changes(namespace_ids, push_all=push_all)
@@ -370,10 +455,14 @@ class SyncClient:
             # Normalize paths
             paths = self._normalize_memory_paths(m)
 
+            # Encrypt content for E2EE if configured
+            content_to_sync = self._encrypt_content(m.content)
+            is_encrypted = self._crypto is not None and m.content
+
             synced_memories.append(
                 SyncedMemory(
                     id=m.id,
-                    content=m.content,
+                    content=content_to_sync,
                     type=m.type.value if hasattr(m.type, "value") else str(m.type),
                     tags=m.tags,
                     summary=m.summary,
@@ -389,11 +478,12 @@ class SyncClient:
                     created_at=m.created_at,
                     updated_at=m.updated_at,
                     vector_clock=clock.to_dict(),
-                    content_hash=self.compute_content_hash(m.content),
+                    content_hash=self.compute_content_hash(m.content),  # Hash plaintext
                     deleted_at=getattr(m, "deleted_at", None),
                     metadata=m.metadata,
                     # Include embedding for sync to server
                     embedding=memory_embeddings.get(m.id),
+                    encrypted=is_encrypted,
                 )
             )
 
@@ -633,6 +723,9 @@ class SyncClient:
         Returns:
             SyncPullResponse with memories and sessions
         """
+        # Auto-initialize E2EE from API key + salt
+        await self._ensure_e2ee_initialized()
+
         # Use _last_sync only if since is not explicitly provided
         # For pagination (offset > 0), caller should pass the same since value
         since_timestamp = since if since is not None else self._last_sync
@@ -844,6 +937,12 @@ class SyncClient:
                 except Exception:
                     pass  # Already deleted or doesn't exist
             else:
+                # Decrypt content if it was encrypted (E2EE)
+                content = self._decrypt_content(
+                    synced.content,
+                    encrypted=getattr(synced, "encrypted", False),
+                )
+
                 # Prepare metadata with sync info
                 metadata = synced.metadata.copy() if synced.metadata else {}
                 metadata["_vector_clock"] = synced.vector_clock
@@ -852,7 +951,7 @@ class SyncClient:
                 # Create Memory object for batch save
                 memory = Memory(
                     id=synced.id,
-                    content=synced.content,
+                    content=content,
                     type=MemoryType(synced.type) if synced.type else MemoryType.FACT,
                     tags=synced.tags or [],
                     summary=synced.summary,
@@ -1262,10 +1361,14 @@ class SyncClient:
 
             paths = self._normalize_memory_paths(m)
 
+            # Encrypt content for E2EE if configured
+            content_to_sync = self._encrypt_content(m.content)
+            is_encrypted = self._crypto is not None and m.content
+
             synced_memories.append(
                 SyncedMemory(
                     id=m.id,
-                    content=m.content,
+                    content=content_to_sync,
                     type=m.type.value if hasattr(m.type, "value") else str(m.type),
                     tags=m.tags,
                     summary=m.summary,
@@ -1281,10 +1384,11 @@ class SyncClient:
                     created_at=m.created_at,
                     updated_at=m.updated_at,
                     vector_clock=clock.to_dict(),
-                    content_hash=self.compute_content_hash(m.content),
+                    content_hash=self.compute_content_hash(m.content),  # Hash plaintext
                     deleted_at=getattr(m, "deleted_at", None),
                     metadata=m.metadata,
                     embedding=memory_embeddings.get(m.id),
+                    encrypted=is_encrypted,
                 )
             )
 

@@ -8,7 +8,7 @@ Works with Claude Code, Claude Desktop, Gemini CLI, Codex CLI, and any MCP clien
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-**[Documentation](https://magnetonio.github.io/contextfs)** | **[Developer Memory Workflow Guide](docs/DMW.md)** | **[GitHub](https://github.com/MagnetonIO/contextfs)**
+**[Documentation](https://contextfs.github.io/contextfs)** | **[Developer Memory Workflow Guide](docs/DMW.md)** | **[GitHub](https://github.com/contextfs/contextfs)**
 
 ## Features
 
@@ -35,7 +35,7 @@ pip install contextfs
 uv pip install contextfs
 
 # Or install from source
-git clone https://github.com/MagnetonIO/contextfs.git
+git clone https://github.com/contextfs/contextfs.git
 cd contextfs
 pip install -e .
 ```
@@ -213,7 +213,7 @@ CONTEXTFS_AUTO_LOAD_ON_STARTUP=true
 
 ## Supported Languages
 
-ContextFS supports 50+ file types including Python, JavaScript, TypeScript, Go, Rust, Java, C++, and more. See [full list](https://magnetonio.github.io/contextfs/getting-started/supported-languages/) in docs.
+ContextFS supports 50+ file types including Python, JavaScript, TypeScript, Go, Rust, Java, C++, and more. See [full list](https://contextfs.github.io/contextfs/getting-started/supported-languages/) in docs.
 
 ## Developer Memory Workflow (DMW)
 

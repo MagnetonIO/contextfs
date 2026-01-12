@@ -12,13 +12,14 @@ Provides:
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,7 +29,46 @@ from contextfs.core import ContextFS
 from contextfs.fts import FTSBackend, HybridSearch
 from contextfs.schemas import Memory, MemoryType, SearchResult, Session
 
+# Optional asyncpg for PostgreSQL sync database
+try:
+    import asyncpg
+
+    HAS_ASYNCPG = True
+except ImportError:
+    HAS_ASYNCPG = False
+
 logger = logging.getLogger(__name__)
+
+
+# ==================== Auth Models ====================
+
+
+class SignupRequest(BaseModel):
+    email: str
+    name: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: str
+
+
+class CreateApiKeyRequest(BaseModel):
+    name: str
+    with_encryption: bool = True
+
+
+class RevokeApiKeyRequest(BaseModel):
+    key_id: str
 
 
 # ==================== Pydantic Models ====================
@@ -175,6 +215,8 @@ def create_app(
         "ctx": ctx,
         "fts": None,
         "hybrid": None,
+        "auth_storage": None,
+        "sync_pool": None,  # PostgreSQL pool for sync database (memories)
     }
 
     ws_manager = ConnectionManager()
@@ -192,9 +234,29 @@ def create_app(
         app_state["fts"] = FTSBackend(ctx._db_path)
         app_state["hybrid"] = HybridSearch(app_state["fts"], ctx.rag)
 
+        # Initialize auth storage (uses config to determine backend)
+        from contextfs.auth.storage import create_auth_storage
+
+        app_state["auth_storage"] = create_auth_storage()
+
+        # Initialize sync pool for PostgreSQL memories (if configured)
+        postgres_url = os.environ.get("CONTEXTFS_POSTGRES_URL")
+        if postgres_url and HAS_ASYNCPG:
+            try:
+                app_state["sync_pool"] = await asyncpg.create_pool(
+                    postgres_url, min_size=2, max_size=10
+                )
+                logger.info("PostgreSQL sync pool created for memories")
+            except Exception as e:
+                logger.warning(f"Failed to create sync pool: {e}")
+
         logger.info("ContextFS web server started")
         yield
         # Shutdown
+        if app_state["sync_pool"]:
+            await app_state["sync_pool"].close()
+        if app_state["auth_storage"]:
+            await app_state["auth_storage"].close()
         if ctx:
             ctx.close()
         logger.info("ContextFS web server stopped")
@@ -223,6 +285,182 @@ def create_app(
 
     def get_hybrid() -> HybridSearch:
         return app_state["hybrid"]
+
+    def get_auth_storage():
+        """Get auth storage instance."""
+        return app_state["auth_storage"]
+
+    def get_sync_pool():
+        """Get PostgreSQL sync pool for memories."""
+        return app_state["sync_pool"]
+
+    async def query_sync_memories(
+        limit: int = 20,
+        type_filter: str | None = None,
+        query: str | None = None,
+    ) -> list[dict]:
+        """Query memories from PostgreSQL sync database."""
+        pool = get_sync_pool()
+        if not pool:
+            # Fallback to local if no sync pool
+            ctx = get_ctx()
+            memories = ctx.list_recent(
+                limit=limit, type=MemoryType(type_filter) if type_filter else None
+            )
+            return [serialize_memory(m) for m in memories]
+
+        async with pool.acquire() as conn:
+            if query and query != "*":
+                # Full-text search
+                rows = await conn.fetch(
+                    """
+                    SELECT id, content, type, tags, summary, namespace_id,
+                           source_file, source_repo, session_id, created_at, updated_at,
+                           metadata, structured_data
+                    FROM memories
+                    WHERE deleted_at IS NULL
+                      AND ($1::text IS NULL OR type = $1)
+                      AND to_tsvector('english', content) @@ plainto_tsquery('english', $2)
+                    ORDER BY created_at DESC
+                    LIMIT $3
+                    """,
+                    type_filter,
+                    query,
+                    limit,
+                )
+            else:
+                # List recent
+                rows = await conn.fetch(
+                    """
+                    SELECT id, content, type, tags, summary, namespace_id,
+                           source_file, source_repo, session_id, created_at, updated_at,
+                           metadata, structured_data
+                    FROM memories
+                    WHERE deleted_at IS NULL
+                      AND ($1::text IS NULL OR type = $1)
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                    """,
+                    type_filter,
+                    limit,
+                )
+
+        def parse_json_field(value):
+            """Parse JSON field - handles both dicts and JSON strings."""
+            if value is None:
+                return {}
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    return {}
+            return {}
+
+        return [
+            {
+                "id": row["id"],
+                "content": row["content"],
+                "type": row["type"],
+                "tags": row["tags"] or [],
+                "summary": row["summary"],
+                "namespace_id": row["namespace_id"],
+                "source_file": row["source_file"],
+                "source_repo": row["source_repo"],
+                "session_id": row["session_id"],
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                "metadata": parse_json_field(row["metadata"]),
+                "structured_data": parse_json_field(row["structured_data"]),
+            }
+            for row in rows
+        ]
+
+    async def get_sync_memory(memory_id: str) -> dict | None:
+        """Get a specific memory from PostgreSQL sync database."""
+        pool = get_sync_pool()
+        if not pool:
+            # Fallback to local if no sync pool
+            ctx = get_ctx()
+            memory = ctx.recall(memory_id)
+            return serialize_memory(memory) if memory else None
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, content, type, tags, summary, namespace_id,
+                       source_file, source_repo, session_id, created_at, updated_at,
+                       metadata, structured_data
+                FROM memories
+                WHERE id = $1 AND deleted_at IS NULL
+                """,
+                memory_id,
+            )
+
+        if not row:
+            return None
+
+        def parse_json_field(value):
+            """Parse JSON field - handles both dicts and JSON strings."""
+            if value is None:
+                return {}
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    return {}
+            return {}
+
+        return {
+            "id": row["id"],
+            "content": row["content"],
+            "type": row["type"],
+            "tags": row["tags"] or [],
+            "summary": row["summary"],
+            "namespace_id": row["namespace_id"],
+            "source_file": row["source_file"],
+            "source_repo": row["source_repo"],
+            "session_id": row["session_id"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            "metadata": parse_json_field(row["metadata"]),
+            "structured_data": parse_json_field(row["structured_data"]),
+        }
+
+    async def delete_sync_memory(memory_id: str) -> bool:
+        """Soft delete a memory from PostgreSQL sync database."""
+        pool = get_sync_pool()
+        if not pool:
+            # Fallback to local if no sync pool
+            ctx = get_ctx()
+            return ctx.delete(memory_id)
+
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE memories SET deleted_at = NOW()
+                WHERE id = $1 AND deleted_at IS NULL
+                """,
+                memory_id,
+            )
+        return result != "UPDATE 0"
+
+    async def count_sync_memories() -> int:
+        """Count total memories in PostgreSQL sync database."""
+        pool = get_sync_pool()
+        if not pool:
+            # Fallback to local if no sync pool
+            ctx = get_ctx()
+            return len(ctx.list_recent(limit=100000))
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT COUNT(*) as count FROM memories WHERE deleted_at IS NULL"
+            )
+        return row["count"] if row else 0
 
     # ==================== Search API ====================
 
@@ -326,36 +564,42 @@ def create_app(
         type: str | None = None,
         namespace: str | None = None,
     ):
-        """List recent memories."""
-        ctx = get_ctx()
-
+        """List recent memories from sync database."""
         try:
-            memories = await asyncio.to_thread(
-                ctx.list_recent,
-                limit=limit,
-                type=MemoryType(type) if type else None,
-                namespace_id=namespace,
-            )
-
-            return APIResponse(
-                success=True,
-                data=[serialize_memory(m) for m in memories],
-            )
+            memories = await query_sync_memories(limit=limit, type_filter=type)
+            return APIResponse(success=True, data=memories)
 
         except Exception as e:
             logger.exception("List memories error")
             return APIResponse(success=False, error=str(e))
 
-    @app.get("/api/memories/{memory_id}", response_model=APIResponse)
-    async def get_memory(memory_id: str):
-        """Get a specific memory."""
-        ctx = get_ctx()
-
+    @app.get("/api/memories/search")
+    async def search_memories(
+        query: str = Query("*", description="Search query"),
+        type: str | None = Query(None, description="Memory type filter"),
+        limit: int = Query(20, ge=1, le=100, description="Max results"),
+    ):
+        """Search memories from sync database - returns {memories: [...]} format for frontend."""
         try:
-            memory = await asyncio.to_thread(ctx.recall, memory_id)
+            memories = await query_sync_memories(
+                limit=limit,
+                type_filter=type,
+                query=query if query != "*" else None,
+            )
+            return {"memories": memories}
+
+        except Exception as e:
+            logger.exception("Search memories error")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/memories/{memory_id}")
+    async def get_memory(memory_id: str):
+        """Get a specific memory from sync database - returns Memory object directly."""
+        try:
+            memory = await get_sync_memory(memory_id)
 
             if memory:
-                return APIResponse(success=True, data=serialize_memory(memory))
+                return memory
             else:
                 raise HTTPException(status_code=404, detail="Memory not found")
 
@@ -363,7 +607,7 @@ def create_app(
             raise
         except Exception as e:
             logger.exception("Get memory error")
-            return APIResponse(success=False, error=str(e))
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/api/memories", response_model=APIResponse)
     async def create_memory(data: MemoryCreate):
@@ -398,11 +642,9 @@ def create_app(
 
     @app.delete("/api/memories/{memory_id}", response_model=APIResponse)
     async def delete_memory(memory_id: str):
-        """Delete a memory."""
-        ctx = get_ctx()
-
+        """Delete a memory from sync database."""
         try:
-            deleted = await asyncio.to_thread(ctx.delete, memory_id)
+            deleted = await delete_sync_memory(memory_id)
 
             if deleted:
                 await ws_manager.broadcast(
@@ -570,6 +812,630 @@ def create_app(
         except Exception as e:
             logger.exception("Delete session error")
             return APIResponse(success=False, error=str(e))
+
+    # ==================== Auth API ====================
+
+    def _hash_password(password: str) -> str:
+        """Hash password using bcrypt."""
+        import bcrypt
+
+        return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+    def _verify_password(password: str, hashed: str) -> bool:
+        """Verify password against hash."""
+        import bcrypt
+
+        return bcrypt.checkpw(password.encode(), hashed.encode())
+
+    def _generate_verification_token() -> str:
+        """Generate a secure random token."""
+        import secrets
+
+        return secrets.token_urlsafe(32)
+
+    def _log_verification_email(email: str, name: str, token: str) -> None:
+        """Log verification link to terminal for local development."""
+        import os
+
+        base_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+        verify_url = f"{base_url}/verify-email?token={token}"
+        print("\n")
+        print("=" * 50)
+        print("📧 VERIFICATION EMAIL")
+        print("=" * 50)
+        print(f"To: {email}")
+        print(f"Name: {name}")
+        print("")
+        print("Click this link to verify your email:")
+        print(f"🔗 {verify_url}")
+        print("=" * 50)
+        print("\n")
+
+    @app.post("/api/auth/signup")
+    async def signup(data: SignupRequest):
+        """Register a new user with email/password."""
+        from uuid import uuid4
+
+        from contextfs.auth.api_keys import generate_api_key, generate_encryption_salt, hash_api_key
+
+        try:
+            if len(data.password) < 8:
+                raise HTTPException(
+                    status_code=400, detail="Password must be at least 8 characters"
+                )
+
+            storage = get_auth_storage()
+
+            # Check if email exists
+            existing = await storage.get_user_by_email(data.email)
+            if existing:
+                raise HTTPException(
+                    status_code=400, detail="An account with this email already exists"
+                )
+
+            # Create user
+            user_id = str(uuid4())
+            password_hash = _hash_password(data.password)
+            verification_token = _generate_verification_token()
+            verification_expires = (datetime.now() + timedelta(hours=24)).isoformat()
+
+            user = await storage.create_user(
+                user_id=user_id,
+                email=data.email,
+                name=data.name,
+                provider="email",
+                password_hash=password_hash,
+                email_verified=False,
+                verification_token=verification_token,
+                verification_token_expires=verification_expires,
+            )
+
+            # Create API key with E2EE salt (automatic for all users)
+            raw_key, key_prefix = generate_api_key()
+            key_hash = hash_api_key(raw_key)
+            key_id = str(uuid4())
+            encryption_salt = generate_encryption_salt()
+
+            await storage.create_api_key(
+                key_id=key_id,
+                user_id=user_id,
+                name="Default",
+                key_hash=key_hash,
+                key_prefix=key_prefix,
+                encryption_salt=encryption_salt,
+            )
+
+            # Create free subscription
+            sub_id = str(uuid4())
+            await storage.create_subscription(
+                sub_id=sub_id,
+                user_id=user_id,
+                tier="free",
+                device_limit=3,
+                memory_limit=10000,
+            )
+
+            # Log verification link for local development
+            _log_verification_email(data.email, data.name, verification_token)
+
+            return {
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.name,
+                    "emailVerified": user.email_verified,
+                    "createdAt": user.created_at,
+                },
+                "apiKey": raw_key,
+                "message": "Account created! Check terminal for verification link.",
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Signup error")
+            raise HTTPException(status_code=500, detail="Something went wrong")
+
+    @app.post("/api/auth/login")
+    async def login(data: LoginRequest):
+        """Authenticate user with email/password."""
+        from uuid import uuid4
+
+        from contextfs.auth.api_keys import generate_api_key, generate_encryption_salt, hash_api_key
+
+        try:
+            storage = get_auth_storage()
+
+            # Get user
+            user = await storage.get_user_by_email(data.email)
+            if not user or user.provider != "email":
+                raise HTTPException(status_code=401, detail="Invalid email or password")
+
+            if not user.password_hash or not _verify_password(data.password, user.password_hash):
+                raise HTTPException(status_code=401, detail="Invalid email or password")
+
+            if not user.email_verified:
+                raise HTTPException(status_code=403, detail="EmailNotVerified")
+
+            # Get or create API key
+            keys = await storage.list_api_keys(user.id)
+            if keys:
+                # Generate new key for this session (keep existing salt for E2EE continuity)
+                raw_key, key_prefix = generate_api_key()
+                key_hash = hash_api_key(raw_key)
+                await storage.update_api_key(
+                    keys[0].id,
+                    key_hash=key_hash,
+                    key_prefix=key_prefix,
+                )
+            else:
+                # Create new API key with E2EE salt
+                raw_key, key_prefix = generate_api_key()
+                key_hash = hash_api_key(raw_key)
+                key_id = str(uuid4())
+                encryption_salt = generate_encryption_salt()
+                await storage.create_api_key(
+                    key_id=key_id,
+                    user_id=user.id,
+                    name="Default",
+                    key_hash=key_hash,
+                    key_prefix=key_prefix,
+                    encryption_salt=encryption_salt,
+                )
+
+            # Update last login
+            await storage.update_user(user.id, last_login=datetime.now().isoformat())
+
+            return {
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.name,
+                    "emailVerified": user.email_verified,
+                    "createdAt": user.created_at,
+                },
+                "apiKey": raw_key,
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Login error")
+            raise HTTPException(status_code=500, detail="Something went wrong")
+
+    @app.post("/api/auth/verify-email")
+    async def verify_email(data: VerifyEmailRequest):
+        """Verify email with token."""
+        try:
+            storage = get_auth_storage()
+            result = await storage.get_user_by_verification_token(data.token)
+
+            if not result:
+                return {"success": False, "message": "Invalid verification token"}
+
+            user, token_expires = result
+
+            # Check if token expired
+            if isinstance(token_expires, str):
+                expires = datetime.fromisoformat(token_expires)
+            else:
+                expires = token_expires
+
+            if datetime.now() > expires:
+                return {"success": False, "message": "Verification token has expired"}
+
+            # Mark email as verified
+            await storage.update_user(
+                user.id,
+                email_verified=True,
+                verification_token=None,
+                verification_token_expires=None,
+            )
+
+            return {"success": True, "message": "Email verified successfully"}
+        except Exception:
+            logger.exception("Verify email error")
+            raise HTTPException(status_code=500, detail="Something went wrong")
+
+    @app.post("/api/auth/resend-verification")
+    async def resend_verification(data: ResendVerificationRequest):
+        """Resend verification email."""
+        try:
+            storage = get_auth_storage()
+            user = await storage.get_user_by_email(data.email)
+
+            if not user:
+                return {"success": False, "message": "Email not found"}
+
+            if user.email_verified:
+                return {"success": False, "message": "Email is already verified"}
+
+            # Generate new token
+            new_token = _generate_verification_token()
+            new_expires = (datetime.now() + timedelta(hours=24)).isoformat()
+
+            await storage.update_user(
+                user.id,
+                verification_token=new_token,
+                verification_token_expires=new_expires,
+            )
+
+            # Log verification link
+            _log_verification_email(data.email, user.name or data.email, new_token)
+
+            return {"success": True, "message": "Verification email sent"}
+        except Exception:
+            logger.exception("Resend verification error")
+            raise HTTPException(status_code=500, detail="Something went wrong")
+
+    @app.get("/api/auth/check-email")
+    async def check_email(email: str = Query(...)):
+        """Check if email is already registered."""
+        try:
+            storage = get_auth_storage()
+            user = await storage.get_user_by_email(email)
+            return {"exists": user is not None}
+        except Exception:
+            logger.exception("Check email error")
+            raise HTTPException(status_code=500, detail="Something went wrong")
+
+    @app.get("/api/auth/user")
+    async def get_user_by_email(email: str = Query(...)):
+        """Get user by email address."""
+        try:
+            storage = get_auth_storage()
+            user = await storage.get_user_by_email(email)
+            if user:
+                return {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.name,
+                    "emailVerified": user.email_verified,
+                    "createdAt": user.created_at,
+                }
+            raise HTTPException(status_code=404, detail="User not found")
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Get user error")
+            raise HTTPException(status_code=500, detail="Something went wrong")
+
+    # ==================== API Key Management ====================
+
+    async def get_user_from_api_key(api_key: str):
+        """Get user ID from API key."""
+        from contextfs.auth.api_keys import hash_api_key
+
+        storage = get_auth_storage()
+        key_hash = hash_api_key(api_key)
+        return await storage.get_user_id_by_key_hash(key_hash)
+
+    @app.get("/api/auth/me")
+    async def get_current_user(request: Request):
+        """Get current user from API key."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        storage = get_auth_storage()
+        user = await storage.get_user_by_id(user_id)
+        if user:
+            return {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "provider": user.provider,
+            }
+        raise HTTPException(status_code=404, detail="User not found")
+
+    @app.get("/api/auth/api-keys")
+    async def list_api_keys(request: Request):
+        """List user's API keys."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        storage = get_auth_storage()
+        keys = await storage.list_api_keys(user_id)
+        return {
+            "keys": [
+                {
+                    "id": key.id,
+                    "name": key.name,
+                    "key_prefix": key.key_prefix,
+                    "is_active": key.is_active,
+                    "created_at": key.created_at,
+                    "last_used_at": key.last_used_at,
+                }
+                for key in keys
+            ]
+        }
+
+    @app.get("/api/auth/encryption-salt")
+    async def get_encryption_salt(request: Request):
+        """Get the encryption salt for the current API key.
+
+        Used by clients to derive the E2EE encryption key locally.
+        The client derives: encryption_key = HKDF(api_key, salt)
+        """
+        from contextfs.auth.api_keys import hash_api_key
+
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        storage = get_auth_storage()
+        key_hash = hash_api_key(api_key)
+        salt = await storage.get_encryption_salt_by_key_hash(key_hash)
+
+        if salt is None:
+            raise HTTPException(status_code=404, detail="No encryption salt found for this API key")
+
+        return {"salt": salt}
+
+    @app.post("/api/auth/api-keys")
+    async def create_api_key(request: Request, data: CreateApiKeyRequest):
+        """Create a new API key with automatic E2EE.
+
+        E2EE is automatic for all users - the encryption key is derived
+        client-side from the API key + salt. Server never sees the encryption key.
+        """
+        from uuid import uuid4
+
+        from contextfs.auth.api_keys import generate_api_key, generate_encryption_salt, hash_api_key
+
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        # Generate new key with E2EE salt (automatic for all users)
+        raw_key, key_prefix = generate_api_key()
+        key_hash = hash_api_key(raw_key)
+        key_id = str(uuid4())
+        encryption_salt = generate_encryption_salt()
+
+        storage = get_auth_storage()
+        await storage.create_api_key(
+            key_id=key_id,
+            user_id=user_id,
+            name=data.name,
+            key_hash=key_hash,
+            key_prefix=key_prefix,
+            encryption_salt=encryption_salt,
+        )
+
+        config_snippet = f"""# ContextFS API Configuration
+api_key: {raw_key}"""
+
+        return {
+            "id": key_id,
+            "name": data.name,
+            "api_key": raw_key,
+            "key_prefix": key_prefix,
+            "config_snippet": config_snippet,
+            "e2ee": True,  # E2EE is automatic
+        }
+
+    @app.post("/api/auth/api-keys/revoke")
+    async def revoke_api_key(request: Request, data: RevokeApiKeyRequest):
+        """Revoke an API key."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        storage = get_auth_storage()
+        revoked = await storage.revoke_api_key(data.key_id, user_id)
+        if not revoked:
+            raise HTTPException(status_code=404, detail="API key not found")
+        return {"status": "revoked"}
+
+    @app.delete("/api/auth/api-keys/{key_id}")
+    async def delete_api_key(request: Request, key_id: str):
+        """Delete an API key."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        storage = get_auth_storage()
+        deleted = await storage.delete_api_key(key_id, user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="API key not found")
+        return {"status": "deleted"}
+
+    # ==================== Billing API ====================
+
+    @app.get("/api/billing/subscription")
+    async def get_subscription(request: Request):
+        """Get user's subscription details."""
+        from uuid import uuid4
+
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        storage = get_auth_storage()
+        sub = await storage.get_subscription(user_id)
+
+        if sub:
+            return {
+                "tier": sub.tier,
+                "status": sub.status,
+                "device_limit": sub.device_limit,
+                "memory_limit": sub.memory_limit,
+                "current_period_end": sub.current_period_end,
+            }
+
+        # Create default free subscription if none exists
+        sub_id = str(uuid4())
+        sub = await storage.create_subscription(
+            sub_id=sub_id,
+            user_id=user_id,
+            tier="free",
+            device_limit=3,
+            memory_limit=10000,
+        )
+
+        return {
+            "tier": sub.tier,
+            "status": sub.status,
+            "device_limit": sub.device_limit,
+            "memory_limit": sub.memory_limit,
+            "current_period_end": sub.current_period_end,
+        }
+
+    @app.get("/api/billing/usage")
+    async def get_usage(request: Request):
+        """Get user's usage statistics from sync database."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        storage = get_auth_storage()
+
+        # Get subscription limits
+        sub = await storage.get_subscription(user_id)
+        device_limit = sub.device_limit if sub else 3
+        memory_limit = sub.memory_limit if sub else 10000
+
+        # Count devices
+        devices = await storage.list_devices(user_id)
+        device_count = len(devices)
+
+        # Count memories from sync database
+        memory_count = await count_sync_memories()
+
+        return {
+            "device_count": device_count,
+            "memory_count": memory_count,
+            "device_limit": device_limit,
+            "memory_limit": memory_limit,
+            "device_usage_percent": round((device_count / device_limit) * 100, 1)
+            if device_limit > 0
+            else 0,
+            "memory_usage_percent": round((memory_count / memory_limit) * 100, 1)
+            if memory_limit > 0
+            else 0,
+        }
+
+    @app.post("/api/billing/checkout")
+    async def create_checkout(request: Request):
+        """Create Stripe checkout session (stub)."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        # Stub - would integrate with Stripe in production
+        return {"checkout_url": "https://checkout.stripe.com/stub"}
+
+    @app.post("/api/billing/portal")
+    async def create_portal(request: Request):
+        """Create Stripe billing portal session (stub)."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        # Stub - would integrate with Stripe in production
+        return {"portal_url": "https://billing.stripe.com/stub"}
+
+    @app.post("/api/billing/cancel")
+    async def cancel_subscription(request: Request):
+        """Cancel subscription (stub)."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        # Stub - would integrate with Stripe in production
+        return {
+            "status": "cancelled",
+            "message": "Subscription will be cancelled at end of billing period",
+        }
+
+    # ==================== Devices API ====================
+
+    @app.get("/api/devices")
+    async def list_devices(request: Request):
+        """List user's registered devices."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        storage = get_auth_storage()
+        devices = await storage.list_devices(user_id)
+
+        return {
+            "devices": [
+                {
+                    "id": device.id,
+                    "name": device.name,
+                    "device_type": device.device_type,
+                    "os": device.os,
+                    "os_version": device.os_version,
+                    "is_current": False,  # Would check against current session
+                    "last_sync_at": device.last_sync_at,
+                    "created_at": device.created_at,
+                }
+                for device in devices
+            ]
+        }
+
+    @app.delete("/api/devices/{device_id}")
+    async def remove_device(request: Request, device_id: str):
+        """Remove a device."""
+        api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        user_id = await get_user_from_api_key(api_key)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        storage = get_auth_storage()
+        deleted = await storage.delete_device(device_id, user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Device not found")
+        return {"status": "deleted"}
 
     # ==================== Stats & Utility API ====================
 

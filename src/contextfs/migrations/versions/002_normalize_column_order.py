@@ -6,12 +6,14 @@ were added after session_id in some databases but before in the schema.
 Revision ID: 002
 Revises: 001
 Create Date: 2024-12-15
+
+Supports both SQLite and PostgreSQL.
 """
 
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 # revision identifiers, used by Alembic.
 revision: str = "002"
@@ -20,18 +22,56 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def get_dialect() -> str:
+    """Get the database dialect name."""
+    return context.get_context().dialect.name
+
+
+def table_exists(conn, table_name: str) -> bool:
+    """Check if a table exists in the database."""
+    dialect = get_dialect()
+    if dialect == "postgresql":
+        result = conn.execute(
+            sa.text("SELECT 1 FROM information_schema.tables WHERE table_name = :name"),
+            {"name": table_name},
+        )
+    else:  # sqlite
+        result = conn.execute(
+            sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
+            {"name": table_name},
+        )
+    return result.fetchone() is not None
+
+
+def get_column_positions(conn) -> dict[str, int]:
+    """Get column positions for the memories table."""
+    dialect = get_dialect()
+    if dialect == "postgresql":
+        result = conn.execute(
+            sa.text(
+                "SELECT column_name, ordinal_position FROM information_schema.columns "
+                "WHERE table_name = 'memories' ORDER BY ordinal_position"
+            )
+        )
+        return {row[0]: row[1] for row in result.fetchall()}
+    else:  # sqlite
+        result = conn.execute(sa.text("PRAGMA table_info(memories)"))
+        return {row[1]: row[0] for row in result.fetchall()}
+
+
 def _ensure_fts_table(conn) -> None:
-    """Ensure FTS table exists, creating it if needed."""
-    # Check if FTS table exists
-    result = conn.execute(
-        sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts'")
-    )
-    if result.fetchone() is not None:
+    """Ensure FTS table exists, creating it if needed. SQLite only."""
+    dialect = get_dialect()
+    if dialect == "postgresql":
+        # PostgreSQL uses different full-text search (ts_vector)
+        # Skip FTS5 for PostgreSQL - handled separately
+        return
+
+    # Check if FTS table exists (SQLite)
+    if table_exists(conn, "memories_fts"):
         return  # FTS table already exists
 
-    # Create FTS table with all required columns
-    # Searchable: content, summary, tags
-    # Filterable (UNINDEXED): id, type, namespace_id, source_repo, source_tool, project
+    # Create FTS table with all required columns (SQLite only)
     conn.execute(
         sa.text("""
         CREATE VIRTUAL TABLE memories_fts USING fts5(
@@ -69,10 +109,19 @@ def upgrade() -> None:
     2. Copy data
     3. Drop old table
     4. Rename new table
+
+    PostgreSQL supports column reordering but this migration is primarily
+    for fixing old SQLite databases, so we skip it for PostgreSQL.
     """
     conn = op.get_bind()
+    dialect = get_dialect()
 
-    # Check current column order
+    # PostgreSQL: Just ensure schema is correct and skip column reordering
+    if dialect == "postgresql":
+        # PostgreSQL doesn't have column order issues from the initial migration
+        return
+
+    # SQLite: Check current column order
     result = conn.execute(sa.text("PRAGMA table_info(memories)"))
     columns = {row[1]: row[0] for row in result.fetchall()}
 

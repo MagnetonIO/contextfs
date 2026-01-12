@@ -5,12 +5,14 @@ for better reliability and ACID transactions.
 
 Revision ID: 005
 Revises: 004
+
+Supports both SQLite and PostgreSQL.
 """
 
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 # revision identifiers
 revision: str = "005"
@@ -19,15 +21,33 @@ branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
 
+def get_dialect() -> str:
+    """Get the database dialect name."""
+    return context.get_context().dialect.name
+
+
+def table_exists(conn, table_name: str) -> bool:
+    """Check if a table exists in the database."""
+    dialect = get_dialect()
+    if dialect == "postgresql":
+        result = conn.execute(
+            sa.text("SELECT 1 FROM information_schema.tables WHERE table_name = :name"),
+            {"name": table_name},
+        )
+    else:  # sqlite
+        result = conn.execute(
+            sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
+            {"name": table_name},
+        )
+    return result.fetchone() is not None
+
+
 def upgrade() -> None:
     """Create sync_state table."""
     conn = op.get_bind()
 
     # Check if table already exists
-    result = conn.execute(
-        sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_state'")
-    )
-    if result.fetchone():
+    if table_exists(conn, "sync_state"):
         return  # Table already exists
 
     # Create sync_state table

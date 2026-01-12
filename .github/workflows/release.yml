@@ -141,6 +141,6 @@ jobs:
 
             ### Links
 
-            - [Documentation](https://magnetonio.github.io/contextfs/)
+            - [Documentation](https://contextfs.github.io/contextfs/)
             - [PyPI](https://pypi.org/project/contextfs/${{ steps.version.outputs.version }}/)
-            - [Changelog](https://github.com/MagnetonIO/contextfs/commits/v${{ steps.version.outputs.version }})
+            - [Changelog](https://github.com/contextfs/contextfs/commits/v${{ steps.version.outputs.version }})

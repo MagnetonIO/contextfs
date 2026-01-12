@@ -128,6 +128,9 @@ class SyncedMemory(SyncableEntity):
     # Embedding (synced for vector backend)
     embedding: list[float] | None = None
 
+    # E2EE encryption flag (content is encrypted with client key)
+    encrypted: bool = False
+
 
 # =============================================================================
 # Synced Session
