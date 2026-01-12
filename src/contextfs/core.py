@@ -499,6 +499,119 @@ class ContextFS:
             return indexer.delete_index_by_path(repo_path)
         return False
 
+    def update_repo_path(
+        self,
+        namespace_id: str | None = None,
+        old_path: str | None = None,
+        new_path: str | None = None,
+    ) -> dict:
+        """
+        Update the repository path for an existing index.
+
+        Use this when a repository has been moved to a new location.
+        The namespace_id remains the same, preserving all indexed memories
+        in both SQLite and ChromaDB.
+
+        Args:
+            namespace_id: The namespace ID to update (preferred)
+            old_path: The old repository path to find the index (alternative)
+            new_path: The new repository path
+
+        Returns:
+            Dict with status and updated info:
+            - success: bool
+            - namespace_id: str (if successful)
+            - old_path: str (previous path)
+            - new_path: str (updated path)
+            - files_indexed, commits_indexed, memories_created: int (preserved counts)
+        """
+        indexer = self._get_auto_indexer()
+        return indexer.update_repo_path(
+            namespace_id=namespace_id,
+            old_path=old_path,
+            new_path=new_path,
+        )
+
+    def find_index_by_repo_name(self, repo_name: str) -> list[dict]:
+        """
+        Find indexes that match a repository name.
+
+        Useful when you know the repo name but not the exact path.
+
+        Args:
+            repo_name: Repository directory name to search for
+
+        Returns:
+            List of matching indexes with their info
+        """
+        indexer = self._get_auto_indexer()
+        return indexer.find_index_by_repo_name(repo_name)
+
+    def migrate_namespace(
+        self,
+        old_namespace_id: str,
+        new_namespace_id: str,
+        new_source: str | None = None,
+        new_remote_url: str | None = None,
+    ) -> dict:
+        """
+        Migrate an index from one namespace ID to another.
+
+        Updates all references in SQLite and ChromaDB to use the new namespace ID.
+        Use this when converting from path-based to git-remote-based namespaces.
+
+        Args:
+            old_namespace_id: Current namespace ID
+            new_namespace_id: New namespace ID to migrate to
+            new_source: Namespace derivation source (explicit, git_remote, path)
+            new_remote_url: Git remote URL if available
+
+        Returns:
+            Migration statistics
+        """
+        indexer = self._get_auto_indexer()
+        return indexer.migrate_namespace(
+            old_namespace_id=old_namespace_id,
+            new_namespace_id=new_namespace_id,
+            new_source=new_source,
+            new_remote_url=new_remote_url,
+            storage=self.storage,
+        )
+
+    def get_migration_candidates(self) -> list[dict]:
+        """
+        Find indexes that should be migrated from path-based to git-remote-based.
+
+        Returns list of indexes where:
+        - Current namespace is path-based (old format)
+        - Repo has a git remote URL
+        - New git-remote namespace would be different
+
+        Returns:
+            List of migration candidates with old/new namespace info
+        """
+        indexer = self._get_auto_indexer()
+        return indexer.get_migration_candidates()
+
+    def migrate_all_to_git_remote(self, dry_run: bool = False) -> dict:
+        """
+        Migrate all path-based namespaces to git-remote-based where possible.
+
+        This makes namespaces portable across machines, enabling proper sync
+        between developers with different local paths.
+
+        Args:
+            dry_run: If True, only report what would be migrated
+
+        Returns:
+            Migration summary with counts and any errors
+        """
+        indexer = self._get_auto_indexer()
+        return indexer.migrate_all_to_git_remote(
+            storage=self.storage,
+            dry_run=dry_run,
+        )
+
     def index_directory(
         self,
         root_dir: Path,

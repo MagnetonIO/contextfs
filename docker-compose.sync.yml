@@ -54,28 +54,6 @@ services:
     restart: unless-stopped
 
   # ==========================================================================
-  # Linux Python Client - Lightweight for testing sync
-  # ==========================================================================
-  linux-python:
-    image: python:3.12-slim
-    container_name: contextfs-linux-python
-    environment:
-      CONTEXTFS_SYNC_SERVER: http://sync-api:8766
-      PYTHONPATH: /contextfs/src
-    volumes:
-      - .:/contextfs:ro
-      - linux_python_data:/root/.contextfs
-    depends_on:
-      sync-postgres:
-        condition: service_healthy
-    command: >
-      bash -c "pip install -e /contextfs --quiet &&
-               pip install chromadb sentence-transformers --quiet &&
-               echo 'ContextFS installed!' &&
-               tail -f /dev/null"
-    restart: unless-stopped
-
-  # ==========================================================================
   # Linux Full Client - Ubuntu with AI CLIs (Claude, Gemini, Codex)
   # ==========================================================================
   linux-full:
@@ -101,6 +79,28 @@ services:
     restart: unless-stopped
 
   # ==========================================================================
+  # ContextFS Web UI - Next.js Dashboard
+  # ==========================================================================
+  web:
+    image: node:20-slim
+    container_name: contextfs-web
+    working_dir: /app
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_SYNC_API_URL: http://sync-api:8766
+      CONTEXTFS_SYNC_URL: http://sync-api:8766
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../contextfs-web:/app
+      - web_node_modules:/app/node_modules
+    depends_on:
+      - sync-api
+    command: >
+      bash -c "npm install && npm run dev"
+    restart: unless-stopped
+
+  # ==========================================================================
   # pgAdmin for Sync Database (optional)
   # ==========================================================================
   sync-pgadmin:
@@ -123,9 +123,9 @@ services:
 volumes:
   sync_postgres_data:
   sync_pgadmin_data:
-  linux_python_data:
   linux_full_data:
   linux_npm_cache:
+  web_node_modules:
 
 networks:
   default:

@@ -1169,6 +1169,90 @@ def get_memory_type_values() -> list[str]:
     return [t.value for t in MemoryType]
 
 
+def _get_git_remote_url(repo_path: str) -> str | None:
+    """Get the git remote origin URL for a repository."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _normalize_git_url(url: str) -> str:
+    """
+    Normalize git URL to a canonical form for consistent hashing.
+
+    Handles:
+    - SSH vs HTTPS: git@github.com:org/repo.git → github.com/org/repo
+    - .git suffix removal
+    - Trailing slashes
+    - Case normalization for host
+    """
+    import re
+
+    if not url:
+        return ""
+
+    # Remove trailing whitespace and .git suffix
+    url = url.strip().rstrip("/")
+    if url.endswith(".git"):
+        url = url[:-4]
+
+    # Convert SSH format to normalized form
+    # git@github.com:org/repo → github.com/org/repo
+    ssh_match = re.match(r"^(?:ssh://)?git@([^:]+):(.+)$", url)
+    if ssh_match:
+        host = ssh_match.group(1).lower()
+        path = ssh_match.group(2)
+        return f"{host}/{path}"
+
+    # Convert HTTPS format to normalized form
+    # https://github.com/org/repo → github.com/org/repo
+    https_match = re.match(r"^https?://([^/]+)/(.+)$", url)
+    if https_match:
+        host = https_match.group(1).lower()
+        path = https_match.group(2)
+        return f"{host}/{path}"
+
+    # Return as-is if no match (unusual URL format)
+    return url.lower()
+
+
+def _read_contextfs_namespace(repo_path: str) -> str | None:
+    """Read stored namespace ID from .contextfs/config.yaml if it exists."""
+    from pathlib import Path
+
+    try:
+        import yaml
+
+        config_file = Path(repo_path) / ".contextfs" / "config.yaml"
+        if config_file.exists():
+            config = yaml.safe_load(config_file.read_text())
+            if config and isinstance(config, dict):
+                return config.get("namespace_id")
+    except Exception:
+        pass
+    return None
+
+
+class NamespaceSource:
+    """Enum-like class for namespace derivation source."""
+
+    EXPLICIT = "explicit"  # From .contextfs/config.yaml
+    GIT_REMOTE = "git_remote"  # From git remote URL
+    PATH = "path"  # Fallback to local path (not portable)
+
+
 class Namespace(BaseModel):
     """
     Namespace for cross-repo memory isolation.
@@ -1178,12 +1262,19 @@ class Namespace(BaseModel):
     - org/team: Shared within organization
     - repo: Specific to repository
     - session: Specific to session
+
+    Namespace ID derivation priority:
+    1. Explicit ID from .contextfs/config.yaml (highest priority)
+    2. Git remote URL (portable across machines)
+    3. Local path fallback (not portable, for repos without remotes)
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
     name: str
     parent_id: str | None = None
     repo_path: str | None = None
+    remote_url: str | None = None  # Git remote URL if available
+    source: str | None = None  # How namespace was derived (explicit, git_remote, path)
     created_at: datetime = Field(default_factory=datetime.now)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -1192,16 +1283,79 @@ class Namespace(BaseModel):
         return cls(id="global", name="global")
 
     @classmethod
-    def for_repo(cls, repo_path: str) -> "Namespace":
+    def for_repo(cls, repo_path: str, use_path_fallback: bool = True) -> "Namespace":
+        """
+        Create namespace for a repository.
+
+        Derivation priority:
+        1. Explicit namespace_id from .contextfs/config.yaml
+        2. Git remote origin URL (portable across machines)
+        3. Local path (fallback, not portable)
+
+        Args:
+            repo_path: Path to the repository
+            use_path_fallback: If False, return None when no remote URL found
+
+        Returns:
+            Namespace object with stable ID
+        """
         from pathlib import Path
 
-        # Resolve symlinks to get canonical path for consistent namespace
+        resolved_path = str(Path(repo_path).resolve())
+        repo_name = resolved_path.split("/")[-1]
+
+        # 1. Check for explicit namespace in .contextfs/config.yaml
+        explicit_id = _read_contextfs_namespace(resolved_path)
+        if explicit_id:
+            return cls(
+                id=explicit_id,
+                name=repo_name,
+                repo_path=resolved_path,
+                source=NamespaceSource.EXPLICIT,
+            )
+
+        # 2. Try git remote URL (portable across machines)
+        remote_url = _get_git_remote_url(resolved_path)
+        if remote_url:
+            normalized_url = _normalize_git_url(remote_url)
+            repo_id = hashlib.sha256(normalized_url.encode()).hexdigest()[:12]
+            return cls(
+                id=f"repo-{repo_id}",
+                name=repo_name,
+                repo_path=resolved_path,
+                remote_url=remote_url,
+                source=NamespaceSource.GIT_REMOTE,
+            )
+
+        # 3. Fallback to path-based (not portable, but works for local-only repos)
+        if use_path_fallback:
+            repo_id = hashlib.sha256(resolved_path.encode()).hexdigest()[:12]
+            return cls(
+                id=f"local-{repo_id}",
+                name=repo_name,
+                repo_path=resolved_path,
+                source=NamespaceSource.PATH,
+            )
+
+        return None
+
+    @classmethod
+    def for_repo_legacy(cls, repo_path: str) -> "Namespace":
+        """
+        Legacy path-based namespace generation.
+
+        Use this only for migration purposes or when you specifically
+        need the old path-based behavior.
+        """
+        from pathlib import Path
+
         resolved_path = str(Path(repo_path).resolve())
         repo_id = hashlib.sha256(resolved_path.encode()).hexdigest()[:12]
         return cls(
             id=f"repo-{repo_id}",
             name=resolved_path.split("/")[-1],
             repo_path=resolved_path,
+            source=NamespaceSource.PATH,
         )
 
 

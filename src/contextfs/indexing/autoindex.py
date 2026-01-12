@@ -223,15 +223,21 @@ class AutoIndexer:
                 memories_created INTEGER DEFAULT 0,
                 repo_path TEXT,
                 commit_hash TEXT,
-                metadata TEXT
+                metadata TEXT,
+                namespace_source TEXT,
+                remote_url TEXT
             )
         """)
 
-        # Migration: add commits_indexed column if missing
+        # Migration: add columns if missing
         cursor.execute("PRAGMA table_info(index_status)")
         columns = {row[1] for row in cursor.fetchall()}
         if "commits_indexed" not in columns:
             cursor.execute("ALTER TABLE index_status ADD COLUMN commits_indexed INTEGER DEFAULT 0")
+        if "namespace_source" not in columns:
+            cursor.execute("ALTER TABLE index_status ADD COLUMN namespace_source TEXT")
+        if "remote_url" not in columns:
+            cursor.execute("ALTER TABLE index_status ADD COLUMN remote_url TEXT")
 
         # Track indexed files for incremental updates
         cursor.execute("""
@@ -456,6 +462,391 @@ class AutoIndexer:
         if row:
             return self.delete_index(row[0])
         return False
+
+    def update_repo_path(
+        self,
+        namespace_id: str | None = None,
+        old_path: str | Path | None = None,
+        new_path: str | Path | None = None,
+    ) -> dict:
+        """
+        Update the repository path for an existing index.
+
+        Use this when a repository has been moved to a new location.
+        The namespace_id remains the same, preserving all indexed memories.
+
+        Args:
+            namespace_id: The namespace ID to update (preferred)
+            old_path: The old repository path to find the index (alternative)
+            new_path: The new repository path
+
+        Returns:
+            Dict with status and updated info
+        """
+        if not new_path:
+            return {"success": False, "error": "new_path is required"}
+
+        new_path_str = str(Path(new_path).resolve())
+
+        # Verify new path exists and is a git repo
+        new_path_obj = Path(new_path_str)
+        if not new_path_obj.exists():
+            return {"success": False, "error": f"New path does not exist: {new_path_str}"}
+        if not (new_path_obj / ".git").exists():
+            return {"success": False, "error": f"New path is not a git repository: {new_path_str}"}
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Find the index to update
+        if namespace_id:
+            cursor.execute(
+                "SELECT namespace_id, repo_path, files_indexed, commits_indexed, memories_created FROM index_status WHERE namespace_id = ?",
+                (namespace_id,),
+            )
+        elif old_path:
+            old_path_str = str(Path(old_path).resolve())
+            cursor.execute(
+                "SELECT namespace_id, repo_path, files_indexed, commits_indexed, memories_created FROM index_status WHERE repo_path = ?",
+                (old_path_str,),
+            )
+        else:
+            conn.close()
+            return {"success": False, "error": "Either namespace_id or old_path is required"}
+
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return {"success": False, "error": "Index not found"}
+
+        found_namespace_id = row[0]
+        old_path_stored = row[1]
+        files_indexed = row[2]
+        commits_indexed = row[3]
+        memories_created = row[4]
+
+        # Update the repo_path
+        cursor.execute(
+            "UPDATE index_status SET repo_path = ? WHERE namespace_id = ?",
+            (new_path_str, found_namespace_id),
+        )
+
+        conn.commit()
+        conn.close()
+
+        logger.info(
+            f"Updated repo path for {found_namespace_id}: {old_path_stored} -> {new_path_str}"
+        )
+
+        return {
+            "success": True,
+            "namespace_id": found_namespace_id,
+            "old_path": old_path_stored,
+            "new_path": new_path_str,
+            "files_indexed": files_indexed,
+            "commits_indexed": commits_indexed or 0,
+            "memories_created": memories_created,
+        }
+
+    def find_index_by_repo_name(self, repo_name: str) -> list[dict]:
+        """
+        Find indexes that match a repository name.
+
+        Useful when you know the repo name but not the exact path.
+
+        Args:
+            repo_name: Repository directory name to search for
+
+        Returns:
+            List of matching indexes with their info
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Search for repos where the path ends with the given name
+        cursor.execute(
+            """
+            SELECT namespace_id, repo_path, files_indexed, commits_indexed, memories_created, indexed_at
+            FROM index_status
+            WHERE repo_path LIKE ?
+            """,
+            (f"%/{repo_name}",),
+        )
+
+        results = []
+        for row in cursor.fetchall():
+            results.append(
+                {
+                    "namespace_id": row[0],
+                    "repo_path": row[1],
+                    "files_indexed": row[2],
+                    "commits_indexed": row[3] or 0,
+                    "memories_created": row[4],
+                    "indexed_at": row[5],
+                }
+            )
+
+        conn.close()
+        return results
+
+    def migrate_namespace(
+        self,
+        old_namespace_id: str,
+        new_namespace_id: str,
+        new_source: str | None = None,
+        new_remote_url: str | None = None,
+        storage: "StorageRouter | None" = None,
+    ) -> dict:
+        """
+        Migrate an index from one namespace ID to another.
+
+        Updates:
+        - index_status table
+        - indexed_files table
+        - indexed_commits table
+        - memories table (namespace_id)
+        - ChromaDB metadata (via storage)
+
+        Args:
+            old_namespace_id: Current namespace ID
+            new_namespace_id: New namespace ID to migrate to
+            new_source: Namespace derivation source (explicit, git_remote, path)
+            new_remote_url: Git remote URL if available
+            storage: StorageRouter for ChromaDB updates
+
+        Returns:
+            Migration statistics
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Check old namespace exists
+        cursor.execute(
+            "SELECT repo_path, files_indexed, commits_indexed, memories_created FROM index_status WHERE namespace_id = ?",
+            (old_namespace_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return {"success": False, "error": f"Namespace {old_namespace_id} not found"}
+
+        repo_path = row[0]
+        # Unused but kept for reference: files_indexed, commits_indexed, memories_created
+        _, _, _ = row[1], row[2] or 0, row[3]
+
+        # Check new namespace doesn't already exist
+        cursor.execute(
+            "SELECT namespace_id FROM index_status WHERE namespace_id = ?",
+            (new_namespace_id,),
+        )
+        if cursor.fetchone():
+            conn.close()
+            return {
+                "success": False,
+                "error": f"Target namespace {new_namespace_id} already exists",
+            }
+
+        try:
+            # Update index_status
+            cursor.execute(
+                """
+                UPDATE index_status
+                SET namespace_id = ?, namespace_source = ?, remote_url = ?
+                WHERE namespace_id = ?
+                """,
+                (new_namespace_id, new_source, new_remote_url, old_namespace_id),
+            )
+
+            # Update indexed_files
+            cursor.execute(
+                "UPDATE indexed_files SET namespace_id = ? WHERE namespace_id = ?",
+                (new_namespace_id, old_namespace_id),
+            )
+            files_updated = cursor.rowcount
+
+            # Update indexed_commits
+            cursor.execute(
+                "UPDATE indexed_commits SET namespace_id = ? WHERE namespace_id = ?",
+                (new_namespace_id, old_namespace_id),
+            )
+            commits_updated = cursor.rowcount
+
+            # Update memories table
+            cursor.execute(
+                "UPDATE memories SET namespace_id = ? WHERE namespace_id = ?",
+                (new_namespace_id, old_namespace_id),
+            )
+            memories_updated = cursor.rowcount
+
+            conn.commit()
+
+            # Update ChromaDB if storage provided
+            chroma_updated = 0
+            if storage:
+                try:
+                    chroma_updated = storage.update_namespace_in_chroma(
+                        old_namespace_id, new_namespace_id
+                    )
+                except Exception as e:
+                    logger.warning(f"ChromaDB namespace update failed: {e}")
+
+            logger.info(
+                f"Migrated namespace {old_namespace_id} -> {new_namespace_id}: "
+                f"{memories_updated} memories, {files_updated} files, {commits_updated} commits"
+            )
+
+            return {
+                "success": True,
+                "old_namespace_id": old_namespace_id,
+                "new_namespace_id": new_namespace_id,
+                "repo_path": repo_path,
+                "namespace_source": new_source,
+                "remote_url": new_remote_url,
+                "memories_migrated": memories_updated,
+                "files_migrated": files_updated,
+                "commits_migrated": commits_updated,
+                "chroma_updated": chroma_updated,
+            }
+
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            return {"success": False, "error": str(e)}
+        finally:
+            conn.close()
+
+    def get_migration_candidates(self) -> list[dict]:
+        """
+        Find indexes that should be migrated from path-based to git-remote-based.
+
+        Returns list of indexes where:
+        - namespace_id starts with 'repo-' (old path-based)
+        - repo_path exists and has a git remote
+        - Current namespace_id doesn't match what git remote would generate
+        """
+        from contextfs.schemas import (
+            NamespaceSource,
+            _get_git_remote_url,
+            _normalize_git_url,
+        )
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT namespace_id, repo_path, files_indexed, commits_indexed, memories_created, namespace_source
+            FROM index_status
+            WHERE indexed = 1 AND repo_path IS NOT NULL
+        """)
+
+        candidates = []
+        for row in cursor.fetchall():
+            old_ns_id = row[0]
+            repo_path = row[1]
+            files_indexed = row[2]
+            commits_indexed = row[3] or 0
+            memories_created = row[4]
+            current_source = row[5]
+
+            # Skip if already git_remote based
+            if current_source == NamespaceSource.GIT_REMOTE:
+                continue
+
+            # Check if repo path exists and has git remote
+            if not Path(repo_path).exists():
+                continue
+
+            remote_url = _get_git_remote_url(repo_path)
+            if not remote_url:
+                continue
+
+            # Calculate what the new namespace ID should be
+            normalized_url = _normalize_git_url(remote_url)
+            import hashlib
+
+            new_ns_id = f"repo-{hashlib.sha256(normalized_url.encode()).hexdigest()[:12]}"
+
+            # Only add if namespace would change
+            if new_ns_id != old_ns_id:
+                candidates.append(
+                    {
+                        "old_namespace_id": old_ns_id,
+                        "new_namespace_id": new_ns_id,
+                        "repo_path": repo_path,
+                        "remote_url": remote_url,
+                        "files_indexed": files_indexed,
+                        "commits_indexed": commits_indexed,
+                        "memories_created": memories_created,
+                        "current_source": current_source or "path",
+                    }
+                )
+
+        conn.close()
+        return candidates
+
+    def migrate_all_to_git_remote(
+        self, storage: "StorageRouter | None" = None, dry_run: bool = False
+    ) -> dict:
+        """
+        Migrate all path-based namespaces to git-remote-based where possible.
+
+        Args:
+            storage: StorageRouter for ChromaDB updates
+            dry_run: If True, only report what would be migrated
+
+        Returns:
+            Migration summary
+        """
+        from contextfs.schemas import NamespaceSource
+
+        candidates = self.get_migration_candidates()
+
+        if not candidates:
+            return {
+                "success": True,
+                "migrated": 0,
+                "failed": 0,
+                "candidates": [],
+                "message": "No migration candidates found",
+            }
+
+        if dry_run:
+            return {
+                "success": True,
+                "dry_run": True,
+                "candidates": candidates,
+                "message": f"Would migrate {len(candidates)} namespace(s)",
+            }
+
+        migrated = []
+        failed = []
+
+        for candidate in candidates:
+            result = self.migrate_namespace(
+                old_namespace_id=candidate["old_namespace_id"],
+                new_namespace_id=candidate["new_namespace_id"],
+                new_source=NamespaceSource.GIT_REMOTE,
+                new_remote_url=candidate["remote_url"],
+                storage=storage,
+            )
+
+            if result["success"]:
+                migrated.append(result)
+            else:
+                failed.append(
+                    {
+                        "old_namespace_id": candidate["old_namespace_id"],
+                        "error": result.get("error"),
+                    }
+                )
+
+        return {
+            "success": len(failed) == 0,
+            "migrated": len(migrated),
+            "failed": len(failed),
+            "results": migrated,
+            "errors": failed,
+        }
 
     def should_index(self, namespace_id: str, repo_path: Path | None = None) -> bool:
         """

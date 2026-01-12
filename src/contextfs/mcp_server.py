@@ -1097,6 +1097,64 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="contextfs_update_repo_path",
+            description="Update the repository path for an existing index when a repo has been moved. Preserves all indexed memories and metadata.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "namespace_id": {
+                        "type": "string",
+                        "description": "Namespace ID of the index to update (use list-indexes to find)",
+                    },
+                    "old_path": {
+                        "type": "string",
+                        "description": "Old repository path to find the index (alternative to namespace_id)",
+                    },
+                    "new_path": {
+                        "type": "string",
+                        "description": "New repository path where the repo now exists",
+                    },
+                },
+                "required": ["new_path"],
+            },
+        ),
+        Tool(
+            name="contextfs_find_index",
+            description="Find indexes by repository name. Useful when you know the repo name but not the exact path or namespace ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_name": {
+                        "type": "string",
+                        "description": "Repository directory name to search for",
+                    },
+                },
+                "required": ["repo_name"],
+            },
+        ),
+        Tool(
+            name="contextfs_migrate_namespaces",
+            description="Migrate path-based namespaces to git-remote-based for cross-machine sync compatibility. Use dry_run=true first to preview changes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, only show what would be migrated without making changes",
+                        "default": True,
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_migration_candidates",
+            description="List indexes that can be migrated from path-based to git-remote-based namespaces.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
         # =====================================================================
         # Workflow/Agent Tools
         # =====================================================================
@@ -2557,6 +2615,143 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         text=f"Repository reindexed!\nFiles indexed: {result.get('files_indexed', 0)}\nMemories created: {result.get('memories_created', 0)}",
                     )
                 ]
+
+        elif name == "contextfs_update_repo_path":
+            namespace_id = arguments.get("namespace_id")
+            old_path = arguments.get("old_path")
+            new_path = arguments.get("new_path")
+
+            if not namespace_id and not old_path:
+                return [
+                    TextContent(
+                        type="text",
+                        text="Error: Provide either namespace_id or old_path to identify the index",
+                    )
+                ]
+
+            result = ctx.update_repo_path(
+                namespace_id=namespace_id,
+                old_path=old_path,
+                new_path=new_path,
+            )
+
+            if result["success"]:
+                output = [
+                    "Successfully updated repository path!",
+                    f"Namespace ID: {result['namespace_id']}",
+                    f"Old path: {result['old_path']}",
+                    f"New path: {result['new_path']}",
+                    f"Preserved: {result['files_indexed']} files, {result['commits_indexed']} commits, {result['memories_created']} memories",
+                ]
+                return [TextContent(type="text", text="\n".join(output))]
+            else:
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Error: {result['error']}",
+                    )
+                ]
+
+        elif name == "contextfs_find_index":
+            repo_name = arguments.get("repo_name")
+            if not repo_name:
+                return [
+                    TextContent(
+                        type="text",
+                        text="Error: repo_name is required",
+                    )
+                ]
+
+            results = ctx.find_index_by_repo_name(repo_name)
+
+            if not results:
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"No indexes found matching repository name: {repo_name}",
+                    )
+                ]
+
+            output = [f"Found {len(results)} index(es) matching '{repo_name}':\n"]
+            for idx in results:
+                output.append(f"  Namespace: {idx['namespace_id']}")
+                output.append(f"  Path: {idx['repo_path']}")
+                output.append(
+                    f"  Files: {idx['files_indexed']}, Commits: {idx['commits_indexed']}, Memories: {idx['memories_created']}"
+                )
+                output.append(f"  Indexed: {idx['indexed_at']}")
+                output.append("")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_migration_candidates":
+            candidates = ctx.get_migration_candidates()
+
+            if not candidates:
+                return [
+                    TextContent(
+                        type="text",
+                        text="No migration candidates found. All indexes are either:\n"
+                        "- Already using git-remote-based namespaces\n"
+                        "- Local repos without git remotes\n"
+                        "- Paths that no longer exist",
+                    )
+                ]
+
+            output = [f"Found {len(candidates)} namespace(s) that can be migrated:\n"]
+            for c in candidates:
+                output.append(f"  {c['old_namespace_id']} → {c['new_namespace_id']}")
+                output.append(f"    Repo: {c['repo_path']}")
+                output.append(f"    Remote: {c['remote_url']}")
+                output.append(f"    Memories: {c['memories_created']}, Files: {c['files_indexed']}")
+                output.append("")
+
+            output.append("Run contextfs_migrate_namespaces with dry_run=false to migrate.")
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_migrate_namespaces":
+            dry_run = arguments.get("dry_run", True)
+
+            result = ctx.migrate_all_to_git_remote(dry_run=dry_run)
+
+            if dry_run:
+                if not result.get("candidates"):
+                    return [
+                        TextContent(
+                            type="text",
+                            text="No migration candidates found.",
+                        )
+                    ]
+
+                output = [f"DRY RUN - Would migrate {len(result['candidates'])} namespace(s):\n"]
+                for c in result["candidates"]:
+                    output.append(f"  {c['old_namespace_id']} → {c['new_namespace_id']}")
+                    output.append(f"    Repo: {c['repo_path']}")
+                    output.append(f"    Memories: {c['memories_created']}")
+                    output.append("")
+                output.append("Run with dry_run=false to apply migration.")
+                return [TextContent(type="text", text="\n".join(output))]
+            else:
+                output = [
+                    "Migration complete!",
+                    f"  Migrated: {result['migrated']}",
+                    f"  Failed: {result['failed']}",
+                ]
+
+                if result.get("results"):
+                    output.append("\nMigrated namespaces:")
+                    for r in result["results"]:
+                        output.append(f"  {r['old_namespace_id']} → {r['new_namespace_id']}")
+                        output.append(
+                            f"    Memories: {r['memories_migrated']}, ChromaDB: {r['chroma_updated']}"
+                        )
+
+                if result.get("errors"):
+                    output.append("\nErrors:")
+                    for e in result["errors"]:
+                        output.append(f"  {e['old_namespace_id']}: {e['error']}")
+
+                return [TextContent(type="text", text="\n".join(output))]
 
         # =====================================================================
         # Workflow Tool Handlers

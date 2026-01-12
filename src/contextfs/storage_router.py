@@ -851,6 +851,64 @@ class StorageRouter(StorageBackend):
         finally:
             conn.close()
 
+    def update_namespace_in_chroma(
+        self,
+        old_namespace_id: str,
+        new_namespace_id: str,
+    ) -> int:
+        """
+        Update namespace_id for all memories in ChromaDB.
+
+        Used during namespace migration to update ChromaDB metadata
+        to match the new namespace ID.
+
+        Args:
+            old_namespace_id: Current namespace ID in ChromaDB
+            new_namespace_id: New namespace ID to update to
+
+        Returns:
+            Number of memories updated
+        """
+        try:
+            # Access the collection directly from RAG backend
+            collection = self._rag._collection
+            if collection is None:
+                logger.warning("ChromaDB collection not initialized, skipping update")
+                return 0
+
+            # Query all memories with old namespace
+            results = collection.get(
+                where={"namespace_id": old_namespace_id},
+                include=["metadatas", "documents", "embeddings"],
+            )
+
+            if not results["ids"]:
+                return 0
+
+            # Update each memory's metadata with new namespace
+            updated_metadatas = []
+            for metadata in results["metadatas"]:
+                metadata["namespace_id"] = new_namespace_id
+                updated_metadatas.append(metadata)
+
+            # Upsert with updated metadata
+            collection.upsert(
+                ids=results["ids"],
+                documents=results["documents"],
+                metadatas=updated_metadatas,
+                embeddings=results["embeddings"] if results.get("embeddings") else None,
+            )
+
+            logger.info(
+                f"Updated {len(results['ids'])} memories in ChromaDB: "
+                f"{old_namespace_id} -> {new_namespace_id}"
+            )
+            return len(results["ids"])
+
+        except Exception as e:
+            logger.error(f"Failed to update namespace in ChromaDB: {e}")
+            raise
+
     # ==================== Graph Operations ====================
     #
     # Graph operations work in two modes:
