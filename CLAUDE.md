@@ -129,3 +129,52 @@ echo "y" | python -m contextfs.cli rebuild-chroma
 - Always use `python -m contextfs.cli` for testing (not `contextfs` or `uv run contextfs`)
 - This ensures you're testing the local code, not an installed version
 - The CLI creates fresh ChromaDB connections, avoiding cache issues
+
+## Railway Deployment (ALWAYS USE DOCKER)
+
+**CRITICAL: Always deploy to Railway using Docker images, NOT `railway up`.**
+
+### Deployment Steps (Automatic via GitHub Actions)
+
+1. **Push to main branch** - GitHub Actions automatically builds and pushes Docker image
+2. **Redeploy Railway:**
+```bash
+railway redeploy --service sync-api-prod --yes
+```
+
+### Manual Build (if needed)
+```bash
+cd /path/to/contextfs
+docker build -f docker/Dockerfile.sync -t magnetonio/contextfs-sync:latest .
+docker push magnetonio/contextfs-sync:latest
+railway redeploy --service sync-api-prod --yes
+```
+
+### Railway Configuration
+- **Project**: contextfs-sync
+- **Service**: sync-api-prod
+- **Image**: `magnetonio/contextfs-sync:latest`
+- **Database**: PostgreSQL (postgres-pgvector)
+
+### SSH into Railway (for debugging)
+```bash
+railway ssh --service sync-api-prod -- 'command'
+```
+
+### Check logs
+```bash
+railway logs --service sync-api-prod
+railway logs --service sync-api-prod --build
+```
+
+### Environment Variables (Railway)
+Key variables configured in Railway:
+- `CONTEXTFS_POSTGRES_URL` - PostgreSQL connection string
+- `STRIPE_SECRET_KEY` - Stripe live/test key
+- `STRIPE_WEBHOOK_SECRET` - Webhook signing secret
+- `STRIPE_PRICE_PRO` / `STRIPE_PRICE_TEAM` - Price IDs
+
+### Why Docker Instead of `railway up`
+- `railway up` uploads source and builds remotely - often times out
+- Docker images are pre-built and deploy instantly
+- More reliable and consistent deployments
