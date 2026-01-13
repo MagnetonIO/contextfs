@@ -15,6 +15,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Update version in source files
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          # Update pyproject.toml
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          # Update __init__.py
+          sed -i "s/__version__ = \".*\"/__version__ = \"$VERSION\"/" src/contextfs/__init__.py
+          # Verify
+          echo "pyproject.toml:"
+          grep "^version" pyproject.toml
+          echo "__init__.py:"
+          grep "__version__" src/contextfs/__init__.py | head -1
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
