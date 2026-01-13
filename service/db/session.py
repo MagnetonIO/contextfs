@@ -91,6 +91,21 @@ async def create_tables() -> None:
         # Create tables
         await conn.run_sync(Base.metadata.create_all)
 
+        # Run migrations for missing columns (safe to run multiple times)
+        migrations = [
+            # Add user_id to devices table for multi-tenant isolation
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS user_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id)",
+            # Add user_id to memories table for multi-tenant isolation
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id)",
+            # Add user_id to sessions table for multi-tenant isolation
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)",
+        ]
+        for migration in migrations:
+            await conn.execute(__import__("sqlalchemy").text(migration))
+
 
 async def drop_tables() -> None:
     """Drop all database tables (use with caution!)."""
