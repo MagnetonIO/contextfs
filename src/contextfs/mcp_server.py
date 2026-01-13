@@ -1264,6 +1264,115 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        # =========================================================================
+        # Sync Tools - Push/Pull memories to remote server
+        # =========================================================================
+        Tool(
+            name="contextfs_sync_register",
+            description="Register this device with a sync server for multi-device memory synchronization.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {
+                        "type": "string",
+                        "description": "URL of the sync server (default: http://localhost:8766)",
+                    },
+                    "device_name": {
+                        "type": "string",
+                        "description": "Human-readable device name (defaults to hostname)",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_sync_push",
+            description="Push local memory changes to the sync server.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {
+                        "type": "string",
+                        "description": "URL of the sync server (default: http://localhost:8766)",
+                    },
+                    "namespace_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of namespace IDs to sync (default: all)",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_sync_pull",
+            description="Pull memory changes from the sync server.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {
+                        "type": "string",
+                        "description": "URL of the sync server (default: http://localhost:8766)",
+                    },
+                    "namespace_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of namespace IDs to sync (default: all)",
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "ISO timestamp to pull changes after (default: last sync time)",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_sync",
+            description="Full bidirectional sync with the server (push + pull). Handles conflicts via vector clocks.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {
+                        "type": "string",
+                        "description": "URL of the sync server (default: http://localhost:8766)",
+                    },
+                    "namespace_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of namespace IDs to sync (default: all)",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_sync_diff",
+            description="Content-addressed sync (idempotent, Merkle-style). Compares content hashes to find what needs syncing.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {
+                        "type": "string",
+                        "description": "URL of the sync server (default: http://localhost:8766)",
+                    },
+                    "namespace_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of namespace IDs to sync (default: all)",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_sync_status",
+            description="Get sync status (last sync time, pending changes count).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {
+                        "type": "string",
+                        "description": "URL of the sync server (default: http://localhost:8766)",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -2984,6 +3093,59 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     )
 
             return [TextContent(type="text", text="\n".join(output))]
+
+        # =========================================================================
+        # Sync Tools - Push/Pull memories to remote server
+        # =========================================================================
+        elif name == "contextfs_sync_register":
+            from contextfs.sync.mcp_tools import DEFAULT_SERVER_URL, contextfs_sync_register
+
+            server_url = arguments.get("server_url") or DEFAULT_SERVER_URL
+            device_name = arguments.get("device_name")
+            result = await contextfs_sync_register(server_url=server_url, device_name=device_name)
+            return [TextContent(type="text", text=result["message"])]
+
+        elif name == "contextfs_sync_push":
+            from contextfs.sync.mcp_tools import DEFAULT_SERVER_URL, contextfs_sync_push
+
+            server_url = arguments.get("server_url") or DEFAULT_SERVER_URL
+            namespace_ids = arguments.get("namespace_ids")
+            result = await contextfs_sync_push(server_url=server_url, namespace_ids=namespace_ids)
+            return [TextContent(type="text", text=result["message"])]
+
+        elif name == "contextfs_sync_pull":
+            from contextfs.sync.mcp_tools import DEFAULT_SERVER_URL, contextfs_sync_pull
+
+            server_url = arguments.get("server_url") or DEFAULT_SERVER_URL
+            namespace_ids = arguments.get("namespace_ids")
+            since = arguments.get("since")
+            result = await contextfs_sync_pull(
+                server_url=server_url, namespace_ids=namespace_ids, since=since
+            )
+            return [TextContent(type="text", text=result["message"])]
+
+        elif name == "contextfs_sync":
+            from contextfs.sync.mcp_tools import DEFAULT_SERVER_URL, contextfs_sync_all
+
+            server_url = arguments.get("server_url") or DEFAULT_SERVER_URL
+            namespace_ids = arguments.get("namespace_ids")
+            result = await contextfs_sync_all(server_url=server_url, namespace_ids=namespace_ids)
+            return [TextContent(type="text", text=result["message"])]
+
+        elif name == "contextfs_sync_diff":
+            from contextfs.sync.mcp_tools import DEFAULT_SERVER_URL, contextfs_sync_diff
+
+            server_url = arguments.get("server_url") or DEFAULT_SERVER_URL
+            namespace_ids = arguments.get("namespace_ids")
+            result = await contextfs_sync_diff(server_url=server_url, namespace_ids=namespace_ids)
+            return [TextContent(type="text", text=result["message"])]
+
+        elif name == "contextfs_sync_status":
+            from contextfs.sync.mcp_tools import DEFAULT_SERVER_URL, contextfs_sync_status
+
+            server_url = arguments.get("server_url") or DEFAULT_SERVER_URL
+            result = await contextfs_sync_status(server_url=server_url)
+            return [TextContent(type="text", text=result["message"])]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
