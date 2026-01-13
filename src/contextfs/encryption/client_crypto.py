@@ -76,7 +76,9 @@ def derive_encryption_key(api_key: str, salt: str) -> bytes:
     Returns:
         32-byte encryption key
     """
-    salt_bytes = base64.urlsafe_b64decode(salt)
+    # Add padding if missing (token_urlsafe doesn't include padding)
+    padded_salt = salt + "=" * (-len(salt) % 4)
+    salt_bytes = base64.urlsafe_b64decode(padded_salt)
 
     hkdf = HKDF(
         algorithm=hashes.SHA256(),

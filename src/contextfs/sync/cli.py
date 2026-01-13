@@ -28,6 +28,22 @@ logger = logging.getLogger(__name__)
 DEFAULT_SERVER_URL = "http://localhost:8766"
 
 
+def _get_api_key() -> str | None:
+    """Get API key from cloud config."""
+    try:
+        from pathlib import Path
+
+        import yaml
+
+        config_path = Path.home() / ".contextfs" / "config.yaml"
+        if config_path.exists():
+            config = yaml.safe_load(config_path.read_text())
+            return config.get("cloud", {}).get("api_key")
+    except Exception:
+        pass
+    return None
+
+
 def run_async(coro: Any) -> Any:
     """Run async function in sync context."""
     try:
@@ -62,8 +78,10 @@ def register(server: str, name: str | None):
     """Register this device with the sync server."""
     from contextfs.sync import SyncClient
 
+    api_key = _get_api_key()
+
     async def _register():
-        async with SyncClient(server) as client:
+        async with SyncClient(server, api_key=api_key) as client:
             info = await client.register_device(
                 device_name=name or socket.gethostname(),
                 device_platform=platform.system().lower(),
@@ -107,10 +125,11 @@ def push(server: str, namespace: tuple[str, ...], push_all: bool):
     """Push local changes to the sync server."""
     from contextfs.sync import SyncClient
 
+    api_key = _get_api_key()
     namespace_ids = list(namespace) if namespace else None
 
     async def _push():
-        async with SyncClient(server) as client:
+        async with SyncClient(server, api_key=api_key) as client:
             return await client.push(namespace_ids=namespace_ids, push_all=push_all)
 
     try:
@@ -158,11 +177,12 @@ def pull(server: str, namespace: tuple[str, ...], since: str | None, pull_all: b
     """Pull changes from the sync server."""
     from contextfs.sync import SyncClient
 
+    api_key = _get_api_key()
     namespace_ids = list(namespace) if namespace else None
     since_dt = datetime.fromisoformat(since) if since else None
 
     async def _pull():
-        async with SyncClient(server) as client:
+        async with SyncClient(server, api_key=api_key) as client:
             total_memories = 0
             total_sessions = 0
             total_edges = 0
@@ -241,10 +261,11 @@ def diff_sync(server: str, namespace: tuple[str, ...]):
     """
     from contextfs.sync import SyncClient
 
+    api_key = _get_api_key()
     namespace_ids = list(namespace) if namespace else None
 
     async def _diff():
-        async with SyncClient(server) as client:
+        async with SyncClient(server, api_key=api_key) as client:
             return await client.pull_diff(namespace_ids=namespace_ids)
 
     try:
@@ -282,10 +303,11 @@ def sync_all(server: str, namespace: tuple[str, ...]):
     """Full bidirectional sync (push + pull)."""
     from contextfs.sync import SyncClient
 
+    api_key = _get_api_key()
     namespace_ids = list(namespace) if namespace else None
 
     async def _sync():
-        async with SyncClient(server) as client:
+        async with SyncClient(server, api_key=api_key) as client:
             return await client.sync_all(namespace_ids=namespace_ids)
 
     try:
@@ -320,8 +342,10 @@ def status(server: str):
     """Get sync status from server."""
     from contextfs.sync import SyncClient
 
+    api_key = _get_api_key()
+
     async def _status():
-        async with SyncClient(server) as client:
+        async with SyncClient(server, api_key=api_key) as client:
             return await client.status()
 
     try:

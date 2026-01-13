@@ -1197,6 +1197,12 @@ class SyncClient:
         start = time.time()
         errors: list[str] = []
 
+        # Step 0: Register device (ensures device is linked to authenticated user)
+        try:
+            await self.register_device()
+        except Exception as e:
+            logger.warning(f"Device registration failed (continuing sync): {e}")
+
         # Step 1: Get diff (content-addressed - tells us both directions)
         try:
             diff_result = await self._get_diff(namespace_ids=namespace_ids)

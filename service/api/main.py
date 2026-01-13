@@ -3,6 +3,7 @@
 Main entry point for the ContextFS sync server.
 Run with: uvicorn service.api.main:app --host 0.0.0.0 --port 8766
 
+All data stored in Postgres (users, api_keys, subscriptions, sync data).
 Admin user created on startup if ADMIN_EMAIL and ADMIN_PASSWORD env vars are set.
 """
 
@@ -13,15 +14,19 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
-import aiosqlite
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
 
-from contextfs.auth import generate_api_key, hash_api_key, init_auth_middleware
+from contextfs.auth import generate_api_key, hash_api_key
+from service.api.admin_routes import router as admin_router
 from service.api.auth_routes import router as auth_router
 from service.api.billing_routes import router as billing_router
+from service.api.devices_routes import router as devices_router
+from service.api.memories_routes import router as memories_router
 from service.api.sync_routes import router as sync_router
-from service.db.session import close_db, create_tables, init_db
+from service.db.models import APIKeyModel, SubscriptionModel, UsageModel, UserModel
+from service.db.session import close_db, create_tables, get_session, init_db
 
 # Configure logging
 logging.basicConfig(
@@ -38,40 +43,7 @@ def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-async def init_auth_db(db_path: str) -> None:
-    """Initialize auth database tables (SQLite)."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
-                name TEXT,
-                provider TEXT NOT NULL DEFAULT 'api_key',
-                provider_id TEXT,
-                password_hash TEXT,
-                email_verified INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                last_login TEXT
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS api_keys (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                key_hash TEXT NOT NULL,
-                key_prefix TEXT NOT NULL,
-                encryption_salt TEXT,
-                is_active INTEGER DEFAULT 1,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                last_used_at TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-        """)
-        await db.commit()
-
-
-async def ensure_admin_user(db_path: str) -> str | None:
+async def ensure_admin_user() -> str | None:
     """Create admin user from env vars if not exists. Returns API key if created."""
     admin_email = os.environ.get("ADMIN_EMAIL")
     admin_password = os.environ.get("ADMIN_PASSWORD")
@@ -80,54 +52,80 @@ async def ensure_admin_user(db_path: str) -> str | None:
         logger.info("Admin not configured (set ADMIN_EMAIL + ADMIN_PASSWORD)")
         return None
 
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-
+    async with get_session() as session:
         # Check if admin exists with active key
-        cursor = await db.execute(
-            "SELECT u.id, k.key_prefix FROM users u LEFT JOIN api_keys k ON u.id = k.user_id AND k.is_active = 1 WHERE u.id = ?",
-            (ADMIN_USER_ID,),
+        result = await session.execute(
+            select(UserModel, APIKeyModel)
+            .outerjoin(
+                APIKeyModel,
+                (UserModel.id == APIKeyModel.user_id) & (APIKeyModel.is_active.is_(True)),
+            )
+            .where(UserModel.id == ADMIN_USER_ID)
         )
-        row = await cursor.fetchone()
-        if row and row["key_prefix"]:
-            logger.info(f"Admin exists with key prefix: {row['key_prefix']}...")
+        row = result.first()
+
+        if row and row[1]:  # User exists with active key
+            logger.info(f"Admin exists with key prefix: {row[1].key_prefix}...")
             return None
 
-        # Create or update admin user
-        password_hash = _hash_password(admin_password)
-        if not row:
-            await db.execute(
-                "INSERT INTO users (id, email, name, provider, password_hash, email_verified, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
-                (
-                    ADMIN_USER_ID,
-                    admin_email,
-                    "Admin",
-                    "system",
-                    password_hash,
-                    datetime.now(timezone.utc).isoformat(),
-                ),
+        user = row[0] if row else None
+
+        # Create user if not exists
+        if not user:
+            password_hash = _hash_password(admin_password)
+            user = UserModel(
+                id=ADMIN_USER_ID,
+                email=admin_email,
+                name="Admin",
+                provider="system",
+                password_hash=password_hash,
+                email_verified=True,
             )
+            session.add(user)
+            # Commit user first to satisfy foreign key constraints
+            await session.commit()
+
+            # Initialize subscription
+            subscription = SubscriptionModel(
+                id=str(uuid4()),
+                user_id=ADMIN_USER_ID,
+                tier="team",  # Admin gets team tier
+                device_limit=-1,  # Unlimited
+                memory_limit=-1,  # Unlimited
+                status="active",
+            )
+            session.add(subscription)
+
+            # Initialize usage
+            usage = UsageModel(
+                user_id=ADMIN_USER_ID,
+                device_count=0,
+                memory_count=0,
+            )
+            session.add(usage)
+            await session.commit()
+
             logger.info(f"Created admin: {admin_email}")
 
         # Create API key
         env_key = os.environ.get("ADMIN_API_KEY")
         if env_key and env_key.startswith("ctxfs_"):
-            full_key, key_prefix = env_key, env_key[6:14]
+            full_key = env_key
+            key_prefix = env_key[6:14]
         else:
             full_key, key_prefix = generate_api_key()
 
-        await db.execute(
-            "INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
-            (
-                str(uuid4()),
-                ADMIN_USER_ID,
-                "Admin Key",
-                hash_api_key(full_key),
-                key_prefix,
-                datetime.now(timezone.utc).isoformat(),
-            ),
+        api_key = APIKeyModel(
+            id=str(uuid4()),
+            user_id=ADMIN_USER_ID,
+            name="Admin Key",
+            key_hash=hash_api_key(full_key),
+            key_prefix=key_prefix,
+            is_active=True,
         )
-        await db.commit()
+        session.add(api_key)
+        await session.commit()
+
         return full_key
 
 
@@ -136,23 +134,18 @@ async def lifespan(app: FastAPI):
     """Initialize and cleanup resources."""
     logger.info("Starting ContextFS Sync Service...")
 
-    # Initialize sync database (Postgres)
+    # Initialize Postgres database
     await init_db()
     await create_tables()
-    logger.info("Sync database initialized")
-
-    # Initialize auth database (SQLite)
-    db_path = os.environ.get("CONTEXTFS_DB_PATH", "contextfs.db")
-    await init_auth_db(db_path)
+    logger.info("Database initialized (Postgres)")
 
     # Create admin if configured
-    admin_key = await ensure_admin_user(db_path)
+    admin_key = await ensure_admin_user()
     if admin_key:
         logger.info("=" * 50)
         logger.info(f"ADMIN API KEY: {admin_key}")
         logger.info("=" * 50)
 
-    init_auth_middleware(db_path)
     logger.info("Auth initialized")
 
     yield
@@ -164,7 +157,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ContextFS Sync Service",
     description="Multi-device memory synchronization service with vector clock conflict resolution",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -181,6 +174,9 @@ app.add_middleware(
 app.include_router(sync_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
+app.include_router(devices_router)
+app.include_router(memories_router)
+app.include_router(admin_router)
 
 
 # =============================================================================
@@ -219,6 +215,7 @@ async def root():
                 "create_key": "POST /api/auth/api-keys",
                 "oauth_init": "POST /api/auth/oauth/init",
                 "oauth_callback": "POST /api/auth/oauth/callback",
+                "oauth_token": "POST /api/auth/oauth/token",
             },
             "billing": {
                 "checkout": "POST /api/billing/checkout",
@@ -226,6 +223,10 @@ async def root():
                 "subscription": "GET /api/billing/subscription",
                 "usage": "GET /api/billing/usage",
                 "webhook": "POST /api/billing/webhook",
+            },
+            "devices": {
+                "list": "GET /api/devices",
+                "remove": "DELETE /api/devices/{device_id}",
             },
         },
     }

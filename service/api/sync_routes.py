@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextfs.auth.api_keys import APIKey, User
 from contextfs.sync.protocol import (
     ConflictInfo,
     DeviceInfo,
@@ -29,6 +30,7 @@ from contextfs.sync.protocol import (
     SyncStatusResponse,
 )
 from contextfs.sync.vector_clock import VectorClock
+from service.api.auth_middleware import get_current_user
 from service.db.models import (
     Device,
     SyncedEdgeModel,
@@ -52,25 +54,35 @@ router = APIRouter(prefix="/api/sync", tags=["sync"])
 async def register_device(
     registration: DeviceRegistration,
     session: AsyncSession = Depends(get_session_dependency),
+    auth: tuple[User, APIKey] | None = Depends(get_current_user),
 ) -> DeviceInfo:
     """Register a new device for sync."""
+    user_id = auth[0].id if auth else None
+
     # Check if device already exists
     result = await session.execute(select(Device).where(Device.device_id == registration.device_id))
     existing = result.scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
 
     if existing:
         # Update existing device
         existing.device_name = registration.device_name
         existing.platform = registration.platform
         existing.client_version = registration.client_version
+        existing.last_sync_at = now  # Mark as active on re-registration
+        if user_id:
+            existing.user_id = user_id
         device = existing
     else:
         # Create new device
         device = Device(
             device_id=registration.device_id,
+            user_id=user_id,
             device_name=registration.device_name,
             platform=registration.platform,
             client_version=registration.client_version,
+            last_sync_at=now,  # Mark as active on registration
         )
         session.add(device)
 
@@ -96,6 +108,7 @@ async def register_device(
 async def push_changes(
     request: SyncPushRequest,
     session: AsyncSession = Depends(get_session_dependency),
+    auth: tuple[User, APIKey] | None = Depends(get_current_user),
 ) -> SyncPushResponse:
     """
     Push local changes to server.
@@ -105,6 +118,9 @@ async def push_changes(
     2. If server vector_clock happens-before client: accept
     3. If concurrent: conflict (return for manual resolution)
     """
+    # Get user_id for multi-tenant isolation
+    user_id = auth[0].id if auth else None
+
     accepted = 0
     rejected = 0
     conflicts: list[ConflictInfo] = []
@@ -112,7 +128,7 @@ async def push_changes(
 
     # Process memories
     for memory in request.memories:
-        result = await _process_memory_push(session, memory, request.device_id, conflicts)
+        result = await _process_memory_push(session, memory, request.device_id, conflicts, user_id)
         if result == "accepted":
             accepted += 1
         elif result == "rejected":
@@ -121,7 +137,7 @@ async def push_changes(
 
     # Process sessions
     for sess in request.sessions:
-        result = await _process_session_push(session, sess, request.device_id, conflicts)
+        result = await _process_session_push(session, sess, request.device_id, conflicts, user_id)
         if result == "accepted":
             accepted += 1
         elif result == "rejected":
@@ -161,6 +177,7 @@ async def _process_memory_push(
     memory: SyncedMemory,
     device_id: str,
     conflicts: list[ConflictInfo],
+    user_id: str | None = None,
 ) -> str:
     """Process a single memory push. Returns 'accepted', 'rejected', or 'conflict'."""
     result = await session.execute(
@@ -174,6 +191,7 @@ async def _process_memory_push(
         # New memory - accept
         new_memory = SyncedMemoryModel(
             id=memory.id,
+            user_id=user_id,  # Multi-tenant isolation
             content=memory.content,
             type=memory.type,
             tags=memory.tags,
@@ -250,6 +268,7 @@ async def _process_session_push(
     sess: SyncedSession,
     device_id: str,
     conflicts: list[ConflictInfo],
+    user_id: str | None = None,
 ) -> str:
     """Process a single session push."""
     result = await session.execute(
@@ -262,6 +281,7 @@ async def _process_session_push(
     if existing is None:
         new_session = SyncedSessionModel(
             id=sess.id,
+            user_id=user_id,  # Multi-tenant isolation
             label=sess.label,
             namespace_id=sess.namespace_id,
             tool=sess.tool,

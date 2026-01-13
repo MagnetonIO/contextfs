@@ -3,10 +3,23 @@ Integration tests for MCP server.
 """
 
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import pytest
+
+
+def get_python_executable() -> str:
+    """Get the Python executable that has contextfs installed.
+
+    When running under uv, sys.executable may point to pyenv Python,
+    but the actual venv Python is at sys.prefix/bin/python.
+    """
+    venv_python = Path(sys.prefix) / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
 
 
 class TestIndexStatus:
@@ -55,8 +68,6 @@ class TestCLIBackgroundIndex:
 
     def test_background_flag_returns_immediately(self, temp_dir: Path):
         """Test that --background flag spawns subprocess and returns quickly."""
-        import sys
-
         # Create a directory with some files
         repo_dir = temp_dir / "test-repo"
         repo_dir.mkdir()
@@ -75,7 +86,7 @@ class TestCLIBackgroundIndex:
 
         # Run with --background flag
         result = subprocess.run(
-            [sys.executable, "-m", "contextfs.cli", "index", "--background", "--quiet"],
+            [get_python_executable(), "-m", "contextfs.cli", "index", "--background", "--quiet"],
             cwd=repo_dir,
             capture_output=True,
             text=True,

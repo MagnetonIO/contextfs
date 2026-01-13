@@ -42,6 +42,18 @@ services:
       CONTEXTFS_SYNC_PORT: "8766"
       CONTEXTFS_SYNC_HOST: "0.0.0.0"
       CORS_ORIGINS: "*"
+      # Admin user (optional)
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # OAuth providers (optional)
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Email service (Mailgun)
+      MAILGUN_API_KEY: ${MAILGUN_API_KEY:-}
+      MAILGUN_DOMAIN: ${MAILGUN_DOMAIN:-appmail.magnetonlabs.com}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
     ports:
       - "8766:8766"
     volumes:
@@ -87,8 +99,15 @@ services:
     working_dir: /app
     environment:
       NODE_ENV: development
-      NEXT_PUBLIC_SYNC_API_URL: http://sync-api:8766
-      CONTEXTFS_SYNC_URL: http://sync-api:8766
+      NEXT_PUBLIC_API_URL: http://localhost:8766
+      API_URL_INTERNAL: http://sync-api:8766
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-contextfs-dev-secret-change-in-production}
+      # OAuth providers
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
       - "3000:3000"
     volumes:

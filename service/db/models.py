@@ -42,6 +42,9 @@ class SyncedMemoryModel(Base):
     # Primary key
     id: Mapped[str] = mapped_column(Text, primary_key=True)
 
+    # Owner (for multi-tenant isolation)
+    user_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+
     # Core content
     content: Mapped[str] = mapped_column(Text, nullable=False)
     type: Mapped[str] = mapped_column(Text, nullable=False, default="fact")
@@ -208,6 +211,9 @@ class Device(Base):
     __tablename__ = "devices"
 
     device_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        Text, nullable=True, index=True
+    )  # Links device to user
     device_name: Mapped[str] = mapped_column(Text, nullable=False)
     platform: Mapped[str] = mapped_column(Text, nullable=False)
     client_version: Mapped[str] = mapped_column(Text, nullable=False)
@@ -237,3 +243,89 @@ class SyncState(Base):
     total_pushed: Mapped[int] = mapped_column(default=0)
     total_pulled: Mapped[int] = mapped_column(default=0)
     total_conflicts: Mapped[int] = mapped_column(default=0)
+
+
+# =============================================================================
+# Auth Models (users, api_keys, subscriptions, usage)
+# =============================================================================
+
+
+class UserModel(Base):
+    """User accounts."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    name: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(Text, nullable=False, default="api_key")
+    provider_id: Mapped[str | None] = mapped_column(Text)
+    password_hash: Mapped[str | None] = mapped_column(Text)
+    email_verified: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class APIKeyModel(Base):
+    """API keys for authentication."""
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    key_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    key_prefix: Mapped[str] = mapped_column(Text, nullable=False)
+    encryption_salt: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SubscriptionModel(Base):
+    """User subscriptions."""
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    tier: Mapped[str] = mapped_column(Text, default="free")
+    stripe_customer_id: Mapped[str | None] = mapped_column(Text)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(Text)
+    device_limit: Mapped[int] = mapped_column(default=3)
+    memory_limit: Mapped[int] = mapped_column(default=10000)
+    status: Mapped[str] = mapped_column(Text, default="active")
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class UsageModel(Base):
+    """User usage tracking."""
+
+    __tablename__ = "usage"
+
+    user_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    device_count: Mapped[int] = mapped_column(default=0)
+    memory_count: Mapped[int] = mapped_column(default=0)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PasswordResetToken(Base):
+    """Password reset tokens for email-based login."""
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -4,10 +4,23 @@ Integration tests for ChromaDB server command.
 
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import pytest
+
+
+def get_python_executable() -> str:
+    """Get the Python executable that has contextfs installed.
+
+    When running under uv, get_python_executable() may point to pyenv Python,
+    but the actual venv Python is at sys.prefix/bin/python.
+    """
+    venv_python = Path(sys.prefix) / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return get_python_executable()
 
 
 class TestChromaServerCommand:
@@ -21,7 +34,7 @@ class TestChromaServerCommand:
     def test_chroma_server_help(self):
         """Test that chroma-server --help works."""
         result = subprocess.run(
-            ["python", "-m", "contextfs.cli", "chroma-server", "--help"],
+            [get_python_executable(), "-m", "contextfs.cli", "chroma-server", "--help"],
             capture_output=True,
             text=True,
         )
@@ -34,7 +47,7 @@ class TestChromaServerCommand:
         port = 19999
         result = subprocess.run(
             [
-                "python",
+                get_python_executable(),
                 "-m",
                 "contextfs.cli",
                 "chroma-server",
@@ -62,7 +75,7 @@ class TestChromaServerCommand:
             # Start the server in daemon mode
             result = subprocess.run(
                 [
-                    "python",
+                    get_python_executable(),
                     "-m",
                     "contextfs.cli",
                     "chroma-server",
@@ -95,7 +108,7 @@ class TestChromaServerCommand:
             # Test --status when running
             status_result = subprocess.run(
                 [
-                    "python",
+                    get_python_executable(),
                     "-m",
                     "contextfs.cli",
                     "chroma-server",
@@ -111,7 +124,7 @@ class TestChromaServerCommand:
             # Test already-running detection
             start_again = subprocess.run(
                 [
-                    "python",
+                    get_python_executable(),
                     "-m",
                     "contextfs.cli",
                     "chroma-server",

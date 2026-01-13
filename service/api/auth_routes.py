@@ -1,23 +1,36 @@
 """Authentication API routes for ContextFS.
 
 Handles user registration, API key management, and OAuth callbacks.
+All data stored in Postgres.
 """
 
 import hashlib
 import os
+import secrets
+from datetime import datetime, timezone
 from uuid import uuid4
 
-import aiosqlite
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import delete, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from contextfs.auth import APIKey, APIKeyService, User, generate_api_key, hash_api_key, require_auth
+from contextfs.auth import generate_api_key, hash_api_key
+from contextfs.auth.api_keys import APIKey, User
 from contextfs.encryption import derive_encryption_key_base64
+from service.api.auth_middleware import require_auth
+from service.db.models import APIKeyModel, SubscriptionModel, UsageModel, UserModel
+from service.db.session import get_session_dependency
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-# Pydantic models
+# =============================================================================
+# Pydantic Models
+# =============================================================================
+
+
 class UserResponse(BaseModel):
     """User profile response."""
 
@@ -68,11 +81,10 @@ class RevokeKeyRequest(BaseModel):
     key_id: str
 
 
-# OAuth models (for frontend to call)
 class OAuthInitRequest(BaseModel):
     """Request to initiate OAuth flow."""
 
-    provider: str  # google, github
+    provider: str
     redirect_uri: str
 
 
@@ -80,6 +92,7 @@ class OAuthInitResponse(BaseModel):
     """Response with OAuth authorization URL."""
 
     auth_url: str
+    state: str
 
 
 class LoginRequest(BaseModel):
@@ -114,6 +127,13 @@ class OAuthCallbackRequest(BaseModel):
     state: str
 
 
+class OAuthTokenRequest(BaseModel):
+    """OAuth token exchange - for NextAuth which already has the access_token."""
+
+    provider: str
+    access_token: str
+
+
 class OAuthCallbackResponse(BaseModel):
     """Response after OAuth callback."""
 
@@ -122,11 +142,9 @@ class OAuthCallbackResponse(BaseModel):
     encryption_key: str | None
 
 
-# Dependency to get APIKeyService
-def get_api_key_service() -> APIKeyService:
-    """Get APIKeyService instance."""
-    db_path = os.environ.get("CONTEXTFS_DB_PATH", "contextfs.db")
-    return APIKeyService(db_path)
+# =============================================================================
+# Helper Functions
+# =============================================================================
 
 
 def _hash_password(password: str) -> str:
@@ -134,79 +152,144 @@ def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+async def _create_api_key(
+    session: AsyncSession,
+    user_id: str,
+    name: str,
+    with_encryption: bool = True,
+) -> tuple[str, str | None]:
+    """Create a new API key for a user.
+
+    Returns: (full_api_key, encryption_salt)
+    """
+    full_key, key_prefix = generate_api_key()
+    key_hash = hash_api_key(full_key)
+    key_id = str(uuid4())
+
+    encryption_salt = None
+    if with_encryption:
+        encryption_salt = secrets.token_urlsafe(32)
+
+    key_model = APIKeyModel(
+        id=key_id,
+        user_id=user_id,
+        name=name,
+        key_hash=key_hash,
+        key_prefix=key_prefix,
+        encryption_salt=encryption_salt,
+        is_active=True,
+    )
+    session.add(key_model)
+    await session.commit()
+
+    return full_key, encryption_salt
+
+
+async def _get_or_create_user(
+    session: AsyncSession,
+    email: str,
+    name: str | None,
+    provider: str,
+    provider_id: str,
+) -> tuple[str, bool]:
+    """Get or create user by email.
+
+    Returns: (user_id, is_new_user)
+    """
+    result = await session.execute(select(UserModel).where(UserModel.email == email))
+    user = result.scalar_one_or_none()
+
+    if user:
+        # Update existing user
+        user.name = name
+        user.provider_id = provider_id
+        user.last_login = datetime.now(timezone.utc)
+        await session.commit()
+        return user.id, False
+
+    # Create new user
+    user_id = str(uuid4())
+    new_user = UserModel(
+        id=user_id,
+        email=email,
+        name=name,
+        provider=provider,
+        provider_id=provider_id,
+        email_verified=True,
+    )
+    session.add(new_user)
+    # Commit user first to satisfy foreign key constraints
+    await session.commit()
+
+    # Initialize subscription
+    subscription = SubscriptionModel(
+        id=str(uuid4()),
+        user_id=user_id,
+        tier="free",
+        device_limit=3,
+        memory_limit=10000,
+        status="active",
+    )
+    session.add(subscription)
+
+    # Initialize usage
+    usage = UsageModel(
+        user_id=user_id,
+        device_count=0,
+        memory_count=0,
+    )
+    session.add(usage)
+
+    await session.commit()
+    return user_id, True
+
+
+# =============================================================================
+# Auth Routes
+# =============================================================================
+
+
 @router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
+async def login(
+    request: LoginRequest,
+    session: AsyncSession = Depends(get_session_dependency),
+):
     """Login with email and password, returns an API key."""
-    db_path = os.environ.get("CONTEXTFS_DB_PATH", "contextfs.db")
     password_hash = _hash_password(request.password)
 
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-
-        # Find user by email and password
-        cursor = await db.execute(
-            """
-            SELECT id, email, name, provider FROM users
-            WHERE email = ? AND password_hash = ?
-            """,
-            (request.email, password_hash),
+    result = await session.execute(
+        select(UserModel).where(
+            UserModel.email == request.email,
+            UserModel.password_hash == password_hash,
         )
-        user = await cursor.fetchone()
+    )
+    user = result.scalar_one_or_none()
 
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
-            )
-
-        # Check for existing active API key (prefer non-session keys)
-        cursor = await db.execute(
-            """
-            SELECT id, key_hash, key_prefix, name FROM api_keys
-            WHERE user_id = ? AND is_active = 1
-            ORDER BY CASE WHEN name = 'Login Session' THEN 1 ELSE 0 END, created_at DESC
-            LIMIT 1
-            """,
-            (user["id"],),
-        )
-        existing_key = await cursor.fetchone()
-
-        if existing_key:
-            # Return existing key - but we can't retrieve the original key from hash
-            # So we generate a new session key only if no keys exist
-            # For login, we need to return a usable key, so create session key
-            pass
-
-        # Generate a new API key for this login session
-        full_key, key_prefix = generate_api_key()
-        key_hash = hash_api_key(full_key)
-        key_id = str(uuid4())
-
-        # Delete old login session keys for this user (keep only latest)
-        await db.execute(
-            """
-            DELETE FROM api_keys
-            WHERE user_id = ? AND name = 'Login Session'
-            """,
-            (user["id"],),
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
         )
 
-        await db.execute(
-            """
-            INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, 1, datetime('now'))
-            """,
-            (key_id, user["id"], "Login Session", key_hash, key_prefix),
+    # Delete old login session keys
+    await session.execute(
+        delete(APIKeyModel).where(
+            APIKeyModel.user_id == user.id,
+            APIKeyModel.name == "Login Session",
         )
-        await db.commit()
+    )
 
-        return LoginResponse(
-            user=LoginUserResponse(
-                id=user["id"],
-                email=user["email"],
-                name=user["name"],
-            ),
-            apiKey=full_key,
-        )
+    # Create new session key
+    full_key, _ = await _create_api_key(session, user.id, "Login Session", with_encryption=False)
+
+    return LoginResponse(
+        user=LoginUserResponse(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+        ),
+        apiKey=full_key,
+    )
 
 
 @router.get("/me", response_model=UserResponse)
@@ -214,7 +297,7 @@ async def get_current_user_info(
     auth: tuple[User, APIKey] = Depends(require_auth),
 ):
     """Get current authenticated user's profile."""
-    user, api_key = auth
+    user, _ = auth
     return UserResponse(
         id=user.id,
         email=user.email,
@@ -224,75 +307,79 @@ async def get_current_user_info(
 
 
 @router.post("/api-keys", response_model=CreateAPIKeyResponse)
-async def create_api_key(
+async def create_api_key_endpoint(
     request: CreateAPIKeyRequest,
     auth: tuple[User, APIKey] = Depends(require_auth),
-    api_key_service: APIKeyService = Depends(get_api_key_service),
+    session: AsyncSession = Depends(get_session_dependency),
 ):
-    """Create a new API key.
+    """Create a new API key."""
+    user, _ = auth
 
-    IMPORTANT: The returned api_key and encryption_key are shown only once!
-    """
-    user, current_key = auth
-
-    api_key, encryption_salt = await api_key_service.create_key(
-        user_id=user.id,
-        name=request.name,
-        with_encryption=request.with_encryption,
+    full_key, encryption_salt = await _create_api_key(
+        session, user.id, request.name, request.with_encryption
     )
 
-    # Derive encryption key if salt was generated
     encryption_key = None
     if encryption_salt:
-        encryption_key = derive_encryption_key_base64(api_key, encryption_salt)
+        encryption_key = derive_encryption_key_base64(full_key, encryption_salt)
 
-    # Get key prefix for the response
-    key_prefix = api_key.split("_")[1][:8] if "_" in api_key else api_key[:8]
+    key_prefix = full_key.split("_")[1][:8] if "_" in full_key else full_key[:8]
 
-    # Generate config snippet
     config_lines = [
         "cloud:",
         "  enabled: true",
-        f"  api_key: {api_key}",
+        f"  api_key: {full_key}",
     ]
     if encryption_key:
         config_lines.append(f"  encryption_key: {encryption_key}")
     config_lines.append("  server_url: https://api.contextfs.ai")
 
-    config_snippet = "\n".join(config_lines)
-
     return CreateAPIKeyResponse(
-        id=str(uuid4()),  # Generate ID for the key
+        id=str(uuid4()),
         name=request.name,
-        api_key=api_key,
+        api_key=full_key,
         encryption_key=encryption_key,
         key_prefix=key_prefix,
-        config_snippet=config_snippet,
+        config_snippet="\n".join(config_lines),
     )
 
 
 @router.get("/api-keys", response_model=APIKeyListResponse)
 async def list_api_keys(
     auth: tuple[User, APIKey] = Depends(require_auth),
-    api_key_service: APIKeyService = Depends(get_api_key_service),
+    session: AsyncSession = Depends(get_session_dependency),
 ):
     """List all API keys for the current user."""
-    user, current_key = auth
+    user, _ = auth
 
-    keys = await api_key_service.list_keys(user.id)
+    result = await session.execute(
+        select(APIKeyModel)
+        .where(
+            APIKeyModel.user_id == user.id,
+            APIKeyModel.name.notin_(["Login Session", "OAuth Session"]),
+        )
+        .order_by(APIKeyModel.created_at.desc())
+    )
+    keys = result.scalars().all()
+
+    def format_datetime(dt) -> str:
+        if dt is None:
+            return ""
+        if isinstance(dt, str):
+            return dt
+        return dt.isoformat()
 
     return APIKeyListResponse(
         keys=[
             APIKeyListItem(
-                id=key.id,
-                name=key.name,
-                key_prefix=key.key_prefix,
-                is_active=key.is_active,
-                created_at=key.created_at.isoformat(),
-                last_used_at=key.last_used_at.isoformat() if key.last_used_at else None,
+                id=k.id,
+                name=k.name,
+                key_prefix=k.key_prefix,
+                is_active=k.is_active,
+                created_at=format_datetime(k.created_at),
+                last_used_at=format_datetime(k.last_used_at) or None,
             )
-            for key in keys
-            if key.name != "Login Session"  # Hide session keys from list
+            for k in keys
         ]
     )
 
@@ -301,25 +388,27 @@ async def list_api_keys(
 async def revoke_api_key(
     request: RevokeKeyRequest,
     auth: tuple[User, APIKey] = Depends(require_auth),
-    api_key_service: APIKeyService = Depends(get_api_key_service),
+    session: AsyncSession = Depends(get_session_dependency),
 ):
-    """Revoke an API key (deactivate it)."""
+    """Revoke an API key."""
     user, current_key = auth
 
-    # Prevent revoking the key currently in use
     if request.key_id == current_key.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot revoke the API key currently in use",
         )
 
-    success = await api_key_service.revoke_key(request.key_id, user.id)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="API key not found",
-        )
+    result = await session.execute(
+        update(APIKeyModel)
+        .where(APIKeyModel.id == request.key_id, APIKeyModel.user_id == user.id)
+        .values(is_active=False)
+    )
 
+    if result.rowcount == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+
+    await session.commit()
     return {"status": "revoked"}
 
 
@@ -327,41 +416,36 @@ async def revoke_api_key(
 async def delete_api_key(
     key_id: str,
     auth: tuple[User, APIKey] = Depends(require_auth),
-    api_key_service: APIKeyService = Depends(get_api_key_service),
+    session: AsyncSession = Depends(get_session_dependency),
 ):
     """Permanently delete an API key."""
     user, current_key = auth
 
-    # Prevent deleting the key currently in use
     if key_id == current_key.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot delete the API key currently in use",
         )
 
-    success = await api_key_service.delete_key(key_id, user.id)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="API key not found",
-        )
+    result = await session.execute(
+        delete(APIKeyModel).where(APIKeyModel.id == key_id, APIKeyModel.user_id == user.id)
+    )
 
+    if result.rowcount == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+
+    await session.commit()
     return {"status": "deleted"}
 
 
 # =============================================================================
-# OAuth Routes (for first-time registration)
-# These are called by the frontend to handle OAuth flows
+# OAuth Routes
 # =============================================================================
 
 
 @router.post("/oauth/init", response_model=OAuthInitResponse)
 async def init_oauth(request: OAuthInitRequest):
-    """Initialize OAuth flow.
-
-    Returns the authorization URL to redirect the user to.
-    """
-    import secrets
+    """Initialize OAuth flow."""
     import urllib.parse
 
     state = secrets.token_urlsafe(32)
@@ -412,19 +496,10 @@ async def init_oauth(request: OAuthInitRequest):
 @router.post("/oauth/callback", response_model=OAuthCallbackResponse)
 async def oauth_callback(
     request: OAuthCallbackRequest,
-    api_key_service: APIKeyService = Depends(get_api_key_service),
+    session: AsyncSession = Depends(get_session_dependency),
 ):
-    """Handle OAuth callback.
-
-    Exchanges code for tokens, creates/updates user, and generates API key.
-    """
-    import aiosqlite
-    import httpx
-
-    db_path = os.environ.get("CONTEXTFS_DB_PATH", "contextfs.db")
-
+    """Handle OAuth callback - exchange code for tokens."""
     if request.provider == "google":
-        # Exchange code for tokens
         client_id = os.environ.get("GOOGLE_CLIENT_ID")
         client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
 
@@ -441,7 +516,6 @@ async def oauth_callback(
             )
             tokens = token_resp.json()
 
-            # Get user info
             userinfo_resp = await client.get(
                 "https://www.googleapis.com/oauth2/v2/userinfo",
                 headers={"Authorization": f"Bearer {tokens['access_token']}"},
@@ -453,7 +527,6 @@ async def oauth_callback(
         provider_id = userinfo["id"]
 
     elif request.provider == "github":
-        # Exchange code for tokens
         client_id = os.environ.get("GITHUB_CLIENT_ID")
         client_secret = os.environ.get("GITHUB_CLIENT_SECRET")
 
@@ -469,14 +542,12 @@ async def oauth_callback(
             )
             tokens = token_resp.json()
 
-            # Get user info
             user_resp = await client.get(
                 "https://api.github.com/user",
                 headers={"Authorization": f"Bearer {tokens['access_token']}"},
             )
             userinfo = user_resp.json()
 
-            # Get email (may require separate call)
             emails_resp = await client.get(
                 "https://api.github.com/user/emails",
                 headers={"Authorization": f"Bearer {tokens['access_token']}"},
@@ -500,62 +571,257 @@ async def oauth_callback(
             detail="Could not retrieve email from OAuth provider",
         )
 
-    # Create or update user
-    async with aiosqlite.connect(db_path) as db:
-        # Check if user exists
-        cursor = await db.execute(
-            "SELECT id FROM users WHERE email = ?",
-            (email,),
-        )
-        row = await cursor.fetchone()
+    user_id, _ = await _get_or_create_user(session, email, name, request.provider, provider_id)
 
-        if row:
-            user_id = row[0]
-            # Update existing user
-            await db.execute(
-                "UPDATE users SET name = ?, provider_id = ? WHERE id = ?",
-                (name, provider_id, user_id),
-            )
-        else:
-            # Create new user
-            user_id = str(uuid4())
-            await db.execute(
-                "INSERT INTO users (id, email, name, provider, provider_id) VALUES (?, ?, ?, ?, ?)",
-                (user_id, email, name, request.provider, provider_id),
-            )
-
-            # Initialize free subscription
-            from contextfs.billing import StripeService
-
-            stripe_service = StripeService(db_path)
-            await stripe_service.initialize_free_subscription(user_id)
-
-            # Initialize usage tracking
-            await db.execute(
-                "INSERT INTO usage (user_id, device_count, memory_count) VALUES (?, 0, 0)",
-                (user_id,),
-            )
-
-        await db.commit()
-
-    # Create initial API key
-    api_key, encryption_salt = await api_key_service.create_key(
-        user_id=user_id,
-        name="Default Key",
-        with_encryption=True,
+    full_key, encryption_salt = await _create_api_key(
+        session, user_id, "Default Key", with_encryption=True
     )
 
     encryption_key = None
     if encryption_salt:
-        encryption_key = derive_encryption_key_base64(api_key, encryption_salt)
+        encryption_key = derive_encryption_key_base64(full_key, encryption_salt)
 
     return OAuthCallbackResponse(
-        user=UserResponse(
-            id=user_id,
-            email=email,
-            name=name,
-            provider=request.provider,
-        ),
-        api_key=api_key,
+        user=UserResponse(id=user_id, email=email, name=name, provider=request.provider),
+        api_key=full_key,
         encryption_key=encryption_key,
     )
+
+
+@router.post("/oauth/token", response_model=OAuthCallbackResponse)
+async def oauth_token_exchange(
+    request: OAuthTokenRequest,
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Exchange OAuth access_token for ContextFS API key (for NextAuth)."""
+    if request.provider == "google":
+        async with httpx.AsyncClient() as client:
+            userinfo_resp = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {request.access_token}"},
+            )
+            if userinfo_resp.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid Google access token",
+                )
+            userinfo = userinfo_resp.json()
+
+        email = userinfo["email"]
+        name = userinfo.get("name")
+        provider_id = userinfo["id"]
+
+    elif request.provider == "github":
+        async with httpx.AsyncClient() as client:
+            user_resp = await client.get(
+                "https://api.github.com/user",
+                headers={"Authorization": f"Bearer {request.access_token}"},
+            )
+            if user_resp.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid GitHub access token",
+                )
+            userinfo = user_resp.json()
+
+            emails_resp = await client.get(
+                "https://api.github.com/user/emails",
+                headers={"Authorization": f"Bearer {request.access_token}"},
+            )
+            emails = emails_resp.json() if emails_resp.status_code == 200 else []
+            primary_email = next((e["email"] for e in emails if e.get("primary")), None)
+
+        email = primary_email or userinfo.get("email")
+        name = userinfo.get("name") or userinfo.get("login")
+        provider_id = str(userinfo["id"])
+
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown provider: {request.provider}",
+        )
+
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not retrieve email from OAuth provider",
+        )
+
+    user_id, _ = await _get_or_create_user(session, email, name, request.provider, provider_id)
+
+    # Delete old OAuth session keys for this user
+    await session.execute(
+        delete(APIKeyModel).where(
+            APIKeyModel.user_id == user_id,
+            APIKeyModel.name == "OAuth Session",
+        )
+    )
+
+    full_key, encryption_salt = await _create_api_key(
+        session, user_id, "OAuth Session", with_encryption=True
+    )
+
+    encryption_key = None
+    if encryption_salt:
+        encryption_key = derive_encryption_key_base64(full_key, encryption_salt)
+
+    return OAuthCallbackResponse(
+        user=UserResponse(id=user_id, email=email, name=name, provider=request.provider),
+        api_key=full_key,
+        encryption_key=encryption_key,
+    )
+
+
+# =============================================================================
+# Password Reset Routes
+# =============================================================================
+
+
+class PasswordResetRequest(BaseModel):
+    """Request to initiate password reset."""
+
+    email: str
+
+
+class PasswordResetResponse(BaseModel):
+    """Response to password reset request."""
+
+    message: str
+
+
+class ResetPasswordRequest(BaseModel):
+    """Request to reset password with token."""
+
+    token: str
+    new_password: str
+
+
+@router.post("/forgot-password", response_model=PasswordResetResponse)
+async def forgot_password(
+    request: PasswordResetRequest,
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Request a password reset email."""
+    # Find user by email
+    result = await session.execute(select(UserModel).where(UserModel.email == request.email))
+    user = result.scalar_one_or_none()
+
+    # Always return success to prevent email enumeration
+    if not user:
+        return PasswordResetResponse(
+            message="If an account exists with this email, you will receive a password reset link."
+        )
+
+    try:
+        from service.email_service import (
+            create_password_reset_token,
+            send_password_reset_email,
+        )
+
+        reset_token = await create_password_reset_token(session, user.id)
+        await session.commit()
+
+        await send_password_reset_email(
+            to_email=user.email,
+            user_name=user.name,
+            reset_token=reset_token,
+        )
+    except Exception as e:
+        print(f"Failed to send password reset email: {e}")
+
+    return PasswordResetResponse(
+        message="If an account exists with this email, you will receive a password reset link."
+    )
+
+
+def _validate_password(password: str) -> tuple[bool, str]:
+    """Validate password meets requirements.
+
+    Requirements:
+    - Minimum 8 characters
+    - At least 1 uppercase letter
+    - At least 1 lowercase letter
+    - At least 1 digit
+    """
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters"
+    if not any(c.isupper() for c in password):
+        return False, "Password must contain at least one uppercase letter"
+    if not any(c.islower() for c in password):
+        return False, "Password must contain at least one lowercase letter"
+    if not any(c.isdigit() for c in password):
+        return False, "Password must contain at least one digit"
+    return True, ""
+
+
+@router.post("/reset-password", response_model=PasswordResetResponse)
+async def reset_password(
+    request: ResetPasswordRequest,
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Reset password using a token."""
+    from service.db.models import PasswordResetToken
+
+    # Validate password
+    is_valid, error_msg = _validate_password(request.new_password)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_msg,
+        )
+
+    # Hash the token to compare with stored hash
+    token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+
+    # Find valid token
+    result = await session.execute(
+        select(PasswordResetToken).where(
+            PasswordResetToken.token_hash == token_hash,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > datetime.now(timezone.utc),
+        )
+    )
+    reset_token = result.scalar_one_or_none()
+
+    if not reset_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    # Update user's password
+    password_hash = _hash_password(request.new_password)
+    await session.execute(
+        update(UserModel)
+        .where(UserModel.id == reset_token.user_id)
+        .values(password_hash=password_hash)
+    )
+
+    # Mark token as used
+    reset_token.used_at = datetime.now(timezone.utc)
+
+    await session.commit()
+
+    return PasswordResetResponse(message="Password has been reset successfully")
+
+
+@router.get("/verify-reset-token")
+async def verify_reset_token(
+    token: str,
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Verify if a reset token is valid."""
+    from service.db.models import PasswordResetToken
+
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    result = await session.execute(
+        select(PasswordResetToken).where(
+            PasswordResetToken.token_hash == token_hash,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > datetime.now(timezone.utc),
+        )
+    )
+    reset_token = result.scalar_one_or_none()
+
+    return {"valid": reset_token is not None}
