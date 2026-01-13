@@ -3,9 +3,11 @@
 Provides async SQLAlchemy session factory for use with FastAPI.
 """
 
+import logging
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -15,6 +17,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from service.db.models import Base
+
+logger = logging.getLogger(__name__)
 
 # Module-level engine and session factory
 _engine: AsyncEngine | None = None
@@ -91,20 +95,22 @@ async def create_tables() -> None:
         # Create tables
         await conn.run_sync(Base.metadata.create_all)
 
-        # Run migrations for missing columns (safe to run multiple times)
-        migrations = [
-            # Add user_id to devices table for multi-tenant isolation
-            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS user_id TEXT",
-            "CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id)",
-            # Add user_id to memories table for multi-tenant isolation
-            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id TEXT",
-            "CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id)",
-            # Add user_id to sessions table for multi-tenant isolation
-            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT",
-            "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)",
-        ]
-        for migration in migrations:
-            await conn.execute(__import__("sqlalchemy").text(migration))
+        # Run SQL migration files from migrations/ directory
+        migrations_dir = Path(__file__).parent.parent.parent / "migrations"
+        if migrations_dir.exists():
+            for migration_file in sorted(migrations_dir.glob("sync-*.sql")):
+                logger.info(f"Running migration: {migration_file.name}")
+                sql_content = migration_file.read_text()
+                # Execute each statement separately (split on semicolons)
+                for statement in sql_content.split(";"):
+                    statement = statement.strip()
+                    if statement and not statement.startswith("--"):
+                        try:
+                            await conn.execute(__import__("sqlalchemy").text(statement))
+                        except Exception as e:
+                            # Log but continue - most errors are "already exists"
+                            if "already exists" not in str(e).lower():
+                                logger.warning(f"Migration statement error: {e}")
 
 
 async def drop_tables() -> None:
