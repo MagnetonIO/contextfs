@@ -5,6 +5,8 @@ Tests the FastAPI endpoints for authentication, sync, billing, and memory manage
 
 Note: Tests requiring a running database are marked with pytest.mark.skipif
 and will be skipped unless CONTEXTFS_TEST_API=1 is set.
+
+These tests require the sync service dependencies (stripe, etc.) to be installed.
 """
 
 import os
@@ -12,9 +14,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Skip if service dependencies not installed
+# Skip entire module if service dependencies not installed
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
+pytest.importorskip("stripe", reason="Stripe required for API route tests")
 
 # Mark all tests requiring server as skip unless explicitly enabled
 requires_server = pytest.mark.skipif(
