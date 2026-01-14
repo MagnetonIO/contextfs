@@ -118,6 +118,7 @@ class LoginResponse(BaseModel):
 
     user: LoginUserResponse
     apiKey: str
+    encryptionKey: str | None = None
 
 
 class OAuthCallbackRequest(BaseModel):
@@ -280,10 +281,15 @@ async def login(
         )
     )
 
-    # Create new session key
-    full_key, _ = await _create_api_key(
-        session, user.id, request.session_type, with_encryption=False
+    # Create new session key with E2EE encryption
+    full_key, encryption_salt = await _create_api_key(
+        session, user.id, request.session_type, with_encryption=True
     )
+
+    # Derive encryption key for client
+    encryption_key = None
+    if encryption_salt:
+        encryption_key = derive_encryption_key_base64(full_key, encryption_salt)
 
     return LoginResponse(
         user=LoginUserResponse(
@@ -292,6 +298,7 @@ async def login(
             name=user.name,
         ),
         apiKey=full_key,
+        encryptionKey=encryption_key,
     )
 
 

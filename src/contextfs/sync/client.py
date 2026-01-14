@@ -457,7 +457,7 @@ class SyncClient:
 
             # Encrypt content for E2EE if configured
             content_to_sync = self._encrypt_content(m.content)
-            is_encrypted = self._crypto is not None and m.content
+            is_encrypted = self._crypto is not None and bool(m.content)
 
             synced_memories.append(
                 SyncedMemory(
@@ -1345,6 +1345,9 @@ class SyncClient:
         edge_ids: list[str],
     ) -> SyncPushResponse:
         """Push specific items by ID (content-addressed push)."""
+        # Auto-initialize E2EE from API key + salt
+        await self._ensure_e2ee_initialized()
+
         # Load memories by ID
         memories = self._get_memories_by_ids(memory_ids) if memory_ids else []
 
@@ -1369,7 +1372,7 @@ class SyncClient:
 
             # Encrypt content for E2EE if configured
             content_to_sync = self._encrypt_content(m.content)
-            is_encrypted = self._crypto is not None and m.content
+            is_encrypted = self._crypto is not None and bool(m.content)
 
             synced_memories.append(
                 SyncedMemory(

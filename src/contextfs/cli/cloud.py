@@ -144,17 +144,22 @@ def _login_email(cloud_config: dict, server_url: str, email: str | None, passwor
             data = resp.json()
 
             api_key = data["apiKey"]
+            encryption_key = data.get("encryptionKey")
             user = data["user"]
 
             # Save to config
             cloud_config["api_key"] = api_key
             cloud_config["enabled"] = True
+            if encryption_key:
+                cloud_config["encryption_key"] = encryption_key
             _save_cloud_config(cloud_config)
 
             console.print(
                 f"[green]Login successful! Welcome {user.get('name') or user['email']}[/green]"
             )
             console.print("[dim]API key saved to ~/.contextfs/config.yaml[/dim]")
+            if encryption_key:
+                console.print("[dim]E2EE encryption key configured[/dim]")
 
             # Auto-register device
             console.print("[dim]Registering device...[/dim]")
