@@ -100,6 +100,7 @@ class LoginRequest(BaseModel):
 
     email: str
     password: str
+    session_type: str = "Web Session"  # "Web Session" for frontend, "CLI Session" for CLI
 
 
 class LoginUserResponse(BaseModel):
@@ -271,16 +272,18 @@ async def login(
             detail="Invalid email or password",
         )
 
-    # Delete old login session keys
+    # Delete old session keys of the same type
     await session.execute(
         delete(APIKeyModel).where(
             APIKeyModel.user_id == user.id,
-            APIKeyModel.name == "Login Session",
+            APIKeyModel.name == request.session_type,
         )
     )
 
     # Create new session key
-    full_key, _ = await _create_api_key(session, user.id, "Login Session", with_encryption=False)
+    full_key, _ = await _create_api_key(
+        session, user.id, request.session_type, with_encryption=False
+    )
 
     return LoginResponse(
         user=LoginUserResponse(

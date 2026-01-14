@@ -30,7 +30,7 @@ from contextfs.sync.protocol import (
     SyncStatusResponse,
 )
 from contextfs.sync.vector_clock import VectorClock
-from service.api.auth_middleware import get_current_user
+from service.api.auth_middleware import require_auth
 from service.db.models import (
     Device,
     SubscriptionModel,
@@ -65,12 +65,12 @@ router = APIRouter(prefix="/api/sync", tags=["sync"])
 async def register_device(
     registration: DeviceRegistration,
     session: AsyncSession = Depends(get_session_dependency),
-    auth: tuple[User, APIKey] | None = Depends(get_current_user),
+    auth: tuple[User, APIKey] = Depends(require_auth),
 ) -> DeviceInfo:
     """Register a new device for sync."""
     from sqlalchemy import func
 
-    user_id = auth[0].id if auth else None
+    user_id = auth[0].id
 
     # Check if device already exists
     result = await session.execute(select(Device).where(Device.device_id == registration.device_id))
@@ -145,7 +145,7 @@ async def register_device(
 async def push_changes(
     request: SyncPushRequest,
     session: AsyncSession = Depends(get_session_dependency),
-    auth: tuple[User, APIKey] | None = Depends(get_current_user),
+    auth: tuple[User, APIKey] = Depends(require_auth),
 ) -> SyncPushResponse:
     """
     Push local changes to server.
@@ -156,7 +156,7 @@ async def push_changes(
     3. If concurrent: conflict (return for manual resolution)
     """
     # Get user_id for multi-tenant isolation
-    user_id = auth[0].id if auth else None
+    user_id = auth[0].id
 
     accepted = 0
     rejected = 0
@@ -450,7 +450,7 @@ async def _process_edge_push(
 async def pull_changes(
     request: SyncPullRequest,
     session: AsyncSession = Depends(get_session_dependency),
-    auth: tuple[User, APIKey] | None = Depends(get_current_user),
+    auth: tuple[User, APIKey] = Depends(require_auth),
 ) -> SyncPullResponse:
     """
     Pull changes from server.
@@ -462,10 +462,10 @@ async def pull_changes(
     plus team-shared items for Team tier users.
     """
     # Get user_id for multi-tenant isolation
-    user_id = auth[0].id if auth else None
+    user_id = auth[0].id
 
     # Get user's team memberships for team-shared content
-    user_team_ids = await _get_user_team_ids(session, user_id) if user_id else []
+    user_team_ids = await _get_user_team_ids(session, user_id)
 
     server_timestamp = datetime.now(timezone.utc)
 
@@ -749,7 +749,7 @@ async def get_sync_status(
 async def compute_diff(
     request: SyncManifestRequest,
     session: AsyncSession = Depends(get_session_dependency),
-    auth: tuple[User, APIKey] | None = Depends(get_current_user),
+    auth: tuple[User, APIKey] = Depends(require_auth),
 ) -> SyncDiffResponse:
     """
     Content-addressed sync: compare client manifest with server state.
@@ -765,10 +765,10 @@ async def compute_diff(
     plus team-shared items for Team tier users.
     """
     # Get user_id for multi-tenant isolation
-    user_id = auth[0].id if auth else None
+    user_id = auth[0].id
 
     # Get user's team memberships for team-shared content
-    user_team_ids = await _get_user_team_ids(session, user_id) if user_id else []
+    user_team_ids = await _get_user_team_ids(session, user_id)
 
     server_timestamp = datetime.now(timezone.utc)
 

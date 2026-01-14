@@ -133,7 +133,7 @@ def _login_email(cloud_config: dict, server_url: str, email: str | None, passwor
         with httpx.Client() as client:
             resp = client.post(
                 f"{server_url}/api/auth/login",
-                json={"email": email, "password": password},
+                json={"email": email, "password": password, "session_type": "CLI Session"},
             )
 
             if resp.status_code == 401:
