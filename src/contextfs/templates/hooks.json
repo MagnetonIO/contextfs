@@ -4,8 +4,8 @@
       "matcher": "",
       "hooks": [
         {
-          "type": "prompt",
-          "prompt": "Before ending this session, review if you should save any memories:\n\n1. **Decisions made** - Save with type='decision' including rationale\n2. **Errors solved** - Save with type='error' including solution\n3. **Facts learned** - Save with type='fact'\n4. **Procedures discovered** - Save with type='procedural'\n\nIf significant work was done, consider:\n- Running /remember to extract memories\n- Saving session: contextfs_save(save_session='current', label='<descriptive>')\n\nAfter saving any memories (or if none needed), you MUST respond with JSON: {\"ok\": true}"
+          "type": "command",
+          "command": "uvx contextfs save-session --label 'session-end' --quiet"
         }
       ]
     }

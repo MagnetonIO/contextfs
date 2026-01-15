@@ -95,7 +95,7 @@ class ClaudeCodePlugin:
         print("\nInstalled hooks:")
         print("  - SessionStart: Auto-index in background")
         print("  - PreCompact: Auto-save session before compaction")
-        print("  - Stop: Memory save reminder (prompt)")
+        print("  - Stop: Auto-save session on exit")
         print("\nInstalled commands:")
         print("  - /remember: Extract and save conversation insights")
         print("  - /recall: Search and load relevant context")
@@ -315,22 +315,17 @@ class ClaudeCodePlugin:
             }
         ]
 
-        # Add Stop hook (memory save reminder with TYPE-SAFE requirements)
+        # Add Stop hook (auto-save session on exit)
+        # Note: Using command type instead of prompt type to avoid Claude Code bug
+        # where prompt hooks show errors during non-stop evaluations
+        # See: https://github.com/anthropics/claude-code/issues/10463
         settings["hooks"]["Stop"] = [
             {
                 "matcher": "",
                 "hooks": [
                     {
-                        "type": "prompt",
-                        "prompt": (
-                            "Before ending, save any important memories using TYPE-SAFE formats:\n\n"
-                            "- **fact/episodic/code** - No structured_data needed\n"
-                            '- **decision** - REQUIRES: structured_data={"decision": "...", "rationale": "...", "alternatives": [...]}\n'
-                            '- **procedural** - REQUIRES: structured_data={"steps": [...], "title": "..."}\n'
-                            '- **error** - REQUIRES: structured_data={"error_type": "...", "message": "...", "resolution": "..."}\n\n'
-                            "For simple learnings, use type='fact'. Only use typed schemas if you have all required fields.\n\n"
-                            "Respond with memories to save or confirm session can end."
-                        ),
+                        "type": "command",
+                        "command": "uvx contextfs save-session --label 'session-end' --quiet",
                     }
                 ],
             }
