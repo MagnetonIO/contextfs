@@ -44,14 +44,18 @@ async def run_postgres_migrations():
     """Run SQL migrations from migrations/ directory."""
     # In Docker: /app/service/api/main.py -> /app/migrations
     migrations_dir = Path(__file__).parent.parent.parent / "migrations"
+    logger.info(f"Looking for migrations at: {migrations_dir}")
+
     if not migrations_dir.exists():
-        logger.info(f"No migrations directory found at {migrations_dir}")
+        logger.warning(f"No migrations directory found at {migrations_dir}")
         return
 
     # Get all sync-*.sql files sorted
     migration_files = sorted(migrations_dir.glob("sync-*.sql"))
+    logger.info(f"Found {len(migration_files)} migration files")
+
     if not migration_files:
-        logger.info("No migration files found")
+        logger.warning("No sync-*.sql migration files found")
         return
 
     async with get_session() as session:
@@ -66,7 +70,7 @@ async def run_postgres_migrations():
                         await session.execute(text(statement))
                     except Exception as e:
                         # Log but continue - most errors are "already exists" type
-                        logger.debug(f"Migration statement skipped: {e}")
+                        logger.info(f"Migration statement result: {e}")
         await session.commit()
     logger.info("Migrations complete")
 
