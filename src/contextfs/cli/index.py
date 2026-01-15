@@ -13,7 +13,7 @@ from .utils import (
     is_repo_initialized,
 )
 
-index_app = typer.Typer(help="Index commands")
+index_app = typer.Typer(help="Index commands", no_args_is_help=True)
 
 
 @index_app.command()

@@ -9,7 +9,7 @@ from contextfs.schemas import MemoryType
 
 from .utils import console, get_ctx
 
-memory_app = typer.Typer(help="Memory commands")
+memory_app = typer.Typer(help="Memory commands", no_args_is_help=True)
 
 
 @memory_app.command()

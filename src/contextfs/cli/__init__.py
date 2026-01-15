@@ -40,19 +40,10 @@ def main_callback(
     pass
 
 
-# Register top-level commands from memory_app
-for command in memory_app.registered_commands:
-    app.command(command.name)(command.callback)
-
-# Register top-level commands from index_app
-for command in index_app.registered_commands:
-    app.command(command.name)(command.callback)
-
-# Register top-level commands from server_app
-for command in server_app.registered_commands:
-    app.command(command.name)(command.callback)
-
 # Register subcommand groups
+app.add_typer(memory_app, name="memory")
+app.add_typer(index_app, name="index")
+app.add_typer(server_app, name="server")
 app.add_typer(cloud_app, name="cloud")
 
 __all__ = ["app", "console", "get_ctx"]

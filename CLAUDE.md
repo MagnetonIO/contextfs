@@ -101,10 +101,10 @@ Always search contextfs memories FIRST before searching code directly:
 3. Include: endpoint/command name, parameters, and brief description
 4. This keeps the API reference memory up-to-date for future sessions
 
-## Saving Plans to Memory
+## Saving Plans to Memory (TYPE-SAFE)
 **After completing a plan, always save it to contextfs memory:**
-1. Save the plan with `type="procedural"` and relevant tags
-2. Include: objective, files modified, key decisions made
+1. Save the plan with `type="procedural"` and **required** `structured_data`
+2. The `steps` array is REQUIRED for procedural type
 3. This preserves implementation context for future sessions
 
 Example:
@@ -112,8 +112,19 @@ Example:
 contextfs_save(
     type="procedural",
     summary="Feature X implementation plan",
-    content="## Objective\n...\n## Files Modified\n...\n## Key Decisions\n...",
-    tags=["plan", "feature-x"]
+    content="Detailed implementation notes...",
+    tags=["plan", "feature-x"],
+    structured_data={
+        "title": "Feature X Implementation",
+        "steps": [
+            "Create new module in src/",
+            "Add API endpoint",
+            "Write tests",
+            "Update documentation"
+        ],
+        "prerequisites": ["Read existing codebase"],
+        "notes": "Key decisions: Used PostgreSQL, followed existing patterns"
+    }
 )
 ```
 
@@ -202,35 +213,36 @@ Key variables configured in Railway:
 
 You have access to ContextFS for persistent memory across sessions. Use these operations actively throughout your work - memory management is infrastructure, not optional.
 
-### When to Save Memories
+### When to Save Memories (TYPE-SAFE)
 
 **ALWAYS save immediately when you:**
 
 1. **Learn a new fact** about the codebase, architecture, or user preferences
-   - Use: `contextfs_save` with `type="fact"`
-   - Example: "User prefers functional programming style"
+   - Use: `contextfs_save` with `type="fact"` (no structured_data required)
+   - Example: `contextfs_save(type="fact", summary="API uses JWT", content="...")`
 
 2. **Make or discover a decision** with rationale
-   - Use: `contextfs_save` with `type="decision"` and `structured_data` including rationale
-   - Example: "Chose PostgreSQL over MySQL for JSON support"
+   - Use: `contextfs_save` with `type="decision"`
+   - **REQUIRED structured_data**: `{decision, rationale, alternatives[]}`
+   - Example: `structured_data={"decision": "Use PostgreSQL", "rationale": "JSON support", "alternatives": ["MySQL"]}`
 
 3. **Encounter and solve an error**
    - Use: `contextfs_save` with `type="error"`
-   - Include: error message, cause, solution
-   - Example: "ChromaDB collection not found - fix: reconnect MCP"
+   - **REQUIRED structured_data**: `{error_type, message, resolution}`
+   - Example: `structured_data={"error_type": "CollectionNotFound", "message": "...", "resolution": "Reconnect MCP"}`
 
 4. **Discover a procedure or workflow**
    - Use: `contextfs_save` with `type="procedural"`
-   - Include: step-by-step instructions
-   - Example: "How to deploy to Railway using Docker"
+   - **REQUIRED structured_data**: `{steps[]}`
+   - Example: `structured_data={"title": "Deploy to Railway", "steps": ["Build", "Push", "Deploy"]}`
 
 5. **Complete a significant task**
-   - Use: `contextfs_save` with `type="episodic"` or save session with label
+   - Use: `contextfs_save` with `type="episodic"` (no structured_data required)
+   - Or save session: `contextfs_save(save_session="current", label="task-name")`
 
 6. **Complete a plan or implementation**
-   - Use: `contextfs_save` with `type="procedural"`
-   - Include: objective, files modified, key decisions
-   - Example: Save implementation plans after approval and completion
+   - Use: `contextfs_save` with `type="procedural"` and **required** `steps[]`
+   - Include files modified and key decisions in the steps or notes
 
 ### When to Search Memories
 
@@ -256,18 +268,26 @@ You have access to ContextFS for persistent memory across sessions. Use these op
    contextfs_search(query="<code area>", type="code", limit=10)
    ```
 
-### Memory Type Reference
+### Memory Type Reference (TYPE-SAFE)
+
+Types with required `structured_data` schemas:
+
+| Type | Required structured_data | Example |
+|------|-------------------------|---------|
+| `decision` | `{decision, rationale, alternatives[]}` | Decision with rationale |
+| `procedural` | `{steps[], title?, prerequisites[]?}` | Step-by-step workflows |
+| `error` | `{error_type, message, resolution}` | Errors and solutions |
+| `api` | `{endpoint, method, parameters[]?}` | API endpoints |
+| `config` | `{name, environment?, settings{}}` | Configuration details |
+
+Types WITHOUT required structured_data (simple content only):
 
 | Type | When to Use | Example |
 |------|------------|---------|
 | `fact` | Learned information about codebase/user | "API uses JWT auth" |
-| `decision` | Choices made with rationale | "Use Redis for caching" |
-| `procedural` | Step-by-step workflows | "How to add a new endpoint" |
 | `episodic` | Session summaries, conversations | "Debugged auth flow" |
-| `error` | Errors encountered and solutions | "CORS fix for API" |
 | `code` | Code snippets, patterns | "Auth middleware pattern" |
-| `api` | API endpoints, schemas | "POST /users payload" |
-| `config` | Configuration details | "Required env vars" |
+| `user` | User preferences | "Prefers TypeScript" |
 
 ### Session Management
 
@@ -287,15 +307,47 @@ When knowledge updates or corrections are needed:
 - Use `contextfs_link` to connect related memories
 - Use `contextfs_merge` to consolidate duplicate information
 
-### Quick Reference Commands
+### Quick Reference Commands (TYPE-SAFE)
 
-```
-# Save a fact
+```python
+# Save a fact (no structured_data required)
 contextfs_save(content="...", type="fact", tags=["topic"], summary="Brief summary")
 
-# Save a decision
-contextfs_save(content="Decided to use X because Y", type="decision",
-               structured_data={"rationale": "Y", "alternatives": ["A", "B"]})
+# Save a decision (REQUIRED: structured_data with decision, rationale)
+contextfs_save(
+    type="decision",
+    summary="Chose X over Y",
+    content="Detailed reasoning...",
+    structured_data={
+        "decision": "Use PostgreSQL",
+        "rationale": "Better JSON support",
+        "alternatives": ["MySQL", "MongoDB"]
+    }
+)
+
+# Save a procedure (REQUIRED: structured_data with steps array)
+contextfs_save(
+    type="procedural",
+    summary="How to deploy",
+    content="Deployment procedure...",
+    structured_data={
+        "title": "Deploy to Railway",
+        "steps": ["Build Docker image", "Push to registry", "Redeploy service"],
+        "prerequisites": ["Docker installed", "Railway CLI configured"]
+    }
+)
+
+# Save an error (REQUIRED: structured_data with error_type, message, resolution)
+contextfs_save(
+    type="error",
+    summary="ChromaDB collection error",
+    content="Full error context...",
+    structured_data={
+        "error_type": "CollectionNotFound",
+        "message": "Collection does not exist",
+        "resolution": "Reconnect MCP server"
+    }
+)
 
 # Search before acting
 contextfs_search(query="relevant topic", limit=5, cross_repo=True)
