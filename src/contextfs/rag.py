@@ -113,7 +113,7 @@ class RAGBackend:
         embedding_backend: str = "auto",
         use_gpu: bool | None = None,
         parallel_workers: int | None = None,
-        chroma_host: str = "localhost",
+        chroma_host: str | None = None,
         chroma_port: int = 8000,
         chroma_auto_server: bool = True,
     ):
@@ -121,15 +121,15 @@ class RAGBackend:
         Initialize RAG backend.
 
         Args:
-            data_dir: Directory for ChromaDB storage (for server data path)
+            data_dir: Directory for ChromaDB storage
             embedding_model: Embedding model name
             collection_name: ChromaDB collection name
             embedding_backend: "fastembed", "sentence_transformers", or "auto"
             use_gpu: Enable GPU acceleration (None = auto-detect)
             parallel_workers: Number of parallel workers for embedding (None = auto)
-            chroma_host: ChromaDB server host (always HTTP mode to prevent corruption)
+            chroma_host: ChromaDB server host (None = embedded mode, "localhost" = HTTP mode)
             chroma_port: ChromaDB server port (default 8000)
-            chroma_auto_server: Auto-start ChromaDB server if not running (default True)
+            chroma_auto_server: Auto-start ChromaDB server if not running
         """
         self.data_dir = data_dir
         self.embedding_model_name = embedding_model
@@ -140,12 +140,13 @@ class RAGBackend:
         self._chroma_host = chroma_host
         self._chroma_port = chroma_port
         self._chroma_auto_server = chroma_auto_server
+        self._server_mode = chroma_host is not None
         self._auto_start_attempted = False  # Track if we tried to auto-start server
 
         self._chroma_dir = data_dir / "chroma_db"
         self._chroma_dir.mkdir(parents=True, exist_ok=True)
 
-        # File lock for multi-process safety (used when starting server)
+        # File lock for multi-process safety (embedded mode only)
         self._lock = ChromaLock(data_dir / "chroma.lock")
 
         # Lazy initialization
@@ -165,7 +166,7 @@ class RAGBackend:
         self._initialize_client()
 
     def _initialize_client(self) -> None:
-        """Initialize ChromaDB client via HTTP (always server mode)."""
+        """Initialize ChromaDB client (HTTP or embedded mode)."""
         import logging
 
         logger = logging.getLogger(__name__)
@@ -174,17 +175,27 @@ class RAGBackend:
             import chromadb
             from chromadb.config import Settings
 
-            # Always use HttpClient to prevent corruption from direct file access
-            logger.debug(
-                f"Connecting to ChromaDB server at {self._chroma_host}:{self._chroma_port}"
-            )
-            self._client = chromadb.HttpClient(
-                host=self._chroma_host,
-                port=self._chroma_port,
-                settings=Settings(anonymized_telemetry=False),
-            )
-            # Test connection
-            self._client.heartbeat()
+            if self._server_mode:
+                # HTTP mode - connects to ChromaDB server
+                logger.debug(
+                    f"Connecting to ChromaDB server at {self._chroma_host}:{self._chroma_port}"
+                )
+                self._client = chromadb.HttpClient(
+                    host=self._chroma_host,
+                    port=self._chroma_port,
+                    settings=Settings(anonymized_telemetry=False),
+                )
+                # Test connection
+                self._client.heartbeat()
+            else:
+                # Embedded mode - direct file access (for dev/tests)
+                logger.debug(f"Using embedded ChromaDB at {self._chroma_dir}")
+                with self._lock:
+                    self._client = chromadb.PersistentClient(
+                        path=str(self._chroma_dir),
+                        settings=Settings(anonymized_telemetry=False),
+                    )
+
             self._collection = self._client.get_or_create_collection(
                 name=self.collection_name,
                 metadata={"hnsw:space": "cosine"},
@@ -194,8 +205,8 @@ class RAGBackend:
             raise ImportError("ChromaDB not installed. Install with: pip install chromadb")
 
         except Exception as e:
-            # Connection failed - try to auto-start server if enabled
-            if self._chroma_auto_server and not self._auto_start_attempted:
+            # Connection failed in server mode - try to auto-start server if enabled
+            if self._server_mode and self._chroma_auto_server and not self._auto_start_attempted:
                 logger.info(
                     f"ChromaDB server not running at {self._chroma_host}:{self._chroma_port}. "
                     "Auto-starting..."
@@ -204,11 +215,13 @@ class RAGBackend:
                 if self._try_auto_start_server():
                     return  # Server started, client initialized
 
-            raise ConnectionError(
-                f"Cannot connect to ChromaDB server at {self._chroma_host}:{self._chroma_port}. "
-                f"Start it with: contextfs server start chroma\n"
-                f"Original error: {e}"
-            )
+            if self._server_mode:
+                raise ConnectionError(
+                    f"Cannot connect to ChromaDB server at {self._chroma_host}:{self._chroma_port}. "
+                    f"Start it with: contextfs server start chroma\n"
+                    f"Original error: {e}"
+                )
+            raise
 
     def _try_auto_start_server(self) -> bool:
         """Try to auto-start ChromaDB server using existing data.

@@ -59,9 +59,11 @@ class Config(BaseSettings):
     # =================================================================
     embedding_model: str = "all-MiniLM-L6-v2"
     chroma_collection: str = "contextfs_memories"
-    chroma_host: str = "localhost"  # Always use HTTP server mode to prevent corruption
+    # None = embedded mode (for tests/dev), "localhost" = HTTP server mode (recommended for production)
+    # Set CONTEXTFS_CHROMA_HOST=localhost in production to prevent corruption from concurrent access
+    chroma_host: str | None = None
     chroma_port: int = 8000
-    # Auto-start ChromaDB server if not running (required for HTTP mode)
+    # Auto-start ChromaDB server if not running (only applies when chroma_host is set)
     chroma_auto_server: bool = True
 
     # =================================================================
