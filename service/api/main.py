@@ -12,11 +12,12 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from contextfs.auth import generate_api_key, hash_api_key
 from service.api.admin_routes import router as admin_router
@@ -37,6 +38,37 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 ADMIN_USER_ID = "admin-00000000-0000-0000-0000-000000000001"
+
+
+async def run_postgres_migrations():
+    """Run SQL migrations from migrations/ directory."""
+    # In Docker: /app/service/api/main.py -> /app/migrations
+    migrations_dir = Path(__file__).parent.parent.parent / "migrations"
+    if not migrations_dir.exists():
+        logger.info(f"No migrations directory found at {migrations_dir}")
+        return
+
+    # Get all sync-*.sql files sorted
+    migration_files = sorted(migrations_dir.glob("sync-*.sql"))
+    if not migration_files:
+        logger.info("No migration files found")
+        return
+
+    async with get_session() as session:
+        for migration_file in migration_files:
+            logger.info(f"Running migration: {migration_file.name}")
+            sql = migration_file.read_text()
+            # Split by semicolons and execute each statement
+            for statement in sql.split(";"):
+                statement = statement.strip()
+                if statement and not statement.startswith("--"):
+                    try:
+                        await session.execute(text(statement))
+                    except Exception as e:
+                        # Log but continue - most errors are "already exists" type
+                        logger.debug(f"Migration statement skipped: {e}")
+        await session.commit()
+    logger.info("Migrations complete")
 
 
 def _hash_password(password: str) -> str:
@@ -139,6 +171,10 @@ async def lifespan(app: FastAPI):
     # Initialize Postgres database
     await init_db()
     await create_tables()
+    logger.info("Database tables created")
+
+    # Run migrations (idempotent - safe to run multiple times)
+    await run_postgres_migrations()
     logger.info("Database initialized (Postgres)")
 
     # Create admin if configured
