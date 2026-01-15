@@ -84,9 +84,17 @@ class TestCLIBackgroundIndex:
 
         start_time = time.time()
 
-        # Run with --background flag
+        # Run with --background flag (now: contextfs index index --background)
         result = subprocess.run(
-            [get_python_executable(), "-m", "contextfs.cli", "index", "--background", "--quiet"],
+            [
+                get_python_executable(),
+                "-m",
+                "contextfs.cli",
+                "index",
+                "index",
+                "--background",
+                "--quiet",
+            ],
             cwd=repo_dir,
             capture_output=True,
             text=True,
