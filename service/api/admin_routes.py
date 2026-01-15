@@ -82,9 +82,11 @@ class AdminStatsResponse(BaseModel):
 # =============================================================================
 
 
-def _is_system_admin(user: User) -> bool:
-    """Check if user is a system admin (contextfs.local or contextfs.ai)."""
-    return user.email.endswith("@contextfs.local") or user.email.endswith("@contextfs.ai")
+async def _is_system_admin(session: AsyncSession, user_id: str) -> bool:
+    """Check if user is a system admin via database flag."""
+    result = await session.execute(select(UserModel).where(UserModel.id == user_id))
+    db_user = result.scalar_one_or_none()
+    return db_user is not None and getattr(db_user, "is_admin", False)
 
 
 async def _is_team_admin(session: AsyncSession, user_id: str) -> bool:
@@ -119,10 +121,10 @@ async def _get_team_member_user_ids(session: AsyncSession, team_ids: list[str]) 
     return {row[0] for row in result.all()}
 
 
-def _require_admin(auth: tuple[User, APIKey]) -> User:
-    """Require system admin privileges (contextfs.ai/local only)."""
+async def _require_admin(auth: tuple[User, APIKey], session: AsyncSession) -> User:
+    """Require system admin privileges."""
     user, _ = auth
-    if not _is_system_admin(user):
+    if not await _is_system_admin(session, user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
@@ -138,7 +140,7 @@ async def _require_admin_or_team_admin(
     Returns (user, is_system_admin, team_ids_if_team_admin)
     """
     user, _ = auth
-    if _is_system_admin(user):
+    if await _is_system_admin(session, user.id):
         return user, True, []
 
     team_ids = await _get_user_team_ids(session, user.id)
@@ -315,7 +317,7 @@ async def get_user_detail(
     session: AsyncSession = Depends(get_session_dependency),
 ):
     """Get detailed user info (admin only)."""
-    _require_admin(auth)
+    await _require_admin(auth, session)
 
     # Get user
     result = await session.execute(select(UserModel).where(UserModel.id == user_id))
@@ -401,7 +403,7 @@ async def get_admin_stats(
     session: AsyncSession = Depends(get_session_dependency),
 ):
     """Get platform-wide statistics (admin only)."""
-    _require_admin(auth)
+    await _require_admin(auth, session)
 
     # Total users
     user_result = await session.execute(select(func.count(UserModel.id)))
@@ -448,7 +450,7 @@ async def upgrade_user(
     session: AsyncSession = Depends(get_session_dependency),
 ):
     """Manually upgrade a user's tier (admin only)."""
-    _require_admin(auth)
+    await _require_admin(auth, session)
 
     from service.api.billing_routes import TIER_LIMITS
 
@@ -496,7 +498,7 @@ async def make_user_admin(
     session: AsyncSession = Depends(get_session_dependency),
 ):
     """Make a user an admin (admin only)."""
-    _require_admin(auth)
+    await _require_admin(auth, session)
 
     # Get user
     result = await session.execute(select(UserModel).where(UserModel.id == user_id))
@@ -554,7 +556,7 @@ async def create_user(
     import hashlib
     from uuid import uuid4
 
-    _require_admin(auth)
+    await _require_admin(auth, session)
 
     # Check if email already exists
     result = await session.execute(select(UserModel).where(UserModel.email == request.email))
@@ -646,7 +648,7 @@ async def deactivate_user(
     """Deactivate a user (admin only). Revokes all API keys."""
     from sqlalchemy import update
 
-    _require_admin(auth)
+    await _require_admin(auth, session)
     admin_user, _ = auth
 
     # Prevent self-deactivation
@@ -686,7 +688,7 @@ async def reactivate_user(
     """Reactivate a deactivated user (admin only)."""
     from sqlalchemy import update
 
-    _require_admin(auth)
+    await _require_admin(auth, session)
 
     # Get user
     result = await session.execute(select(UserModel).where(UserModel.id == user_id))
@@ -716,7 +718,7 @@ async def delete_user(
     """Permanently delete a user and all their data (admin only)."""
     from sqlalchemy import delete
 
-    _require_admin(auth)
+    await _require_admin(auth, session)
     admin_user, _ = auth
 
     # Prevent self-deletion
@@ -787,7 +789,7 @@ async def admin_reset_password(
 
     Either sets a new password directly, or sends a password reset email.
     """
-    _require_admin(auth)
+    await _require_admin(auth, session)
 
     # Get user
     result = await session.execute(select(UserModel).where(UserModel.id == user_id))

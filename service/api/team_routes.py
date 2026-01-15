@@ -127,6 +127,14 @@ TIER_LIMITS = {
         "memory_limit": -1,
         "seats_included": -1,
     },
+    # Admin: System administrators, unlimited
+    "admin": {
+        "can_create_team": True,
+        "cloud_sync": True,
+        "device_limit": -1,
+        "memory_limit": -1,
+        "seats_included": -1,
+    },
 }
 
 
@@ -189,20 +197,28 @@ async def _is_team_member(session: AsyncSession, team_id: str, user_id: str) -> 
 # =============================================================================
 
 
+async def _is_admin_user(session: AsyncSession, user_id: str) -> bool:
+    """Check if user is an admin via database flag."""
+    result = await session.execute(select(UserModel).where(UserModel.id == user_id))
+    db_user = result.scalar_one_or_none()
+    return db_user is not None and getattr(db_user, "is_admin", False)
+
+
 @router.post("", response_model=TeamResponse)
 async def create_team(
     request: CreateTeamRequest,
     auth: tuple[User, APIKey] = Depends(require_auth),
     session: AsyncSession = Depends(get_session_dependency),
 ):
-    """Create a new team (Team tier required)."""
+    """Create a new team (Team tier required, admins bypass)."""
     user, _ = auth
 
-    # Check subscription tier
+    # Check subscription tier (admins bypass this check)
     subscription = await _get_user_subscription(session, user.id)
     tier = subscription.tier if subscription else "free"
 
-    if not TIER_LIMITS.get(tier, {}).get("can_create_team", False):
+    is_admin = await _is_admin_user(session, user.id)
+    if not is_admin and not TIER_LIMITS.get(tier, {}).get("can_create_team", False):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Team creation requires Team or Enterprise tier (current: {tier})",
@@ -226,6 +242,9 @@ async def create_team(
         owner_id=user.id,
     )
     session.add(team)
+
+    # Flush to create team in DB before adding members (foreign key)
+    await session.flush()
 
     # Add owner as team member with 'owner' role
     member = TeamMemberModel(
@@ -254,7 +273,13 @@ async def create_team(
     )
 
 
-@router.get("", response_model=list[TeamResponse])
+class TeamsListResponse(BaseModel):
+    """Response for listing teams."""
+
+    teams: list[TeamResponse]
+
+
+@router.get("", response_model=TeamsListResponse)
 async def list_teams(
     auth: tuple[User, APIKey] = Depends(require_auth),
     session: AsyncSession = Depends(get_session_dependency),
@@ -278,7 +303,7 @@ async def list_teams(
             )
         )
 
-    return result
+    return TeamsListResponse(teams=result)
 
 
 @router.get("/{team_id}", response_model=TeamResponse)
@@ -312,7 +337,13 @@ async def get_team(
     )
 
 
-@router.get("/{team_id}/members", response_model=list[TeamMemberResponse])
+class TeamMembersListResponse(BaseModel):
+    """Response for listing team members."""
+
+    members: list[TeamMemberResponse]
+
+
+@router.get("/{team_id}/members", response_model=TeamMembersListResponse)
 async def list_team_members(
     team_id: str,
     auth: tuple[User, APIKey] = Depends(require_auth),
@@ -343,7 +374,7 @@ async def list_team_members(
             )
         )
 
-    return members
+    return TeamMembersListResponse(members=members)
 
 
 @router.post("/{team_id}/invite", response_model=InviteMemberResponse)
@@ -664,11 +695,7 @@ async def delete_team(
             detail="Only team owner can delete the team",
         )
 
-    # Delete team (cascade will delete members and invitations)
-    await session.execute(delete(TeamModel).where(TeamModel.id == team_id))
-
-    # Clear team_id from subscription
-    await session.execute(select(SubscriptionModel).where(SubscriptionModel.team_id == team_id))
+    # Clear team_id from subscription BEFORE deleting team (foreign key constraint)
     sub_result = await session.execute(
         select(SubscriptionModel).where(SubscriptionModel.team_id == team_id)
     )
@@ -676,6 +703,10 @@ async def delete_team(
     if subscription:
         subscription.team_id = None
         subscription.seats_used = 1
+        await session.flush()
+
+    # Delete team (cascade will delete members and invitations)
+    await session.execute(delete(TeamModel).where(TeamModel.id == team_id))
 
     await session.commit()
 

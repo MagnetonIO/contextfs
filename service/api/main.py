@@ -81,6 +81,7 @@ async def ensure_admin_user() -> str | None:
                 provider="system",
                 password_hash=password_hash,
                 email_verified=True,
+                is_admin=True,
             )
             session.add(user)
             # Commit user first to satisfy foreign key constraints

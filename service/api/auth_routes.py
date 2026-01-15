@@ -38,6 +38,7 @@ class UserResponse(BaseModel):
     email: str
     name: str | None
     provider: str
+    is_admin: bool = False
 
 
 class CreateAPIKeyRequest(BaseModel):
@@ -111,6 +112,7 @@ class LoginUserResponse(BaseModel):
     name: str | None
     emailVerified: bool = True
     createdAt: str | None = None
+    is_admin: bool = False
 
 
 class LoginResponse(BaseModel):
@@ -297,6 +299,7 @@ async def login(
             id=user.id,
             email=user.email,
             name=user.name,
+            is_admin=getattr(user, "is_admin", False),
         ),
         apiKey=full_key,
         encryptionKey=encryption_key,
@@ -306,14 +309,22 @@ async def login(
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
     auth: tuple[User, APIKey] = Depends(require_auth),
+    session: AsyncSession = Depends(get_session_dependency),
 ):
     """Get current authenticated user's profile."""
     user, _ = auth
+
+    # Fetch is_admin flag from database
+    result = await session.execute(select(UserModel).where(UserModel.id == user.id))
+    db_user = result.scalar_one_or_none()
+    is_admin = db_user.is_admin if db_user and hasattr(db_user, "is_admin") else False
+
     return UserResponse(
         id=user.id,
         email=user.email,
         name=user.name,
         provider=user.provider,
+        is_admin=is_admin,
     )
 
 
@@ -617,8 +628,15 @@ async def oauth_callback(
     if encryption_salt:
         encryption_key = derive_encryption_key_base64(full_key, encryption_salt)
 
+    # Fetch is_admin from database
+    user_result = await session.execute(select(UserModel).where(UserModel.id == user_id))
+    db_user = user_result.scalar_one_or_none()
+    is_admin = getattr(db_user, "is_admin", False) if db_user else False
+
     return OAuthCallbackResponse(
-        user=UserResponse(id=user_id, email=email, name=name, provider=request.provider),
+        user=UserResponse(
+            id=user_id, email=email, name=name, provider=request.provider, is_admin=is_admin
+        ),
         api_key=full_key,
         encryption_key=encryption_key,
     )
@@ -701,8 +719,15 @@ async def oauth_token_exchange(
     if encryption_salt:
         encryption_key = derive_encryption_key_base64(full_key, encryption_salt)
 
+    # Fetch is_admin from database
+    user_result = await session.execute(select(UserModel).where(UserModel.id == user_id))
+    db_user = user_result.scalar_one_or_none()
+    is_admin = getattr(db_user, "is_admin", False) if db_user else False
+
     return OAuthCallbackResponse(
-        user=UserResponse(id=user_id, email=email, name=name, provider=request.provider),
+        user=UserResponse(
+            id=user_id, email=email, name=name, provider=request.provider, is_admin=is_admin
+        ),
         api_key=full_key,
         encryption_key=encryption_key,
     )
