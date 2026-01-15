@@ -315,7 +315,7 @@ class ClaudeCodePlugin:
             }
         ]
 
-        # Add Stop hook (memory save reminder)
+        # Add Stop hook (memory save reminder with TYPE-SAFE requirements)
         settings["hooks"]["Stop"] = [
             {
                 "matcher": "",
@@ -323,15 +323,13 @@ class ClaudeCodePlugin:
                     {
                         "type": "prompt",
                         "prompt": (
-                            "Before ending this session, review if you should save any memories:\n\n"
-                            "1. **Decisions made** - Save with type='decision' including rationale\n"
-                            "2. **Errors solved** - Save with type='error' including solution\n"
-                            "3. **Facts learned** - Save with type='fact'\n"
-                            "4. **Procedures discovered** - Save with type='procedural'\n\n"
-                            "If significant work was done, consider:\n"
-                            "- Running /remember to extract memories\n"
-                            "- Saving session: contextfs_save(save_session='current', label='<descriptive>')\n\n"
-                            "Respond with what memories (if any) should be saved, or confirm session can end."
+                            "Before ending, save any important memories using TYPE-SAFE formats:\n\n"
+                            "- **fact/episodic/code** - No structured_data needed\n"
+                            '- **decision** - REQUIRES: structured_data={"decision": "...", "rationale": "...", "alternatives": [...]}\n'
+                            '- **procedural** - REQUIRES: structured_data={"steps": [...], "title": "..."}\n'
+                            '- **error** - REQUIRES: structured_data={"error_type": "...", "message": "...", "resolution": "..."}\n\n'
+                            "For simple learnings, use type='fact'. Only use typed schemas if you have all required fields.\n\n"
+                            "Respond with memories to save or confirm session can end."
                         ),
                     }
                 ],
