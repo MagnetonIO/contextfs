@@ -25,6 +25,9 @@ from service.db.session import get_session_dependency
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+# API server URL - used in config snippets
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.contextfs.ai")
+
 
 # =============================================================================
 # Pydantic Models
@@ -379,7 +382,7 @@ async def create_api_key_endpoint(
     ]
     if encryption_key:
         config_lines.append(f"  encryption_key: {encryption_key}")
-    config_lines.append("  server_url: https://api.contextfs.ai")
+    config_lines.append(f"  server_url: {API_BASE_URL}")
 
     return CreateAPIKeyResponse(
         id=str(uuid4()),

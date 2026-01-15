@@ -83,16 +83,40 @@ Always search contextfs memories FIRST before searching code directly:
 
 ### Database Migrations
 
+**CRITICAL: Always use Alembic for database migrations.** Both local and cloud services use Alembic for version-controlled, safe schema changes.
+
 **Local Client (SQLite):**
 - Migrations in `src/contextfs/migrations/versions/` (001-007)
 - Core memory/session schema only
-- Run automatically on CLI startup
+- Run automatically on CLI startup via `run_migrations()`
 
 **Cloud Service (PostgreSQL):**
-- SQL scripts in `migrations/` (sync-*.sql)
+- Migrations in `service/migrations/versions/`
 - Models defined in `service/db/models.py`
-- Run via Docker or direct SQL execution
+- Run automatically on service startup via `run_migrations()`
 - Includes: users, auth, subscriptions, teams, devices
+
+### Creating New Migrations
+
+**Local Client:**
+```bash
+cd src/contextfs
+alembic revision -m "description_of_change"
+# Edit the generated file in migrations/versions/
+```
+
+**Cloud Service:**
+```bash
+cd service
+alembic revision -m "description_of_change"
+# Edit the generated file in migrations/versions/
+```
+
+### Migration Best Practices
+1. **Never use raw SQL files** - Always use Alembic Python migrations
+2. **Test locally first** - Run `docker restart contextfs-sync` before Railway deploy
+3. **Include downgrade** - Every migration should have a working `downgrade()` function
+4. **One change per migration** - Keep migrations atomic and focused
 
 ## Documentation in Memory
 **When adding new features, always save to contextfs memory:**

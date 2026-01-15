@@ -12,12 +12,11 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from contextfs.auth import generate_api_key, hash_api_key
 from service.api.admin_routes import router as admin_router
@@ -28,7 +27,8 @@ from service.api.memories_routes import router as memories_router
 from service.api.sync_routes import router as sync_router
 from service.api.team_routes import router as team_router
 from service.db.models import APIKeyModel, SubscriptionModel, UsageModel, UserModel
-from service.db.session import close_db, create_tables, get_session, init_db
+from service.db.session import close_db, get_session, init_db
+from service.migrations.runner import run_migrations
 
 # Configure logging
 logging.basicConfig(
@@ -38,41 +38,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 ADMIN_USER_ID = "admin-00000000-0000-0000-0000-000000000001"
-
-
-async def run_postgres_migrations():
-    """Run SQL migrations from migrations/ directory."""
-    # In Docker: /app/service/api/main.py -> /app/migrations
-    migrations_dir = Path(__file__).parent.parent.parent / "migrations"
-    logger.info(f"Looking for migrations at: {migrations_dir}")
-
-    if not migrations_dir.exists():
-        logger.warning(f"No migrations directory found at {migrations_dir}")
-        return
-
-    # Get all sync-*.sql files sorted
-    migration_files = sorted(migrations_dir.glob("sync-*.sql"))
-    logger.info(f"Found {len(migration_files)} migration files")
-
-    if not migration_files:
-        logger.warning("No sync-*.sql migration files found")
-        return
-
-    async with get_session() as session:
-        for migration_file in migration_files:
-            logger.info(f"Running migration: {migration_file.name}")
-            sql = migration_file.read_text()
-            # Split by semicolons and execute each statement
-            for statement in sql.split(";"):
-                statement = statement.strip()
-                if statement and not statement.startswith("--"):
-                    try:
-                        await session.execute(text(statement))
-                    except Exception as e:
-                        # Log but continue - most errors are "already exists" type
-                        logger.info(f"Migration statement result: {e}")
-        await session.commit()
-    logger.info("Migrations complete")
 
 
 def _hash_password(password: str) -> str:
@@ -102,6 +67,12 @@ async def ensure_admin_user() -> str | None:
         row = result.first()
 
         if row and row[1]:  # User exists with active key
+            # Ensure admin flag is set
+            user = row[0]
+            if user and not user.is_admin:
+                user.is_admin = True
+                await session.commit()
+                logger.info(f"Updated admin flag for: {admin_email}")
             logger.info(f"Admin exists with key prefix: {row[1].key_prefix}...")
             return None
 
@@ -172,13 +143,20 @@ async def lifespan(app: FastAPI):
     """Initialize and cleanup resources."""
     logger.info("Starting ContextFS Sync Service...")
 
-    # Initialize Postgres database
-    await init_db()
-    await create_tables()
-    logger.info("Database tables created")
+    # Run Alembic migrations (creates tables and applies schema changes)
+    logger.info("Running Alembic migrations...")
+    try:
+        migrated = run_migrations()
+        if migrated:
+            logger.info("Alembic migrations applied successfully")
+        else:
+            logger.info("Database already at latest revision")
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+        raise
 
-    # Run migrations (idempotent - safe to run multiple times)
-    await run_postgres_migrations()
+    # Initialize async database engine (after migrations complete)
+    await init_db()
     logger.info("Database initialized (Postgres)")
 
     # Create admin if configured
