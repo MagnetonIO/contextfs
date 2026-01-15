@@ -1571,6 +1571,7 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
         incremental: bool = True,
         project_override: str | None = None,
         storage: StorageRouter | None = None,
+        repo_filter: Callable[[Path], bool] | None = None,
     ) -> dict:
         """
         Recursively scan a directory for git repos and index each.
@@ -1585,6 +1586,7 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
             incremental: Only index new/changed files
             project_override: Override detected project name for all repos
             storage: StorageRouter for unified SQLite + ChromaDB storage
+            repo_filter: Optional callback to filter repos (return True to include)
 
         Returns:
             Summary statistics for all repos indexed
@@ -1593,6 +1595,10 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
 
         # Discover all repos
         repos = discover_git_repos(root_dir, max_depth=max_depth)
+
+        # Apply repo filter if provided
+        if repo_filter:
+            repos = [r for r in repos if repo_filter(Path(r["path"]))]
 
         if not repos:
             logger.info("No git repositories found")

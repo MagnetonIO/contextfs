@@ -713,3 +713,116 @@ class TestLanguageDetection:
         assert ".rs" in extensions
         assert ".c" in extensions
         assert ".cpp" in extensions
+
+
+class TestIndexDirectoryRequireInit:
+    """Tests for index_directory with repo_filter/require_init functionality."""
+
+    def _create_git_repo(self, path: Path, sample_code: str) -> None:
+        """Helper to create a git repo with sample code."""
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "main.py").write_text(sample_code)
+        subprocess.run(["git", "init"], cwd=path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"], cwd=path, capture_output=True
+        )
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=path, capture_output=True)
+
+    def _init_repo_for_contextfs(self, path: Path) -> None:
+        """Initialize a repo for contextfs (create .contextfs/config.yaml)."""
+        config_dir = path / ".contextfs"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / "config.yaml"
+        config_file.write_text("auto_index: true\ncreated_by: test\n")
+
+    def test_index_directory_without_filter(
+        self, temp_dir: Path, rag_backend, sample_python_code: str
+    ):
+        """Test that index_directory indexes all repos without filter."""
+        from contextfs.autoindex import AutoIndexer
+
+        root = temp_dir / "projects"
+        root.mkdir()
+
+        # Create two git repos
+        self._create_git_repo(root / "repo1", sample_python_code)
+        self._create_git_repo(root / "repo2", sample_python_code)
+
+        indexer = AutoIndexer(db_path=temp_dir / "test.db")
+
+        result = indexer.index_directory(
+            root_dir=root,
+            storage=None,  # Use RAG backend instead
+            rag_backend=rag_backend,
+            max_depth=2,
+        )
+
+        assert result["repos_found"] == 2
+        assert result["repos_indexed"] == 2
+
+    def test_index_directory_with_repo_filter(
+        self, temp_dir: Path, rag_backend, sample_python_code: str
+    ):
+        """Test that index_directory respects repo_filter callback."""
+        from contextfs.autoindex import AutoIndexer
+
+        root = temp_dir / "projects"
+        root.mkdir()
+
+        # Create two git repos
+        self._create_git_repo(root / "repo1", sample_python_code)
+        self._create_git_repo(root / "repo2", sample_python_code)
+
+        # Only initialize repo1 for contextfs
+        self._init_repo_for_contextfs(root / "repo1")
+
+        indexer = AutoIndexer(db_path=temp_dir / "test.db")
+
+        # Filter that only includes initialized repos
+        def require_init_filter(repo_path: Path) -> bool:
+            return (repo_path / ".contextfs" / "config.yaml").exists()
+
+        result = indexer.index_directory(
+            root_dir=root,
+            storage=None,
+            rag_backend=rag_backend,
+            max_depth=2,
+            repo_filter=require_init_filter,
+        )
+
+        # Should only index repo1 (initialized)
+        assert result["repos_found"] == 1  # After filtering
+        assert result["repos_indexed"] == 1
+
+    def test_index_directory_filter_excludes_all(
+        self, temp_dir: Path, rag_backend, sample_python_code: str
+    ):
+        """Test that index_directory handles filter excluding all repos."""
+        from contextfs.autoindex import AutoIndexer
+
+        root = temp_dir / "projects"
+        root.mkdir()
+
+        # Create two git repos, neither initialized
+        self._create_git_repo(root / "repo1", sample_python_code)
+        self._create_git_repo(root / "repo2", sample_python_code)
+
+        indexer = AutoIndexer(db_path=temp_dir / "test.db")
+
+        # Filter that requires initialization (none are initialized)
+        def require_init_filter(repo_path: Path) -> bool:
+            return (repo_path / ".contextfs" / "config.yaml").exists()
+
+        result = indexer.index_directory(
+            root_dir=root,
+            storage=None,
+            rag_backend=rag_backend,
+            max_depth=2,
+            repo_filter=require_init_filter,
+        )
+
+        # Should find no repos after filtering
+        assert result["repos_found"] == 0
+        assert result["repos_indexed"] == 0

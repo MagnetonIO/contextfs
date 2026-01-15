@@ -621,6 +621,7 @@ class ContextFS:
         on_repo_complete: Callable[[str, dict], None] | None = None,
         incremental: bool = True,
         project_override: str | None = None,
+        repo_filter: Callable[[Path], bool] | None = None,
     ) -> dict:
         """
         Recursively scan a directory for git repos and index each.
@@ -633,6 +634,7 @@ class ContextFS:
             on_repo_complete: Callback when repo completes (repo_name, stats)
             incremental: Only index new/changed files
             project_override: Override auto-detected project name for all repos
+            repo_filter: Optional callback to filter repos (return True to include)
 
         Returns:
             Summary statistics including repos found, files indexed, etc.
@@ -647,6 +649,7 @@ class ContextFS:
             on_repo_complete=on_repo_complete,
             incremental=incremental,
             project_override=project_override,
+            repo_filter=repo_filter,
         )
 
     def discover_repos(self, root_dir: Path, max_depth: int = 5) -> list[dict]:

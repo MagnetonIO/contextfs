@@ -287,6 +287,11 @@ def index_directory(
     dry_run: bool = typer.Option(False, "--dry-run", help="Discover repos without indexing"),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON (with --dry-run)"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+    require_init: bool = typer.Option(
+        False,
+        "--require-init",
+        help="Only index repos initialized with 'contextfs init'",
+    ),
 ):
     """Recursively scan a directory for git repos and index each.
 
@@ -311,6 +316,10 @@ def index_directory(
     if dry_run:
         # Discovery mode only
         repos = ctx.discover_repos(path, max_depth=max_depth)
+
+        # Filter to initialized repos if --require-init
+        if require_init:
+            repos = [r for r in repos if is_repo_initialized(Path(r["path"]))]
 
         if json_output:
             import json as json_mod
@@ -380,6 +389,12 @@ def index_directory(
         elif not quiet and "error" in stats:
             console.print(f"  [red] Error: {stats['error']}[/red]")
 
+    # Create filter for --require-init
+    def require_init_filter(repo_path: Path) -> bool:
+        return is_repo_initialized(repo_path)
+
+    repo_filter_fn = require_init_filter if require_init else None
+
     result = ctx.index_directory(
         root_dir=path,
         max_depth=max_depth,
@@ -387,6 +402,7 @@ def index_directory(
         on_repo_complete=on_repo_complete,
         incremental=incremental,
         project_override=project,
+        repo_filter=repo_filter_fn,
     )
 
     # Summary
