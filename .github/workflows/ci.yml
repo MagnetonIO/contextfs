@@ -288,8 +288,8 @@ jobs:
             echo "color=#16a34a" >> $GITHUB_OUTPUT
           fi
 
-      - name: Send Slack notification
-        if: env.SLACK_WEBHOOK_URL != ''
+      - name: Send Slack notification on failure
+        if: steps.status.outputs.status == 'failure' && env.SLACK_WEBHOOK_URL != ''
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
