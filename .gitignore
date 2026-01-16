@@ -52,3 +52,4 @@ htmlcov/
 .claude/
 site/
 .gemini/
+uv.lock
