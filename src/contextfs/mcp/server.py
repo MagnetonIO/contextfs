@@ -1071,6 +1071,20 @@ def _handle_link(ctx: ContextFS, arguments: dict) -> list[TextContent]:
     ]
 
 
+def _get_cloud_config() -> dict:
+    """Get cloud configuration from config file."""
+    import yaml
+
+    config_path = Path.home() / ".contextfs" / "config.yaml"
+    if not config_path.exists():
+        return {}
+
+    with open(config_path) as f:
+        config = yaml.safe_load(f) or {}
+
+    return config.get("cloud", {})
+
+
 async def _handle_sync(arguments: dict) -> list[TextContent]:
     """Handle contextfs_sync tool."""
     import time
@@ -1081,9 +1095,25 @@ async def _handle_sync(arguments: dict) -> list[TextContent]:
     push_all = arguments.get("push_all", False)
     force = arguments.get("force", False)
 
+    # Get cloud config for server URL and API key
+    cloud_config = _get_cloud_config()
+    if not cloud_config.get("enabled"):
+        return [
+            TextContent(
+                type="text", text="Cloud sync is disabled. Run: contextfs cloud configure --enabled"
+            )
+        ]
+
+    server_url = cloud_config.get("server_url", "https://api.contextfs.ai")
+    api_key = cloud_config.get("api_key")
+
+    if not api_key:
+        return [TextContent(type="text", text="No API key configured. Run: contextfs cloud login")]
+
+    ctx = get_ctx()
     start = time.time()
     try:
-        async with SyncClient() as client:
+        async with SyncClient(server_url=server_url, ctx=ctx, api_key=api_key) as client:
             if direction == "push":
                 result = await client.push(push_all=push_all, force=force)
                 duration_ms = (time.time() - start) * 1000

@@ -253,6 +253,39 @@ class SyncClient:
         except sqlite3.Error as e:
             logger.warning(f"Failed to save sync state: {e}")
 
+    def _get_rejected_ids_path(self) -> Path:
+        """Get path to rejected IDs file."""
+        return Path.home() / ".contextfs" / "rejected_ids.json"
+
+    def _load_rejected_ids(self) -> list[str]:
+        """Load previously rejected memory IDs for force retry."""
+        path = self._get_rejected_ids_path()
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Failed to load rejected IDs: {e}")
+            return []
+
+    def _save_rejected_ids(self, ids: list[str]) -> None:
+        """Save rejected memory IDs for later force retry."""
+        path = self._get_rejected_ids_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(ids))
+        except OSError as e:
+            logger.warning(f"Failed to save rejected IDs: {e}")
+
+    def _clear_rejected_ids(self) -> None:
+        """Clear rejected IDs after successful force push."""
+        path = self._get_rejected_ids_path()
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError as e:
+            logger.warning(f"Failed to clear rejected IDs: {e}")
+
     async def register_device(
         self,
         device_name: str | None = None,

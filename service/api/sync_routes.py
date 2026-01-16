@@ -227,6 +227,7 @@ async def _process_memory_push(
     Args:
         force: If True, overwrite server data regardless of vector clock state.
     """
+    # First check if memory exists at all (any user)
     result = await session.execute(
         select(SyncedMemoryModel).where(SyncedMemoryModel.id == memory.id)
     )
@@ -355,6 +356,7 @@ async def _process_session_push(
     force: bool = False,
 ) -> str:
     """Process a single session push."""
+    # First check if session exists at all (any user)
     result = await session.execute(
         select(SyncedSessionModel).where(SyncedSessionModel.id == sess.id)
     )
