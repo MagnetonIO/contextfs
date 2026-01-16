@@ -51,3 +51,4 @@ htmlcov/
 *.log
 .claude/
 site/
+.gemini/
