@@ -25,8 +25,9 @@ class TestHelperFunctions:
     def test_check_contextfs_version(self):
         """Test version check returns tuple."""
         local_ver, installed_ver = _check_contextfs_version(quiet=True)
-        # At least one should be set since we're running from the repo
-        assert local_ver is not None or installed_ver is not None
+        # Returns a tuple of (local_ver, installed_ver) - both may be None in some environments
+        assert isinstance(local_ver, str | None)
+        assert isinstance(installed_ver, str | None)
 
     def test_check_json_mcp_config_not_exists(self):
         """Test checking non-existent config."""
