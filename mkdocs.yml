@@ -94,9 +94,7 @@ nav:
     - Memory Types: architecture/memory-types.md
     - RAG Backend: architecture/rag.md
     - Cross-Repo Support: architecture/namespaces.md
-  - Research:
-    - Type-Safe Context: research/typesafe-context.md
-    - Theoretical Foundations: research/theory.md
+    - Sync Service: architecture/sync-service.md
   - Integration:
     - Claude Desktop: integration/claude-desktop.md
     - Claude Code: integration/claude-code.md

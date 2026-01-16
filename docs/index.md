@@ -81,10 +81,6 @@ Modern AI development involves multiple tools, repositories, and long-running pr
 - :material-folder-multiple: **Memory across repos** — Find related decisions from other projects
 - :material-magnify: **Semantic search** — Natural language queries over your entire context history
 
-## Theoretical Foundation
-
-ContextFS is built on principles from [Type-Safe Context Engineering](research/typesafe-context.md), applying insights from protein folding and type theory to AI memory systems.
-
 ---
 
 [:material-github: GitHub](https://github.com/MagnetonIO/contextfs){ .md-button }

@@ -284,4 +284,4 @@ print(versioned.timeline.current.content.decision)  # "SQLite"
 | `CORRECTION` | Fixing an error |
 | `DECAY` | Knowledge becoming stale |
 
-For full documentation, see [Formal Type System](../research/formal-type-system.md).
+See the type system implementation in `contextfs.types` for full documentation.
