@@ -860,8 +860,11 @@ async def compute_diff(
 
     # Build lookup sets from client manifest
     client_memory_map = {e.id: e.content_hash for e in request.memories}
+    client_memory_deleted = {e.id: e.deleted_at for e in request.memories if e.deleted_at}
     client_session_ids = {e.id for e in request.sessions}
+    client_session_deleted = {e.id: e.deleted_at for e in request.sessions if e.deleted_at}
     client_edge_ids = {e.id for e in request.edges}
+    client_edge_deleted = {e.id: e.deleted_at for e in request.edges if e.deleted_at}
 
     missing_memories: list[SyncedMemory] = []
     missing_sessions: list[SyncedSession] = []
@@ -906,6 +909,11 @@ async def compute_diff(
             # Server has this as deleted
             if m.id in client_memory_map:
                 deleted_memory_ids.append(m.id)
+        elif m.id in client_memory_deleted:
+            # Client deleted this but server hasn't - apply deletion to server
+            m.deleted_at = client_memory_deleted[m.id]
+            m.updated_at = server_timestamp
+            # Don't add to missing_memories - it's being deleted
         elif client_hash is None:
             # Client doesn't have this memory at all
             missing_memories.append(_memory_model_to_synced(m))
@@ -915,8 +923,9 @@ async def compute_diff(
             updated_count += 1
 
     # Find what server is missing (client has, server doesn't)
+    # Skip items that client has marked as deleted
     for client_id in client_memory_map:
-        if client_id not in server_memory_ids:
+        if client_id not in server_memory_ids and client_id not in client_memory_deleted:
             server_missing_memory_ids.append(client_id)
 
     # Query all server sessions (filtered by user_id for multi-tenant isolation)
@@ -948,12 +957,17 @@ async def compute_diff(
         if s.deleted_at:
             if s.id in client_session_ids:
                 deleted_session_ids.append(s.id)
+        elif s.id in client_session_deleted:
+            # Client deleted this but server hasn't - apply deletion to server
+            s.deleted_at = client_session_deleted[s.id]
+            s.updated_at = server_timestamp
         elif s.id not in client_session_ids:
             missing_sessions.append(_session_model_to_synced(s))
 
     # Find what server is missing (sessions)
+    # Skip items that client has marked as deleted
     for client_id in client_session_ids:
-        if client_id not in server_session_ids:
+        if client_id not in server_session_ids and client_id not in client_session_deleted:
             server_missing_session_ids.append(client_id)
 
     # Query all server edges
@@ -969,12 +983,17 @@ async def compute_diff(
         if e.deleted_at:
             if edge_id in client_edge_ids:
                 deleted_edge_ids.append(edge_id)
+        elif edge_id in client_edge_deleted:
+            # Client deleted this but server hasn't - apply deletion to server
+            e.deleted_at = client_edge_deleted[edge_id]
+            e.updated_at = server_timestamp
         elif edge_id not in client_edge_ids:
             missing_edges.append(_edge_model_to_synced(e))
 
     # Find what server is missing (edges)
+    # Skip items that client has marked as deleted
     for client_id in client_edge_ids:
-        if client_id not in server_edge_ids:
+        if client_id not in server_edge_ids and client_id not in client_edge_deleted:
             server_missing_edge_ids.append(client_id)
 
     # Update device sync state

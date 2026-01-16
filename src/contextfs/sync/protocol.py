@@ -297,6 +297,7 @@ class EntityManifestEntry(BaseModel):
     id: str
     content_hash: str | None = None
     updated_at: datetime | None = None
+    deleted_at: datetime | None = None  # For bidirectional deletion sync
 
 
 class SyncManifestRequest(BaseModel):

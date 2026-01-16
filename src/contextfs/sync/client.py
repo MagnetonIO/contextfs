@@ -579,6 +579,49 @@ class SyncClient:
         conn.commit()
         conn.close()
 
+    def _update_local_session_clocks(
+        self, sessions: list[SyncedSession], clocks: dict[str, VectorClock]
+    ) -> None:
+        """Update local sessions with vector clocks after successful push."""
+        if not sessions:
+            return
+
+        conn = sqlite3.connect(self._get_db_path())
+        cursor = conn.cursor()
+
+        for session in sessions:
+            if session.id in clocks:
+                cursor.execute(
+                    "UPDATE sessions SET vector_clock = ? WHERE id = ?",
+                    (json.dumps(clocks[session.id].to_dict()), session.id),
+                )
+
+        conn.commit()
+        conn.close()
+
+    def _update_local_edge_clocks(
+        self, edges: list[SyncedEdge], clocks: dict[str, VectorClock]
+    ) -> None:
+        """Update local edges with vector clocks after successful push."""
+        if not edges:
+            return
+
+        conn = sqlite3.connect(self._get_db_path())
+        cursor = conn.cursor()
+
+        for edge in edges:
+            if edge.id in clocks:
+                parts = edge.id.split(":")
+                if len(parts) >= 3:
+                    from_id, to_id, relation = parts[0], parts[1], ":".join(parts[2:])
+                    cursor.execute(
+                        "UPDATE memory_edges SET vector_clock = ? WHERE from_id = ? AND to_id = ? AND relation = ?",
+                        (json.dumps(clocks[edge.id].to_dict()), from_id, to_id, relation),
+                    )
+
+        conn.commit()
+        conn.close()
+
     def _get_local_changes(
         self,
         namespace_ids: list[str] | None = None,
@@ -814,8 +857,8 @@ class SyncClient:
         session_entries: list[EntityManifestEntry] = []
         edge_entries: list[EntityManifestEntry] = []
 
-        # Get all memories
-        query = "SELECT id, content, updated_at FROM memories"
+        # Get all memories (including soft-deleted for bidirectional sync)
+        query = "SELECT id, content, updated_at, deleted_at FROM memories"
         params: list[Any] = []
         if namespace_ids:
             placeholders = ",".join("?" * len(namespace_ids))
@@ -832,11 +875,18 @@ class SyncClient:
                     updated_at = datetime.fromisoformat(row["updated_at"])
                 except (ValueError, TypeError):
                     pass
+            deleted_at = None
+            if row["deleted_at"]:
+                try:
+                    deleted_at = datetime.fromisoformat(row["deleted_at"])
+                except (ValueError, TypeError):
+                    pass
             memory_entries.append(
                 EntityManifestEntry(
                     id=row["id"],
                     content_hash=content_hash,
                     updated_at=updated_at,
+                    deleted_at=deleted_at,
                 )
             )
 
@@ -1476,11 +1526,17 @@ class SyncClient:
                 )
             )
 
-        # Load sessions by ID
+        # Load sessions by ID and track their clocks
         sessions = self._get_sessions_by_ids(session_ids) if session_ids else []
+        session_clocks: dict[str, VectorClock] = {}
+        for session in sessions:
+            session_clocks[session.id] = VectorClock.from_dict(session.vector_clock)
 
-        # Load edges by ID
+        # Load edges by ID and track their clocks
         edges = self._get_edges_by_ids(edge_ids) if edge_ids else []
+        edge_clocks: dict[str, VectorClock] = {}
+        for edge in edges:
+            edge_clocks[edge.id] = VectorClock.from_dict(edge.vector_clock)
 
         request = SyncPushRequest(
             device_id=self.device_id,
@@ -1504,6 +1560,8 @@ class SyncClient:
 
         if result.accepted > 0:
             self._update_local_vector_clocks(memories, memory_clocks)
+            self._update_local_session_clocks(sessions, session_clocks)
+            self._update_local_edge_clocks(edges, edge_clocks)
 
         logger.info(
             f"Content-addressed push: {result.accepted} accepted, "

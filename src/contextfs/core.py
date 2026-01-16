@@ -5,6 +5,7 @@ Memory lineage (evolve, merge, split) is a CORE FEATURE that works
 automatically based on .env configuration. No user code required.
 """
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -719,6 +720,20 @@ class ContextFS:
         if project is None and source_repo:
             project = source_repo
 
+        # Check for duplicate by content hash (skip if already exists)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM memories WHERE content_hash = ? AND namespace_id = ?",
+            (content_hash, namespace_id or self.namespace_id),
+        )
+        existing = cursor.fetchone()
+        if existing and id is None:
+            # Return existing memory instead of creating duplicate
+            conn.close()
+            return self.recall(existing[0])  # type: ignore
+
         memory_kwargs = {
             "content": content,
             "type": type,
@@ -734,10 +749,12 @@ class ContextFS:
             "updated_at": updated_at or datetime.now(timezone.utc),
             "structured_data": structured_data,
             "authoritative": authoritative,
+            "content_hash": content_hash,
         }
         if id is not None:
             memory_kwargs["id"] = id
         memory = Memory(**memory_kwargs)
+        conn.close()
 
         # Save to SQLite
         conn = sqlite3.connect(self._db_path)
@@ -746,8 +763,8 @@ class ContextFS:
         cursor.execute(
             """
             INSERT OR REPLACE INTO memories (id, content, type, tags, summary, namespace_id,
-                                  source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 memory.id,
@@ -766,6 +783,7 @@ class ContextFS:
                 json.dumps(memory.metadata),
                 json.dumps(memory.structured_data) if memory.structured_data is not None else None,
                 1 if memory.authoritative else 0,
+                content_hash,
             ),
         )
 
@@ -846,14 +864,28 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
+        # Get existing content hashes to skip duplicates
+        existing_hashes: set[str] = set()
+        cursor.execute("SELECT content_hash FROM memories WHERE content_hash IS NOT NULL")
+        for row in cursor.fetchall():
+            existing_hashes.add(row[0])
+
         count = 0
         for memory in memories:
             try:
+                # Compute content hash for duplicate detection
+                content_hash = hashlib.sha256(memory.content.encode()).hexdigest()[:16]
+
+                # Skip if content already exists (unless sync is providing specific ID)
+                if content_hash in existing_hashes and not skip_rag:
+                    # skip_rag=True indicates sync operation, allow ID-based upsert
+                    continue
+
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO memories (id, content, type, tags, summary, namespace_id,
-                                      source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative, content_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         memory.id,
@@ -878,8 +910,10 @@ class ContextFS:
                         if memory.structured_data is not None
                         else None,
                         1 if getattr(memory, "authoritative", False) else 0,
+                        content_hash,
                     ),
                 )
+                existing_hashes.add(content_hash)
                 count += 1
             except Exception as e:
                 logger.warning(f"Failed to save memory {memory.id}: {e}")
@@ -1171,7 +1205,7 @@ class ContextFS:
             conn = sqlite3.connect(self._db_path)
             cursor = conn.cursor()
 
-            sql = "SELECT * FROM memories WHERE project = ?"
+            sql = "SELECT * FROM memories WHERE project = ? AND deleted_at IS NULL"
             params = [project]
 
             if type:
@@ -1201,7 +1235,7 @@ class ContextFS:
         sql = """
             SELECT m.* FROM memories m
             JOIN memories_fts fts ON m.id = fts.id
-            WHERE memories_fts MATCH ?
+            WHERE memories_fts MATCH ? AND m.deleted_at IS NULL
         """
         params = [query]
 
@@ -1253,7 +1287,7 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
-        sql = "SELECT * FROM memories WHERE 1=1"
+        sql = "SELECT * FROM memories WHERE deleted_at IS NULL"
         params: list = []
 
         if namespace_id:
@@ -1280,8 +1314,16 @@ class ContextFS:
 
         return [self._row_to_memory(row) for row in rows]
 
-    def delete(self, memory_id: str) -> bool:
-        """Delete a memory."""
+    def delete(self, memory_id: str, hard_delete: bool = False) -> bool:
+        """Soft-delete a memory (sets deleted_at timestamp).
+
+        Args:
+            memory_id: ID of memory to delete (supports partial matching)
+            hard_delete: If True, permanently remove instead of soft-delete
+
+        Returns:
+            True if memory was deleted, False if not found
+        """
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
@@ -1293,10 +1335,19 @@ class ContextFS:
             return False
 
         full_id = row[0]
-        cursor.execute("DELETE FROM memories WHERE id = ?", (full_id,))
-        deleted = cursor.rowcount > 0
-        # FTS trigger (memories_ad) handles FTS deletion automatically
-        # DO NOT manually delete from memories_fts - causes index corruption
+
+        if hard_delete:
+            # Permanently delete
+            cursor.execute("DELETE FROM memories WHERE id = ?", (full_id,))
+            deleted = cursor.rowcount > 0
+        else:
+            # Soft delete - set deleted_at timestamp for sync propagation
+            now = datetime.now(timezone.utc).isoformat()
+            cursor.execute(
+                "UPDATE memories SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+                (now, now, full_id),
+            )
+            deleted = cursor.rowcount > 0
 
         conn.commit()
         conn.close()

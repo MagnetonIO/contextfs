@@ -899,7 +899,7 @@ def _extract_from_text(text: str) -> list[dict[str, Any]]:
 
     for chunk in chunks:
         chunk = chunk.strip()
-        if len(chunk) < 20:  # Skip very short chunks
+        if len(chunk) < 100:  # Skip short chunks (avoid noisy extractions)
             continue
 
         for pattern, mem_type in LEARNING_PATTERNS:
@@ -907,7 +907,7 @@ def _extract_from_text(text: str) -> list[dict[str, Any]]:
                 extractions.append(
                     {
                         "type": mem_type,
-                        "content": chunk[:500],  # Limit content length
+                        "content": chunk,  # No limit
                         "pattern": pattern,
                     }
                 )
