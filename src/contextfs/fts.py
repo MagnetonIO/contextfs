@@ -320,7 +320,7 @@ class FTSBackend:
         import logging
 
         logger = logging.getLogger(__name__)
-        logger.warning("Rebuilding FTS index due to sync issue...")
+        logger.debug("Rebuilding FTS index due to sync issue...")
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -356,7 +356,7 @@ class FTSBackend:
             )
 
             conn.commit()
-            logger.info("FTS index rebuilt successfully")
+            logger.debug("FTS index rebuilt successfully")
         except Exception as e:
             logger.error(f"Failed to rebuild FTS index: {e}")
             conn.rollback()

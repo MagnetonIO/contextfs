@@ -27,6 +27,62 @@ Key environment variables:
 - `CONTEXTFS_MCP_PORT` - MCP server port (default: 8003)
 - `CONTEXTFS_DATA_DIR` - Data directory (default: ~/.contextfs)
 
+## Type System Enforcement (CRITICAL)
+**ALWAYS use typed enums and classes. NEVER use raw strings for typed fields.**
+
+The Memory model has a `type: MemoryType` field. Always use the `MemoryType` enum:
+
+```python
+# WRONG - raw string (breaks type safety)
+ctx.save(content="...", type="task")
+ctx.save(content="...", type="decision")
+
+# CORRECT - use MemoryType enum
+from contextfs.schemas import MemoryType
+
+ctx.save(content="...", type=MemoryType.TASK)
+ctx.save(content="...", type=MemoryType.DECISION)
+```
+
+### Type Safety Rules
+
+1. **Import enums from schemas**: `from contextfs.schemas import MemoryType`
+2. **Use enum values, not strings**: `MemoryType.TASK` not `"task"`
+3. **Run mypy before committing**: `python -m mypy src/contextfs/ --ignore-missing-imports`
+4. **Handle Optional types**: Check for `None` before accessing `Optional[T]` fields
+
+### Available Memory Types
+
+```python
+# Core types
+MemoryType.FACT      # Static facts, configurations
+MemoryType.DECISION  # Architectural/design decisions
+MemoryType.PROCEDURAL  # How-to procedures
+MemoryType.EPISODIC  # Session/conversation memories
+MemoryType.USER      # User preferences
+MemoryType.CODE      # Code snippets
+MemoryType.ERROR     # Runtime errors, stack traces
+MemoryType.COMMIT    # Git commit history
+
+# Extended types
+MemoryType.TODO      # Tasks, work items
+MemoryType.ISSUE     # Bugs, problems, tickets
+MemoryType.API       # API endpoints, contracts
+MemoryType.SCHEMA    # Data models, DB schemas
+MemoryType.TEST      # Test cases, coverage
+MemoryType.REVIEW    # PR feedback, code reviews
+MemoryType.RELEASE   # Changelogs, versions
+MemoryType.CONFIG    # Environment configs
+MemoryType.DEPENDENCY  # Package versions
+MemoryType.DOC       # Documentation
+
+# Workflow/Agent types
+MemoryType.WORKFLOW  # Multi-step workflows
+MemoryType.TASK      # Individual workflow tasks
+MemoryType.STEP      # Execution steps within tasks
+MemoryType.AGENT_RUN # LLM agent execution records
+```
+
 ## Git Workflow (GitFlow)
 Always follow GitFlow for changes:
 1. Create a new branch for changes (feature/*, bugfix/*, hotfix/*)

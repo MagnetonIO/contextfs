@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "ContextFS memory extraction hooks for Claude Code",
+  "examples": {
+    "pattern_based": {
+      "description": "Fast pattern-based extraction (no API cost)",
+      "hooks": {
+        "Stop": [
+          {
+            "matcher": "",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "python -m contextfs.cli extract transcript --save --quiet && python -m contextfs.cli memory save-session --label 'session-end' --quiet"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "llm_based": {
+      "description": "LLM-based extraction (higher quality, uses Haiku)",
+      "hooks": {
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "type": "prompt",
+                "prompt": "Analyze this conversation and extract any important learnings to save to memory.\n\nLook for:\n1. DECISIONS: Architecture choices, technology selections, approach decisions\n2. ERRORS: Bugs encountered and their solutions\n3. FACTS: New information learned about the codebase\n4. PROCEDURES: Step-by-step workflows discovered\n\nFor each finding, determine if it's worth saving for future sessions.\n\nConversation context: $ARGUMENTS\n\nRespond with JSON:\n{\"ok\": true} if nothing worth saving\n{\"ok\": false, \"reason\": \"Should save: [type] - [brief description]\"} if there are learnings to save\n\nNote: The pattern-based extractor will handle actual saving.",
+                "timeout": 30
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "combined": {
+      "description": "Combined: LLM analysis + pattern extraction + session save",
+      "hooks": {
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "python -m contextfs.cli extract transcript --save --quiet && python -m contextfs.cli memory save-session --label 'session-end' --quiet"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "agent_hooks": {
+    "description": "Hooks for spawned agents to auto-save with role tags",
+    "test_agent": {
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python -m contextfs.cli extract transcript --save --quiet --agent-role test"
+            }
+          ]
+        }
+      ]
+    },
+    "code_agent": {
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python -m contextfs.cli extract transcript --save --quiet --agent-role code"
+            }
+          ]
+        }
+      ]
+    },
+    "review_agent": {
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "python -m contextfs.cli extract transcript --save --quiet --agent-role review"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
