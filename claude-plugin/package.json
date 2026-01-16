@@ -1,6 +1,6 @@
 {
   "name": "claude-plugin-contextfs",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "ContextFS memory management plugin for Claude Code - persistent memory across sessions",
   "keywords": [
     "claude-code",
