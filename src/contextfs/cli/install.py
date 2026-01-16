@@ -192,7 +192,7 @@ def install_claude(
     """Install ContextFS integration for Claude Code.
 
     This command installs:
-    - Global skills: ~/.claude/commands/remember.md, recall.md
+    - Global skills: ~/.claude/commands/remember.md, recall.md, sync.md
     - Project hooks: .claude/settings.local.json
     - Project agents: .claude/agents/memory-extractor.md
     - MCP server configuration in ~/.claude.json
@@ -231,6 +231,15 @@ def install_claude(
             installed.append(("Global skill", str(recall_dest)))
         else:
             skipped.append(("recall.md", "Template not found"))
+
+        # Install sync.md
+        sync_src = _get_template_path("commands/sync.md")
+        sync_dest = global_commands_dir / "sync.md"
+        if sync_src.exists():
+            _copy_template(sync_src, sync_dest, quiet, force)
+            installed.append(("Global skill", str(sync_dest)))
+        else:
+            skipped.append(("sync.md", "Template not found"))
 
     # Project hooks and agents
     if not global_only:
@@ -282,7 +291,7 @@ def install_claude(
         commands_dir = project_claude_dir / "commands"
         _ensure_dir(commands_dir)
 
-        for cmd_file in ["remember.md", "recall.md"]:
+        for cmd_file in ["remember.md", "recall.md", "sync.md"]:
             cmd_src = _get_template_path(f"commands/{cmd_file}")
             cmd_dest = commands_dir / cmd_file
             if cmd_src.exists():
@@ -713,7 +722,7 @@ def install_status():
     claude_items = []
 
     # Global skills
-    for skill in ["remember.md", "recall.md"]:
+    for skill in ["remember.md", "recall.md", "sync.md"]:
         skill_path = global_commands / skill
         if skill_path.exists():
             claude_items.append((f"Global skill: {skill}", "[green]Installed[/green]"))

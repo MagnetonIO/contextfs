@@ -1,12 +1,13 @@
 {
   "name": "contextfs",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "Persistent memory management for Claude Code - save, search, and recall context across sessions",
   "author": "Matthew Long",
   "homepage": "https://github.com/magneticion/contextfs",
   "skills": [
     "skills/remember.md",
-    "skills/recall.md"
+    "skills/recall.md",
+    "skills/sync.md"
   ],
   "agents": [
     "agents/memory-extractor.md"
