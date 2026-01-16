@@ -91,6 +91,34 @@ Always follow GitFlow for changes:
 4. Create PR to merge into main
 5. Never commit directly to main
 
+### Release Workflow
+When the user says **"release"**, execute this full workflow:
+
+```bash
+# 1. Commit all changes on current branch (develop or feature)
+git add -A && git commit -m "description"
+git push origin <branch>
+
+# 2. If on feature branch, merge to develop first
+git checkout develop && git merge <feature-branch> && git push origin develop
+
+# 3. Run tests locally
+uv run pytest tests/ -x -q
+
+# 4. Merge develop to main
+git checkout main && git pull origin main
+git merge develop --no-edit && git push origin main
+
+# 5. Switch back to develop for continued work
+git checkout develop && git merge main && git push origin develop
+```
+
+This ensures:
+- All changes flow through develop before main
+- Tests pass before merging to main
+- main is always in a releasable state
+- develop stays in sync with main after release
+
 ## Releasing New Versions (MANDATORY)
 **ALWAYS use the release script to create new versions:**
 
