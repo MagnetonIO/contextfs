@@ -8,6 +8,7 @@ from .cloud import cloud_app
 from .extract import extract_app
 from .index import index_app
 from .memory import memory_app
+from .orchestrator import orchestrator_app
 from .server import server_app
 from .utils import console, get_ctx
 
@@ -46,6 +47,7 @@ app.add_typer(memory_app, name="memory")
 app.add_typer(index_app, name="index")
 app.add_typer(server_app, name="server")
 app.add_typer(cloud_app, name="cloud")
+app.add_typer(orchestrator_app, name="orchestrator")
 app.add_typer(extract_app, name="extract")
 
 __all__ = ["app", "console", "get_ctx"]

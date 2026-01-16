@@ -473,6 +473,118 @@ async def list_tools() -> list[Tool]:
                 "required": ["from_id", "to_id", "relation"],
             },
         ),
+        # Orchestrator tools
+        Tool(
+            name="contextfs_orchestrator_run",
+            description="Run multiple agents concurrently. Provide agent configurations inline.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "agents": {
+                        "type": "array",
+                        "description": "Array of agent configurations",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "role": {
+                                    "type": "string",
+                                    "enum": ["test", "code", "review", "docs", "debug", "custom"],
+                                    "description": "Agent role",
+                                },
+                                "directory": {"type": "string", "description": "Working directory"},
+                                "task": {"type": "string", "description": "Task description"},
+                            },
+                            "required": ["role", "directory", "task"],
+                        },
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Project name for memory grouping",
+                        "default": "default",
+                    },
+                    "workers": {
+                        "type": "integer",
+                        "description": "Max concurrent agents",
+                        "default": 3,
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Per-task timeout in seconds",
+                    },
+                },
+                "required": ["agents"],
+            },
+        ),
+        Tool(
+            name="contextfs_orchestrator_spawn",
+            description="Spawn a single agent in a directory.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "role": {
+                        "type": "string",
+                        "enum": ["test", "code", "review", "docs", "debug", "custom"],
+                        "description": "Agent role",
+                    },
+                    "directory": {"type": "string", "description": "Working directory"},
+                    "task": {"type": "string", "description": "Task description"},
+                    "project": {
+                        "type": "string",
+                        "description": "Project name",
+                        "default": "default",
+                    },
+                    "wait": {
+                        "type": "boolean",
+                        "description": "Wait for completion",
+                        "default": False,
+                    },
+                },
+                "required": ["role", "directory", "task"],
+            },
+        ),
+        Tool(
+            name="contextfs_orchestrator_findings",
+            description="Get findings from agents via shared memory.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Project name",
+                        "default": "default",
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["test", "code", "review", "docs", "debug"],
+                        "description": "Filter by agent role",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results",
+                        "default": 20,
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_orchestrator_errors",
+            description="Get errors reported by agents.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Project name",
+                        "default": "default",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_orchestrator_roles",
+            description="List available agent roles and their descriptions.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -521,6 +633,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return _handle_evolve(ctx, arguments)
         elif name == "contextfs_link":
             return _handle_link(ctx, arguments)
+        # Orchestrator tools
+        elif name == "contextfs_orchestrator_run":
+            return await _handle_orchestrator_run(arguments)
+        elif name == "contextfs_orchestrator_spawn":
+            return _handle_orchestrator_spawn(arguments)
+        elif name == "contextfs_orchestrator_findings":
+            return _handle_orchestrator_findings(arguments)
+        elif name == "contextfs_orchestrator_errors":
+            return _handle_orchestrator_errors(arguments)
+        elif name == "contextfs_orchestrator_roles":
+            return _handle_orchestrator_roles()
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
     except Exception as e:
@@ -1042,6 +1165,155 @@ def _handle_link(ctx: ContextFS, arguments: dict) -> list[TextContent]:
             type="text", text=f"Link created ({direction}): {from_id} --[{relation}]--> {to_id}"
         )
     ]
+
+
+# Orchestrator handlers
+async def _handle_orchestrator_run(arguments: dict) -> list[TextContent]:
+    """Handle contextfs_orchestrator_run tool."""
+    from contextfs.orchestrator import run_agents
+
+    agents_config = arguments.get("agents", [])
+    if not agents_config:
+        return [TextContent(type="text", text="Error: agents configuration is required")]
+
+    project = arguments.get("project", "default")
+    workers = arguments.get("workers", 3)
+    timeout = arguments.get("timeout")
+
+    try:
+        results = await run_agents(
+            agents=agents_config,
+            project=project,
+            num_workers=workers,
+            timeout=timeout,
+        )
+
+        output = [f"Orchestrator completed {len(results)} agents:\n"]
+        completed = 0
+        failed = 0
+
+        for r in results:
+            status_icon = "✅" if r.status.value == "completed" else "❌"
+            output.append(
+                f"{status_icon} [{r.agent_id}] {r.role}: {r.status.value} ({r.duration:.1f}s)"
+            )
+            if r.error:
+                output.append(f"   Error: {r.error[:100]}")
+                failed += 1
+            else:
+                completed += 1
+
+        output.append(f"\nSummary: {completed} completed, {failed} failed")
+        return [TextContent(type="text", text="\n".join(output))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"Error running agents: {str(e)}")]
+
+
+def _handle_orchestrator_spawn(arguments: dict) -> list[TextContent]:
+    """Handle contextfs_orchestrator_spawn tool."""
+    from contextfs.orchestrator import AgentRole, Orchestrator
+
+    role = arguments.get("role")
+    directory = arguments.get("directory")
+    task = arguments.get("task")
+    project = arguments.get("project", "default")
+    wait = arguments.get("wait", False)
+
+    if not role or not directory or not task:
+        return [TextContent(type="text", text="Error: role, directory, and task are required")]
+
+    try:
+        orch = Orchestrator(project=project)
+        agent = orch.spawn_agent(
+            role=AgentRole(role),
+            directory=directory,
+            task=task,
+            background=not wait,
+        )
+
+        output = [
+            f"Agent spawned: {agent.id}",
+            f"  Role: {agent.role.value}",
+            f"  Directory: {agent.directory}",
+            f"  Task: {agent.task[:100]}...",
+        ]
+
+        if wait:
+            agent.wait()
+            output.append(f"  Status: {agent.status.value}")
+            if agent.duration:
+                output.append(f"  Duration: {agent.duration:.1f}s")
+
+        return [TextContent(type="text", text="\n".join(output))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"Error spawning agent: {str(e)}")]
+
+
+def _handle_orchestrator_findings(arguments: dict) -> list[TextContent]:
+    """Handle contextfs_orchestrator_findings tool."""
+    from contextfs.orchestrator import MemoryMonitor
+
+    project = arguments.get("project", "default")
+    role = arguments.get("role")
+    limit = arguments.get("limit", 20)
+
+    monitor = MemoryMonitor(project=project)
+    findings = monitor.get_agent_findings(agent_role=role)[:limit]
+
+    if not findings:
+        return [TextContent(type="text", text="No agent findings found.")]
+
+    output = [f"Agent findings ({len(findings)}):\n"]
+    for f in findings:
+        output.append(f"[{f['id'][:8]}] [{f['type']}] {f.get('summary', '')[:60]}")
+        if f.get("tags"):
+            output.append(f"  Tags: {', '.join(f['tags'][:3])}")
+
+    return [TextContent(type="text", text="\n".join(output))]
+
+
+def _handle_orchestrator_errors(arguments: dict) -> list[TextContent]:
+    """Handle contextfs_orchestrator_errors tool."""
+    from contextfs.orchestrator import MemoryMonitor
+
+    project = arguments.get("project", "default")
+    monitor = MemoryMonitor(project=project)
+    errors = monitor.get_errors()
+
+    if not errors:
+        return [TextContent(type="text", text="No errors reported by agents.")]
+
+    output = ["Errors from agents:\n"]
+    for e in errors:
+        output.append(f"[{e['id'][:8]}] {e.get('source', 'unknown')}")
+        output.append(f"  {e.get('summary', 'No summary')}")
+        output.append("")
+
+    return [TextContent(type="text", text="\n".join(output))]
+
+
+def _handle_orchestrator_roles() -> list[TextContent]:
+    """Handle contextfs_orchestrator_roles tool."""
+    from contextfs.orchestrator import AgentRole
+
+    role_descriptions = {
+        "orchestrator": "Monitors and coordinates other agents",
+        "test": "Writes and runs tests, saves failures as errors",
+        "code": "Implements features, saves decisions and patterns",
+        "review": "Reviews code quality, links related findings",
+        "docs": "Writes documentation",
+        "debug": "Investigates and fixes bugs",
+        "custom": "Generic agent for custom tasks",
+    }
+
+    output = ["Available agent roles:\n"]
+    for role in AgentRole:
+        desc = role_descriptions.get(role.value, "")
+        output.append(f"  {role.value}: {desc}")
+
+    return [TextContent(type="text", text="\n".join(output))]
 
 
 # SSE Transport setup

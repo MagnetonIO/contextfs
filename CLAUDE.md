@@ -330,6 +330,137 @@ Key variables configured in Railway:
 - Docker images are pre-built and deploy instantly
 - More reliable and consistent deployments
 
+## Agent Setup (Multi-Directory Development)
+
+### Installing ContextFS for an Agent Directory
+
+Each agent working in a different directory needs ContextFS configured. Run these commands in the agent's working directory:
+
+```bash
+# 1. Initialize the directory for indexing
+contextfs index init
+
+# 2. Index the codebase (background process)
+contextfs index index
+
+# 3. Verify connection to shared memory
+contextfs memory list --limit 3
+```
+
+### MCP Configuration for Agent Directories
+
+Create `.mcp.json` in each agent directory (or use global `~/.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "contextfs": {
+      "command": "uvx",
+      "args": ["contextfs"],
+      "env": {
+        "CONTEXTFS_DATA_DIR": "~/.contextfs"
+      }
+    }
+  }
+}
+```
+
+**IMPORTANT:** All agents share the same `CONTEXTFS_DATA_DIR` to enable shared memory across directories.
+
+### Agent Memory Protocol (MANDATORY)
+
+Agents MUST perform these memory operations automatically:
+
+| When | Action | MCP Tool |
+|------|--------|----------|
+| **Session Start** | Search for relevant context | `contextfs_search(query="<current task>")` |
+| **Learn something** | Save immediately | `contextfs_save(type="fact", ...)` |
+| **Make a decision** | Save with rationale | `contextfs_save(type="decision", ...)` |
+| **Fix an error** | Save the solution | `contextfs_save(type="error", ...)` |
+| **Complete a task** | Update/evolve existing memory | `contextfs_evolve(memory_id, ...)` |
+| **Session End** | Save session summary | `contextfs_save(save_session="current")` |
+
+### Cross-Agent Communication via Memory
+
+Agents communicate by writing and reading shared memories:
+
+```python
+# Agent A saves a finding
+contextfs_save(
+    type="fact",
+    summary="Auth service uses JWT with 1hr expiry",
+    content="Discovered in auth/token.py:45...",
+    tags=["auth", "agent-a-finding"],
+    project="shared-project"  # Use project for cross-agent grouping
+)
+
+# Agent B searches for Agent A's findings
+contextfs_search(
+    query="authentication",
+    project="shared-project",  # Filter by project
+    cross_repo=True  # Search across all repos
+)
+
+# Agent B updates Agent A's finding
+contextfs_evolve(
+    memory_id="<id-from-agent-a>",
+    new_content="Auth uses JWT with 1hr expiry. Refresh tokens last 7 days.",
+    summary="Added refresh token info"
+)
+```
+
+### Agent Spawning Pattern
+
+For orchestrating multiple agents in different directories:
+
+```bash
+# Terminal 1: Orchestrator Agent (monitors and coordinates)
+cd /path/to/orchestrator
+claude --mcp contextfs
+
+# Terminal 2: Test Agent (focuses on testing)
+cd /path/to/project/tests
+claude --mcp contextfs
+
+# Terminal 3: Code Agent (focuses on implementation)
+cd /path/to/project/src
+claude --mcp contextfs
+```
+
+All agents share memory via ContextFS. Use `project` tags to organize cross-agent work.
+
+### Agent Role Templates
+
+Add to each agent's CLAUDE.md based on role:
+
+**Test Agent:**
+```markdown
+## Role: Test Agent
+- Focus: Writing and running tests
+- Save: All test failures as `type="error"` memories
+- Save: Test patterns as `type="code"` memories
+- Search: Before writing tests, search for existing patterns
+```
+
+**Code Agent:**
+```markdown
+## Role: Code Agent
+- Focus: Implementation
+- Save: Architecture decisions as `type="decision"` memories
+- Save: Code patterns as `type="code"` memories
+- Update: Evolve existing patterns when improved
+```
+
+**Review Agent:**
+```markdown
+## Role: Review Agent
+- Focus: Code review and quality
+- Search: For related decisions before reviewing
+- Save: Review findings as `type="fact"` memories
+- Link: Connect related memories with `contextfs_link`
+```
+
+
 <!-- CONTEXTFS_MEMORY_START -->
 # ContextFS Memory Management Protocol
 
