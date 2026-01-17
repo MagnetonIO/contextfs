@@ -707,6 +707,7 @@ def sync(
     force: bool = typer.Option(
         False, "--force", "-f", help="Force overwrite server data regardless of vector clock state"
     ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed sync breakdown"),
 ):
     """Sync memories with cloud (authenticated sync)."""
     cloud_config = _get_cloud_config()
@@ -741,9 +742,12 @@ def sync(
             result = await client.sync_all(force=force)
 
             console.print("[green]Sync complete![/green]")
-            console.print(f"  Pushed: {result.pushed.accepted} memories")
-            if result.pushed.rejected:
-                console.print(f"  Rejected: {result.pushed.rejected}")
+            # Use memory-specific counts (not sessions/edges)
+            pushed_count = getattr(result.pushed, "accepted_memories", result.pushed.accepted)
+            console.print(f"  Pushed: {pushed_count} memories")
+            rejected_count = getattr(result.pushed, "rejected_memories", result.pushed.rejected)
+            if rejected_count:
+                console.print(f"  Rejected: {rejected_count}")
             console.print(f"  Pulled: {len(result.pulled.memories)} memories")
             console.print(f"  Duration: {result.duration_ms:.0f}ms")
 

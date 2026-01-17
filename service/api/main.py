@@ -26,6 +26,7 @@ from service.api.devices_routes import router as devices_router
 from service.api.memories_routes import router as memories_router
 from service.api.sync_routes import router as sync_router
 from service.api.team_routes import router as team_router
+from service.api.websocket_routes import router as websocket_router
 from service.db.models import APIKeyModel, SubscriptionModel, UsageModel, UserModel
 from service.db.session import close_db, get_session, init_db
 from service.migrations.runner import run_migrations
@@ -198,6 +199,7 @@ app.include_router(devices_router)
 app.include_router(memories_router)
 app.include_router(admin_router)
 app.include_router(team_router)
+app.include_router(websocket_router)
 
 
 # =============================================================================

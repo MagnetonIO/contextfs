@@ -125,10 +125,19 @@ async def search_memories(
 
     # Text search if not wildcard
     if query and query != "*":
-        # Use PostgreSQL full-text search
+        # Search across id, content, summary, and tags
+        # Support: exact ID match, ILIKE for partial matches, and full-text search
         search_filter = text(
-            "to_tsvector('english', content) @@ plainto_tsquery('english', :query)"
-        ).bindparams(query=query)
+            """
+            id ILIKE :like_query
+            OR summary ILIKE :like_query
+            OR content ILIKE :like_query
+            OR to_tsvector('english', coalesce(content, '') || ' ' ||
+                          coalesce(summary, '') || ' ' ||
+                          coalesce(array_to_string(tags, ' '), ''))
+               @@ plainto_tsquery('english', :query)
+            """
+        ).bindparams(query=query, like_query=f"%{query}%")
         base_query = base_query.where(search_filter)
         count_query = count_query.where(search_filter)
 

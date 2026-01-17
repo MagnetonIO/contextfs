@@ -42,6 +42,20 @@ from service.db.models import (
 )
 from service.db.session import get_session_dependency
 
+# Import WebSocket broadcast (lazy to avoid circular imports)
+_websocket_broadcast = None
+
+
+def _get_websocket_broadcast():
+    """Lazy import to avoid circular dependency."""
+    global _websocket_broadcast
+    if _websocket_broadcast is None:
+        from service.api.websocket_routes import broadcast_memory_update
+
+        _websocket_broadcast = broadcast_memory_update
+    return _websocket_broadcast
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -160,6 +174,8 @@ async def push_changes(
 
     accepted = 0
     rejected = 0
+    accepted_memories = 0
+    rejected_memories = 0
     conflicts: list[ConflictInfo] = []
     server_timestamp = datetime.now(timezone.utc)
 
@@ -171,11 +187,13 @@ async def push_changes(
         )
         if result == "accepted":
             accepted += 1
+            accepted_memories += 1
         elif result == "rejected":
             rejected += 1
+            rejected_memories += 1
         # conflicts are added directly to the list
 
-    # Process sessions
+    # Process sessions (metadata - not counted in user-facing stats)
     for sess in request.sessions:
         result = await _process_session_push(
             session, sess, request.device_id, conflicts, user_id, force=force
@@ -185,7 +203,7 @@ async def push_changes(
         elif result == "rejected":
             rejected += 1
 
-    # Process edges
+    # Process edges (metadata - not counted in user-facing stats)
     for edge in request.edges:
         result = await _process_edge_push(session, edge, request.device_id, conflicts, force=force)
         if result == "accepted":
@@ -204,11 +222,21 @@ async def push_changes(
     elif rejected > 0:
         status = SyncStatus.PARTIAL
 
+    # Notify connected WebSocket clients about new memories
+    if accepted > 0:
+        try:
+            broadcast = _get_websocket_broadcast()
+            await broadcast(user_id, accepted)
+        except Exception as e:
+            logger.warning(f"Failed to broadcast memory update: {e}")
+
     return SyncPushResponse(
         success=len(conflicts) == 0,
         status=status,
         accepted=accepted,
         rejected=rejected,
+        accepted_memories=accepted_memories,
+        rejected_memories=rejected_memories,
         conflicts=conflicts,
         server_timestamp=server_timestamp,
     )

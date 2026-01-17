@@ -239,8 +239,10 @@ class SyncPushResponse(BaseModel):
 
     success: bool
     status: SyncStatus = SyncStatus.SUCCESS
-    accepted: int = 0
+    accepted: int = 0  # Total (memories + sessions + edges) for backwards compat
     rejected: int = 0
+    accepted_memories: int = 0  # Memory-specific count
+    rejected_memories: int = 0  # Memory-specific count
     conflicts: list[ConflictInfo] = Field(default_factory=list)
     server_timestamp: datetime = Field(default_factory=utc_now)
     message: str | None = None
