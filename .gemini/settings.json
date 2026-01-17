@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "contextfs": {
-      "url": "http://127.0.0.1:8003/mcp/sse"
-    }
-  }
-}

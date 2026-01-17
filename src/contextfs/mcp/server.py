@@ -23,6 +23,8 @@ from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import TextContent, Tool
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
@@ -1168,12 +1170,13 @@ async def _handle_sync(arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=f"Sync failed: {e}")]
 
 
-# SSE Transport setup
-sse_transport = SseServerTransport("/mcp/messages/")
+# SSE Transport setup - use empty path since we mount at /mcp/sse
+# Gemini CLI POSTs to the same URL as the SSE endpoint
+sse_transport = SseServerTransport("/")
 
 
-async def handle_sse(request: Request) -> Response:
-    """Handle SSE connection for MCP."""
+async def handle_sse_get(request: Request) -> Response:
+    """Handle SSE connection for MCP (GET requests only)."""
     logger.info(f"New MCP SSE connection from {request.client}")
     async with sse_transport.connect_sse(request.scope, request.receive, request._send) as (
         read_stream,
@@ -1181,6 +1184,24 @@ async def handle_sse(request: Request) -> Response:
     ):
         await mcp_server.run(read_stream, write_stream, mcp_server.create_initialization_options())
     return Response()
+
+
+async def handle_sse_combined(scope, receive, send):
+    """Combined handler for both GET (SSE) and POST (messages) at /mcp/sse."""
+    if scope["method"] == "POST":
+        # Forward POST requests to the message handler
+        await sse_transport.handle_post_message(scope, receive, send)
+    else:
+        # Handle GET requests for SSE connection
+        request = Request(scope, receive, send)
+        logger.info(f"New MCP SSE connection from {request.client}")
+        async with sse_transport.connect_sse(scope, receive, send) as (
+            read_stream,
+            write_stream,
+        ):
+            await mcp_server.run(
+                read_stream, write_stream, mcp_server.create_initialization_options()
+            )
 
 
 async def handle_health(request: Request) -> JSONResponse:
@@ -1192,11 +1213,22 @@ def create_mcp_app() -> Starlette:
     """Create the MCP Starlette application."""
     routes = [
         Route("/health", endpoint=handle_health, methods=["GET"]),
-        Route("/mcp/sse", endpoint=handle_sse, methods=["GET"]),
-        Mount("/mcp/messages/", app=sse_transport.handle_post_message),
+        # Handle both GET (SSE) and POST (messages) at /mcp/sse for Gemini CLI compatibility
+        Mount("/mcp/sse", app=handle_sse_combined),
     ]
 
-    return Starlette(routes=routes)
+    # CORS middleware for Gemini CLI and other MCP clients
+    middleware = [
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["*"],
+            expose_headers=["*"],
+        )
+    ]
+
+    return Starlette(routes=routes, middleware=middleware)
 
 
 def run_mcp_server(host: str = "127.0.0.1", port: int = 8003) -> None:
