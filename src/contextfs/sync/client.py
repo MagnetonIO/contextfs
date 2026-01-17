@@ -571,9 +571,10 @@ class SyncClient:
                 metadata["_vector_clock"] = clocks[m.id].to_dict()
                 metadata["_content_hash"] = self.compute_content_hash(m.content)
 
+                # Update both metadata and the vector_clock column for consistency
                 cursor.execute(
-                    "UPDATE memories SET metadata = ? WHERE id = ?",
-                    (json.dumps(metadata), m.id),
+                    "UPDATE memories SET metadata = ?, vector_clock = ? WHERE id = ?",
+                    (json.dumps(metadata), json.dumps(clocks[m.id].to_dict()), m.id),
                 )
 
         conn.commit()
