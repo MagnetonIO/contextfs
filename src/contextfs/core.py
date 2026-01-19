@@ -793,6 +793,19 @@ class ContextFS:
             ),
         )
 
+        # Update session's memories_created list if we have an active session
+        if (
+            self._current_session
+            and memory.session_id
+            and memory.id not in self._current_session.memories_created
+        ):
+            self._current_session.memories_created.append(memory.id)
+            # Update session in database
+            cursor.execute(
+                "UPDATE sessions SET memories_created = ? WHERE id = ?",
+                (json.dumps(self._current_session.memories_created), self._current_session.id),
+            )
+
         # Update FTS index
         # For content-linked FTS (content='memories'), we need to use the special rebuild command
         # First try the direct approach, fall back to rebuild if it fails
@@ -2041,6 +2054,15 @@ class ContextFS:
 
     # ==================== Session Operations ====================
 
+    def _get_device_name(self) -> str:
+        """Get the device name (hostname)."""
+        import socket
+
+        try:
+            return socket.gethostname()
+        except Exception:
+            return "unknown"
+
     def start_session(
         self,
         tool: str = "contextfs",
@@ -2059,6 +2081,7 @@ class ContextFS:
             namespace_id=self.namespace_id,
             repo_path=repo_path or str(Path.cwd()),
             branch=branch or self._get_current_branch(),
+            device_name=self._get_device_name(),
         )
 
         # Save to database
@@ -2068,8 +2091,9 @@ class ContextFS:
         cursor.execute(
             """
             INSERT INTO sessions (id, label, namespace_id, tool, repo_path, branch,
-                                  started_at, ended_at, summary, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  started_at, ended_at, summary, metadata,
+                                  device_name, memories_created)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 session.id,
@@ -2082,6 +2106,8 @@ class ContextFS:
                 None,
                 None,
                 json.dumps(session.metadata),
+                session.device_name,
+                json.dumps(session.memories_created),
             ),
         )
 
@@ -2104,12 +2130,13 @@ class ContextFS:
 
         cursor.execute(
             """
-            UPDATE sessions SET ended_at = ?, summary = ?
+            UPDATE sessions SET ended_at = ?, summary = ?, memories_created = ?
             WHERE id = ?
         """,
             (
                 self._current_session.ended_at.isoformat(),
                 self._current_session.summary,
+                json.dumps(self._current_session.memories_created),
                 self._current_session.id,
             ),
         )
@@ -2169,10 +2196,13 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
+        columns = """id, label, namespace_id, tool, repo_path, branch, started_at, ended_at,
+                     summary, metadata, device_name, memories_created"""
+
         if session_id:
-            cursor.execute("SELECT * FROM sessions WHERE id LIKE ?", (f"{session_id}%",))
+            cursor.execute(f"SELECT {columns} FROM sessions WHERE id LIKE ?", (f"{session_id}%",))
         elif label:
-            cursor.execute("SELECT * FROM sessions WHERE label = ?", (label,))
+            cursor.execute(f"SELECT {columns} FROM sessions WHERE label = ?", (label,))
         else:
             return None
 
@@ -2192,6 +2222,8 @@ class ContextFS:
             ended_at=datetime.fromisoformat(row[7]) if row[7] else None,
             summary=row[8],
             metadata=json.loads(row[9]) if row[9] else {},
+            device_name=row[10],
+            memories_created=json.loads(row[11]) if row[11] else [],
         )
 
         # Load messages
@@ -2224,11 +2256,14 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
+        columns = """id, label, namespace_id, tool, repo_path, branch, started_at, ended_at,
+                     summary, metadata, device_name, memories_created"""
+
         if all_namespaces:
-            sql = "SELECT * FROM sessions WHERE 1=1"
+            sql = f"SELECT {columns} FROM sessions WHERE 1=1"
             params: list = []
         else:
-            sql = "SELECT * FROM sessions WHERE namespace_id = ?"
+            sql = f"SELECT {columns} FROM sessions WHERE namespace_id = ?"
             params = [self.namespace_id]
 
         if tool:
@@ -2259,6 +2294,8 @@ class ContextFS:
                     ended_at=datetime.fromisoformat(row[7]) if row[7] else None,
                     summary=row[8],
                     metadata=json.loads(row[9]) if row[9] else {},
+                    device_name=row[10],
+                    memories_created=json.loads(row[11]) if row[11] else [],
                 )
             )
 

@@ -2042,6 +2042,9 @@ class Session(BaseModel):
     # Tool that created session
     tool: str = "contextfs"  # claude-code, gemini, codex, etc.
 
+    # Device tracking
+    device_name: str | None = None  # hostname or user-friendly device name
+
     # Git context
     repo_path: str | None = None
     branch: str | None = None
@@ -2055,6 +2058,9 @@ class Session(BaseModel):
 
     # Generated summary
     summary: str | None = None
+
+    # Memories created during this session (IDs)
+    memories_created: list[str] = Field(default_factory=list)
 
     metadata: dict[str, Any] = Field(default_factory=dict)
 
