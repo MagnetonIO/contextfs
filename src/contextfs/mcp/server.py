@@ -909,8 +909,15 @@ async def _handle_index(ctx: ContextFS, arguments: dict) -> list[TextContent]:
     _indexing_state.repo_name = Path(repo_path).name
     _indexing_state.current = 0
     _indexing_state.total = 0
+    _indexing_state.current_file = ""
     _indexing_state.error = None
     _indexing_state.result = None
+
+    def on_progress(current: int, total: int, filename: str) -> None:
+        """Progress callback that updates global indexing state."""
+        _indexing_state.current = current
+        _indexing_state.total = total
+        _indexing_state.current_file = filename
 
     async def do_index():
         global _indexing_state
@@ -918,6 +925,7 @@ async def _handle_index(ctx: ContextFS, arguments: dict) -> list[TextContent]:
             result = await asyncio.to_thread(
                 ctx.index_repository,
                 repo_path=Path(repo_path),
+                on_progress=on_progress,
                 incremental=incremental,
                 mode=mode,
             )
