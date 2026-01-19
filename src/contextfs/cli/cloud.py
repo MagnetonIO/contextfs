@@ -751,6 +751,26 @@ def sync(
             console.print(f"  Pulled: {len(result.pulled.memories)} memories")
             console.print(f"  Duration: {result.duration_ms:.0f}ms")
 
+            # Show what was pushed (visibility)
+            if result.pushed.pushed_items:
+                console.print("\n[cyan]⬆ Pushed:[/cyan]")
+                for item in result.pushed.pushed_items[:10]:
+                    summary = item.summary or item.id[:8]
+                    console.print(f"    [dim]\\[{item.type}][/dim] {summary}")
+                if len(result.pushed.pushed_items) > 10:
+                    console.print(f"    ... and {len(result.pushed.pushed_items) - 10} more")
+
+            # Show what was pulled (visibility)
+            if result.pulled.memories:
+                console.print("\n[cyan]⬇ Pulled:[/cyan]")
+                for m in result.pulled.memories[:10]:
+                    summary = m.summary or (
+                        m.content[:50] + "..." if len(m.content) > 50 else m.content
+                    )
+                    console.print(f"    [dim]\\[{m.type}][/dim] {summary}")
+                if len(result.pulled.memories) > 10:
+                    console.print(f"    ... and {len(result.pulled.memories) - 10} more")
+
             if result.errors:
                 for error in result.errors:
                     console.print(f"  [red]Error: {error}[/red]")
