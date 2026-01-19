@@ -271,8 +271,8 @@ class TestMemoryLineage:
         # Check storage was called
         mock_storage.save.assert_called_once()
 
-        # Check graph edges were created
-        assert mock_graph.add_edge.call_count == 2  # forward and inverse
+        # Check edges were created via storage (not graph)
+        assert mock_storage.add_edge.call_count == 2  # forward and inverse
 
     def test_evolve_preserves_tags(self, mock_storage, mock_graph):
         """Test that evolve preserves original tags."""
@@ -388,8 +388,8 @@ class TestMemoryLineage:
             notes="Different conclusions",
         )
 
-        # Both directions created
-        assert mock_graph.add_edge.call_count == 2
+        # Both directions created via storage
+        assert mock_storage.add_edge.call_count == 2
 
     def test_supersede(self, mock_storage, mock_graph):
         """Test marking memory as superseding another."""
@@ -397,8 +397,8 @@ class TestMemoryLineage:
 
         lineage.supersede("old_mem", "new_mem", reason="outdated")
 
-        # Forward and inverse edges created
-        assert mock_graph.add_edge.call_count == 2
+        # Forward and inverse edges created via storage
+        assert mock_storage.add_edge.call_count == 2
 
     def test_link_memories(self, mock_storage, mock_graph):
         """Test creating a link between memories."""
@@ -411,7 +411,8 @@ class TestMemoryLineage:
             weight=0.8,
         )
 
-        mock_graph.add_edge.assert_called_once()
+        # Edge created via storage (not graph)
+        mock_storage.add_edge.assert_called_once()
 
     def test_link_bidirectional(self, mock_storage, mock_graph):
         """Test creating bidirectional link."""
@@ -424,22 +425,26 @@ class TestMemoryLineage:
             bidirectional=True,
         )
 
-        # Both directions
-        assert mock_graph.add_edge.call_count == 2
+        # Both directions created via storage
+        assert mock_storage.add_edge.call_count == 2
 
     def test_get_history_from_metadata(self):
-        """Test getting history from metadata when no graph."""
+        """Test getting history from metadata when lineage query returns empty."""
         storage = MagicMock()
-        storage._graph = None  # Explicitly set to None
         storage.recall.return_value = Memory(
             id="m1",
             content="Test",
             metadata={"evolved_from": "m0"},
         )
+        # Mock get_lineage to return empty results, triggering metadata fallback
+        storage.get_lineage.return_value = {
+            "root": "m1",
+            "ancestors": [],
+            "descendants": [],
+            "history": [],
+        }
 
         lineage = MemoryLineage(storage, graph=None)
-        # Force graph to None
-        lineage._graph = None
         history = lineage.get_history("m1")
 
         assert history["memory"].id == "m1"

@@ -168,6 +168,23 @@ Before committing any changes:
 2. Verify the fix/feature works as expected
 3. Check for regressions in related functionality
 
+### Frontend Testing (contextfs-web)
+**ALWAYS run lint before pushing changes to contextfs-web:**
+
+```bash
+# Run lint locally or in Docker
+cd /Users/mlong/Documents/Development/contextfs-ai/contextfs-web && npm run lint
+
+# Or if running in Docker
+docker exec contextfs-web npm run lint
+```
+
+Common frontend issues to check:
+- TypeScript type errors (especially with `unknown` types)
+- Missing imports (icons, components)
+- Unused variables or imports
+- React hook dependency warnings
+
 ## Search Strategy
 Always search contextfs memories FIRST before searching code directly:
 1. Use `contextfs_search` to find relevant memories

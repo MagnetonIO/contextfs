@@ -2,7 +2,7 @@
 Memory Lineage Operations for ContextFS.
 
 Provides high-level operations for memory evolution, merging, and splitting.
-Works with any GraphBackend implementation (FalkorDB, SQLite fallback).
+Edges are stored in SQLite (always) and optionally FalkorDB for complex queries.
 
 Usage:
     from contextfs.memory_lineage import MemoryLineage
@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 from contextfs.schemas import Memory, MemoryType
 from contextfs.storage_protocol import (
     EdgeRelation,
-    GraphBackend,
+    GraphBackend,  # Kept for type hints in __init__ signature
     MemoryEdge,
 )
 from contextfs.types.versioned import ChangeReason
@@ -63,27 +63,28 @@ class MemoryLineage:
     High-level operations for memory lineage management.
 
     Provides evolve, merge, split, and conflict resolution operations
-    that maintain proper graph relationships between memories.
+    that maintain proper relationships between memories.
+
+    Uses StorageRouter for all edge operations, which stores edges in SQLite
+    (always) and optionally in FalkorDB for complex graph queries.
 
     Attributes:
-        storage: StorageRouter for memory persistence
-        graph: GraphBackend for relationship management
+        storage: StorageRouter for memory persistence and edge storage
     """
 
     def __init__(
         self,
         storage: StorageRouter,
-        graph: GraphBackend | None = None,
+        graph: GraphBackend | None = None,  # Deprecated, kept for compatibility
     ) -> None:
         """
         Initialize MemoryLineage.
 
         Args:
-            storage: StorageRouter instance
-            graph: Optional GraphBackend (uses storage._graph if available)
+            storage: StorageRouter instance (handles both memory and edge storage)
+            graph: Deprecated, ignored. Edges are stored via StorageRouter.
         """
         self._storage = storage
-        self._graph = graph or getattr(storage, "_graph", None)
 
     # =========================================================================
     # Evolution Operations
@@ -163,23 +164,22 @@ class MemoryLineage:
         # Save evolved memory
         self._storage.save(evolved)
 
-        # Create graph relationships
-        if self._graph:
-            try:
-                # Evolved memory -> original
-                self._graph.add_edge(
-                    from_id=evolved.id,
-                    to_id=memory_id,
-                    relation=EdgeRelation.EVOLVED_FROM,
-                )
-                # Original -> evolved memory (inverse)
-                self._graph.add_edge(
-                    from_id=memory_id,
-                    to_id=evolved.id,
-                    relation=EdgeRelation.EVOLVED_INTO,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to create evolution edges: {e}")
+        # Create evolution edges (stored in SQLite, optionally FalkorDB)
+        try:
+            # Evolved memory -> original
+            self._storage.add_edge(
+                from_id=evolved.id,
+                to_id=memory_id,
+                relation=EdgeRelation.EVOLVED_FROM,
+            )
+            # Original -> evolved memory (inverse)
+            self._storage.add_edge(
+                from_id=memory_id,
+                to_id=evolved.id,
+                relation=EdgeRelation.EVOLVED_INTO,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create evolution edges: {e}")
 
         logger.info(f"Evolved memory {memory_id} -> {evolved.id}")
         return evolved
@@ -268,24 +268,23 @@ class MemoryLineage:
         # Save merged memory
         self._storage.save(merged)
 
-        # Create graph relationships
-        if self._graph:
-            for original in memories:
-                try:
-                    # Merged memory -> original
-                    self._graph.add_edge(
-                        from_id=merged.id,
-                        to_id=original.id,
-                        relation=EdgeRelation.MERGED_FROM,
-                    )
-                    # Original -> merged memory (inverse)
-                    self._graph.add_edge(
-                        from_id=original.id,
-                        to_id=merged.id,
-                        relation=EdgeRelation.MERGED_INTO,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to create merge edge: {e}")
+        # Create merge edges (stored in SQLite, optionally FalkorDB)
+        for original in memories:
+            try:
+                # Merged memory -> original
+                self._storage.add_edge(
+                    from_id=merged.id,
+                    to_id=original.id,
+                    relation=EdgeRelation.MERGED_FROM,
+                )
+                # Original -> merged memory (inverse)
+                self._storage.add_edge(
+                    from_id=original.id,
+                    to_id=merged.id,
+                    relation=EdgeRelation.MERGED_INTO,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create merge edge: {e}")
 
         logger.info(f"Merged {len(memories)} memories -> {merged.id}")
         return merged
@@ -437,23 +436,22 @@ class MemoryLineage:
             self._storage.save(split_memory)
             created_memories.append(split_memory)
 
-            # Create graph relationships
-            if self._graph:
-                try:
-                    # Split memory -> original
-                    self._graph.add_edge(
-                        from_id=split_memory.id,
-                        to_id=memory_id,
-                        relation=EdgeRelation.SPLIT_FROM,
-                    )
-                    # Original -> split memory (inverse)
-                    self._graph.add_edge(
-                        from_id=memory_id,
-                        to_id=split_memory.id,
-                        relation=EdgeRelation.SPLIT_INTO,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to create split edge: {e}")
+            # Create split edges (stored in SQLite, optionally FalkorDB)
+            try:
+                # Split memory -> original
+                self._storage.add_edge(
+                    from_id=split_memory.id,
+                    to_id=memory_id,
+                    relation=EdgeRelation.SPLIT_FROM,
+                )
+                # Original -> split memory (inverse)
+                self._storage.add_edge(
+                    from_id=memory_id,
+                    to_id=split_memory.id,
+                    relation=EdgeRelation.SPLIT_INTO,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create split edge: {e}")
 
         logger.info(f"Split memory {memory_id} into {len(parts)} parts")
         return created_memories
@@ -482,30 +480,28 @@ class MemoryLineage:
             Tuple of created edges (both directions)
         """
         edges: list[MemoryEdge | None] = [None, None]
+        metadata = {
+            "resolution": resolution.value,
+            "notes": notes,
+            "detected_at": datetime.now(timezone.utc).isoformat(),
+        }
 
-        if self._graph:
-            metadata = {
-                "resolution": resolution.value,
-                "notes": notes,
-                "detected_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-            try:
-                edges[0] = self._graph.add_edge(
-                    from_id=memory_id_1,
-                    to_id=memory_id_2,
-                    relation=EdgeRelation.CONTRADICTS,
-                    metadata=metadata,
-                )
-                edges[1] = self._graph.add_edge(
-                    from_id=memory_id_2,
-                    to_id=memory_id_1,
-                    relation=EdgeRelation.CONTRADICTS,
-                    metadata=metadata,
-                )
-                logger.info(f"Marked contradiction: {memory_id_1} <-> {memory_id_2}")
-            except Exception as e:
-                logger.warning(f"Failed to create contradiction edges: {e}")
+        try:
+            edges[0] = self._storage.add_edge(
+                from_id=memory_id_1,
+                to_id=memory_id_2,
+                relation=EdgeRelation.CONTRADICTS,
+                metadata=metadata,
+            )
+            edges[1] = self._storage.add_edge(
+                from_id=memory_id_2,
+                to_id=memory_id_1,
+                relation=EdgeRelation.CONTRADICTS,
+                metadata=metadata,
+            )
+            logger.info(f"Marked contradiction: {memory_id_1} <-> {memory_id_2}")
+        except Exception as e:
+            logger.warning(f"Failed to create contradiction edges: {e}")
 
         return edges[0], edges[1]
 
@@ -526,11 +522,8 @@ class MemoryLineage:
         Returns:
             Created edge or None
         """
-        if not self._graph:
-            return None
-
         try:
-            edge = self._graph.add_edge(
+            edge = self._storage.add_edge(
                 from_id=new_memory_id,
                 to_id=old_memory_id,
                 relation=EdgeRelation.SUPERSEDES,
@@ -540,7 +533,7 @@ class MemoryLineage:
                 },
             )
             # Also create inverse
-            self._graph.add_edge(
+            self._storage.add_edge(
                 from_id=old_memory_id,
                 to_id=new_memory_id,
                 relation=EdgeRelation.SUPERSEDED_BY,
@@ -576,11 +569,8 @@ class MemoryLineage:
         Returns:
             Created edge or None
         """
-        if not self._graph:
-            return None
-
         try:
-            edge = self._graph.add_edge(
+            edge = self._storage.add_edge(
                 from_id=from_memory_id,
                 to_id=to_memory_id,
                 relation=relation,
@@ -589,7 +579,7 @@ class MemoryLineage:
 
             if bidirectional:
                 inverse = EdgeRelation.get_inverse(relation)
-                self._graph.add_edge(
+                self._storage.add_edge(
                     from_id=to_memory_id,
                     to_id=from_memory_id,
                     relation=inverse,
@@ -636,15 +626,15 @@ class MemoryLineage:
             "timeline": [],
         }
 
-        if self._graph:
-            try:
-                lineage = self._graph.get_lineage(memory_id, direction="both")
-                result["root"] = lineage.get("root", memory_id)
-                result["ancestors"] = lineage.get("ancestors", [])
-                result["descendants"] = lineage.get("descendants", [])
-                result["timeline"] = lineage.get("history", [])
-            except Exception as e:
-                logger.warning(f"Failed to get lineage from graph: {e}")
+        # Query lineage from storage (SQLite or FalkorDB if available)
+        try:
+            lineage = self._storage.get_lineage(memory_id, direction="both")
+            result["root"] = lineage.get("root", memory_id)
+            result["ancestors"] = lineage.get("ancestors", [])
+            result["descendants"] = lineage.get("descendants", [])
+            result["timeline"] = lineage.get("history", [])
+        except Exception as e:
+            logger.warning(f"Failed to get lineage from storage: {e}")
 
         # Fallback to metadata
         if not result["ancestors"] and memory.metadata.get("evolved_from"):
@@ -691,11 +681,8 @@ class MemoryLineage:
         Returns:
             List of related memories with relationship info
         """
-        if not self._graph:
-            return []
-
         try:
-            results = self._graph.get_related(
+            results = self._storage.get_related(
                 memory_id=memory_id,
                 relation=relation,
                 direction="both",

@@ -266,6 +266,8 @@ class SyncPushResponse(BaseModel):
     rejected: int = 0
     accepted_memories: int = 0  # Memory-specific count
     rejected_memories: int = 0  # Memory-specific count
+    accepted_sessions: int = 0  # Session-specific count
+    rejected_sessions: int = 0  # Session-specific count
     conflicts: list[ConflictInfo] = Field(default_factory=list)
     server_timestamp: datetime = Field(default_factory=utc_now)
     message: str | None = None

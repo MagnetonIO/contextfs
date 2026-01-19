@@ -136,6 +136,12 @@ class SyncedSessionModel(Base):
     namespace_id: Mapped[str] = mapped_column(Text, nullable=False, default="global")
     tool: Mapped[str] = mapped_column(Text, nullable=False, default="contextfs")
 
+    # Device tracking
+    device_name: Mapped[str | None] = mapped_column(Text)
+
+    # Memories created during this session (array of memory IDs)
+    memories_created: Mapped[list[str]] = mapped_column(JSONB, default=list)
+
     # Portable repo reference
     repo_url: Mapped[str | None] = mapped_column(Text)
     repo_name: Mapped[str | None] = mapped_column(Text)

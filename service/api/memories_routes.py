@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextfs.auth.api_keys import APIKey, User
 from service.api.auth_middleware import require_auth
+from service.db.models import SyncedEdgeModel as Edge
 from service.db.models import SyncedMemoryModel as Memory
 from service.db.models import TeamMemberModel
 from service.db.session import get_session_dependency
@@ -36,6 +37,8 @@ class MemoryResponse(BaseModel):
     summary: str | None
     namespace_id: str
     repo_name: str | None
+    source_repo: str | None = None  # Legacy field
+    source_file: str | None = None
     source_tool: str | None
     project: str | None
     created_at: str
@@ -43,6 +46,7 @@ class MemoryResponse(BaseModel):
     visibility: str = "private"  # private, team_read, team_write
     team_id: str | None = None
     is_owner: bool = True  # Whether current user owns this memory
+    metadata: dict | None = None  # Contains evolved_from, merged_from, etc.
 
 
 class MemorySearchResponse(BaseModel):
@@ -229,12 +233,24 @@ async def get_memory(
     user, _ = auth
     user_id = user.id
 
-    # SECURITY: Filter by user_id to prevent accessing other users' memories
+    # Get user's team memberships for access control
+    user_team_ids = await _get_user_team_ids(session, user_id)
+
+    # SECURITY: Allow access to own memories OR team-shared memories
+    ownership_conditions = [Memory.user_id == user_id]
+    if user_team_ids:
+        ownership_conditions.append(
+            and_(
+                Memory.team_id.in_(user_team_ids),
+                Memory.visibility.in_(["team_read", "team_write"]),
+            )
+        )
+
     result = await session.execute(
         select(Memory).where(
             Memory.id == memory_id,
             Memory.deleted_at.is_(None),
-            Memory.user_id == user_id,
+            or_(*ownership_conditions),
         )
     )
     memory = result.scalar_one_or_none()
@@ -252,8 +268,150 @@ async def get_memory(
         summary=memory.summary,
         namespace_id=memory.namespace_id,
         repo_name=memory.repo_name,
+        source_repo=memory.source_repo,
+        source_file=memory.source_file,
         source_tool=memory.source_tool,
         project=memory.project,
         created_at=memory.created_at.isoformat() if memory.created_at else "",
         updated_at=memory.updated_at.isoformat() if memory.updated_at else "",
+        visibility=memory.visibility or "private",
+        team_id=memory.team_id,
+        is_owner=memory.user_id == user_id,
+        metadata=memory.extra_metadata,
     )
+
+
+class EdgeResponse(BaseModel):
+    """Edge/relationship data for frontend."""
+
+    from_id: str
+    to_id: str
+    relation: str
+    weight: float = 1.0
+    created_at: str
+
+
+class LineageResponse(BaseModel):
+    """Lineage data for a memory."""
+
+    memory_id: str
+    ancestors: list[EdgeResponse]  # Edges pointing TO this memory (evolved_from, merged_from, etc.)
+    descendants: list[EdgeResponse]  # Edges pointing FROM this memory (evolved_into, etc.)
+
+
+@router.get("/{memory_id}/lineage", response_model=LineageResponse)
+async def get_memory_lineage(
+    memory_id: str,
+    auth: tuple[User, APIKey] = Depends(require_auth),
+    session: AsyncSession = Depends(get_session_dependency),
+) -> LineageResponse:
+    """Get lineage (evolution history) for a memory.
+
+    Returns edges showing how this memory relates to others:
+    - ancestors: memories this evolved/merged from
+    - descendants: memories that evolved from this
+    """
+    user, _ = auth
+    user_id = user.id
+
+    # Get user's team memberships for access control
+    user_team_ids = await _get_user_team_ids(session, user_id)
+
+    # Allow access to own memories OR team-shared memories
+    ownership_conditions = [Memory.user_id == user_id]
+    if user_team_ids:
+        ownership_conditions.append(
+            and_(
+                Memory.team_id.in_(user_team_ids),
+                Memory.visibility.in_(["team_read", "team_write"]),
+            )
+        )
+
+    # First verify the memory is accessible to this user
+    memory_result = await session.execute(
+        select(Memory.id).where(
+            Memory.id == memory_id,
+            Memory.deleted_at.is_(None),
+            or_(*ownership_conditions),
+        )
+    )
+    if not memory_result.scalar_one_or_none():
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    # Get edges where this memory is the source (descendants - evolved_into, etc.)
+    descendants_result = await session.execute(
+        select(Edge).where(
+            Edge.from_id == memory_id,
+            Edge.deleted_at.is_(None),
+        )
+    )
+    descendants = descendants_result.scalars().all()
+
+    # Get edges where this memory is the target (ancestors - evolved_from, etc.)
+    ancestors_result = await session.execute(
+        select(Edge).where(
+            Edge.to_id == memory_id,
+            Edge.deleted_at.is_(None),
+        )
+    )
+    ancestors = ancestors_result.scalars().all()
+
+    return LineageResponse(
+        memory_id=memory_id,
+        ancestors=[
+            EdgeResponse(
+                from_id=e.from_id,
+                to_id=e.to_id,
+                relation=e.relation,
+                weight=e.weight or 1.0,
+                created_at=e.created_at.isoformat() if e.created_at else "",
+            )
+            for e in ancestors
+        ],
+        descendants=[
+            EdgeResponse(
+                from_id=e.from_id,
+                to_id=e.to_id,
+                relation=e.relation,
+                weight=e.weight or 1.0,
+                created_at=e.created_at.isoformat() if e.created_at else "",
+            )
+            for e in descendants
+        ],
+    )
+
+
+@router.delete("/{memory_id}")
+async def delete_memory(
+    memory_id: str,
+    auth: tuple[User, APIKey] = Depends(require_auth),
+    session: AsyncSession = Depends(get_session_dependency),
+) -> dict:
+    """Soft-delete a memory."""
+    from datetime import datetime, timezone
+
+    user, _ = auth
+    user_id = user.id
+
+    # Get the memory
+    result = await session.execute(
+        select(Memory).where(
+            Memory.id == memory_id,
+            Memory.deleted_at.is_(None),
+            Memory.user_id == user_id,
+        )
+    )
+    memory = result.scalar_one_or_none()
+
+    if not memory:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    # Soft delete
+    memory.deleted_at = datetime.now(timezone.utc)
+    await session.commit()
+
+    return {"status": "deleted", "memory_id": memory_id}
