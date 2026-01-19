@@ -860,9 +860,14 @@ class HybridSearch:
 
         # Build final results
         results = []
-        max_score = (fts_weight + rag_weight) / (k + 1) * self.TYPE_BOOST_FACTOR
+        base_max_score = (fts_weight + rag_weight) / (k + 1)
         for memory_id in final_ids[:limit]:
-            # Normalize score to 0-1
+            # Normalize score to 0-1, accounting for whether this item was boosted
+            # Items in HIGH_VALUE_TYPES were boosted, so their max_score includes the boost
+            if memories[memory_id].type in self.HIGH_VALUE_TYPES:
+                max_score = base_max_score * self.TYPE_BOOST_FACTOR
+            else:
+                max_score = base_max_score
             normalized_score = min(1.0, scores[memory_id] / max_score)
 
             # Determine source label

@@ -742,34 +742,68 @@ def sync(
             result = await client.sync_all(force=force)
 
             console.print("[green]Sync complete![/green]")
-            # Use memory-specific counts (not sessions/edges)
-            pushed_count = getattr(result.pushed, "accepted_memories", result.pushed.accepted)
-            console.print(f"  Pushed: {pushed_count} memories")
+
+            # Helper to format type breakdown
+            def type_breakdown(items, type_attr="type") -> str:
+                from collections import Counter
+
+                counts = Counter(getattr(item, type_attr, "unknown") for item in items)
+                if not counts:
+                    return ""
+                parts = [f"{count} {typ}" for typ, count in counts.most_common()]
+                return f" ({', '.join(parts)})"
+
+            # Pushed summary
+            pushed_memories = getattr(result.pushed, "accepted_memories", result.pushed.accepted)
+            pushed_sessions = getattr(result.pushed, "accepted_sessions", 0)
+            pushed_breakdown = (
+                type_breakdown(result.pushed.pushed_items) if result.pushed.pushed_items else ""
+            )
+            console.print(
+                f"  ⬆ Pushed: {pushed_memories} memories{pushed_breakdown}, {pushed_sessions} sessions"
+            )
+
             rejected_count = getattr(result.pushed, "rejected_memories", result.pushed.rejected)
             if rejected_count:
                 console.print(f"  Rejected: {rejected_count}")
-            console.print(f"  Pulled: {len(result.pulled.memories)} memories")
+
+            # Pulled summary
+            pulled_breakdown = (
+                type_breakdown(result.pulled.memories) if result.pulled.memories else ""
+            )
+            console.print(
+                f"  ⬇ Pulled: {len(result.pulled.memories)} memories{pulled_breakdown}, {len(result.pulled.sessions)} sessions"
+            )
+
             console.print(f"  Duration: {result.duration_ms:.0f}ms")
 
-            # Show what was pushed (visibility)
-            if result.pushed.pushed_items:
-                console.print("\n[cyan]⬆ Pushed:[/cyan]")
-                for item in result.pushed.pushed_items[:10]:
-                    summary = item.summary or item.id[:8]
-                    console.print(f"    [dim]\\[{item.type}][/dim] {summary}")
-                if len(result.pushed.pushed_items) > 10:
-                    console.print(f"    ... and {len(result.pushed.pushed_items) - 10} more")
+            # Verbose mode: show individual items
+            if verbose:
+                if result.pushed.pushed_items:
+                    console.print("\n[cyan]Pushed Memories:[/cyan]")
+                    for item in result.pushed.pushed_items[:20]:
+                        summary = item.summary or item.id[:8]
+                        console.print(f"    [dim]\\[{item.type}][/dim] {summary}")
+                    if len(result.pushed.pushed_items) > 20:
+                        console.print(f"    ... and {len(result.pushed.pushed_items) - 20} more")
 
-            # Show what was pulled (visibility)
-            if result.pulled.memories:
-                console.print("\n[cyan]⬇ Pulled:[/cyan]")
-                for m in result.pulled.memories[:10]:
-                    summary = m.summary or (
-                        m.content[:50] + "..." if len(m.content) > 50 else m.content
-                    )
-                    console.print(f"    [dim]\\[{m.type}][/dim] {summary}")
-                if len(result.pulled.memories) > 10:
-                    console.print(f"    ... and {len(result.pulled.memories) - 10} more")
+                if result.pulled.memories:
+                    console.print("\n[cyan]Pulled Memories:[/cyan]")
+                    for m in result.pulled.memories[:20]:
+                        summary = m.summary or (
+                            m.content[:50] + "..." if len(m.content) > 50 else m.content
+                        )
+                        console.print(f"    [dim]\\[{m.type}][/dim] {summary}")
+                    if len(result.pulled.memories) > 20:
+                        console.print(f"    ... and {len(result.pulled.memories) - 20} more")
+
+                if result.pulled.sessions:
+                    console.print("\n[cyan]Pulled Sessions:[/cyan]")
+                    for s in result.pulled.sessions[:10]:
+                        label = s.label or s.id[:8]
+                        console.print(f"    [dim]\\[session][/dim] {label}")
+                    if len(result.pulled.sessions) > 10:
+                        console.print(f"    ... and {len(result.pulled.sessions) - 10} more")
 
             if result.errors:
                 for error in result.errors:

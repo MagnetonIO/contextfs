@@ -552,10 +552,15 @@ class SyncClient:
             self._update_local_vector_clocks(memories, memory_clocks)
 
         # Populate pushed_items for visibility (from items we sent that were accepted)
-        if result.accepted > 0 and synced_memories:
+        # Use accepted_memories (not accepted which includes sessions/edges)
+        if result.accepted_memories > 0 and synced_memories:
             result.pushed_items = [
-                SyncItemSummary.from_memory(m) for m in synced_memories[: result.accepted]
+                SyncItemSummary.from_memory(m) for m in synced_memories[: result.accepted_memories]
             ]
+
+        # Populate session/edge counts (server doesn't return these yet)
+        if result.accepted > 0:
+            result.accepted_sessions = len(sessions)
 
         logger.info(
             f"Push complete: {result.accepted} accepted, "
@@ -1582,10 +1587,15 @@ class SyncClient:
             self._update_local_edge_clocks(edges, edge_clocks)
 
         # Populate pushed_items for visibility
-        if result.accepted > 0 and synced_memories:
+        # Use accepted_memories (not accepted which includes sessions/edges)
+        if result.accepted_memories > 0 and synced_memories:
             result.pushed_items = [
-                SyncItemSummary.from_memory(m) for m in synced_memories[: result.accepted]
+                SyncItemSummary.from_memory(m) for m in synced_memories[: result.accepted_memories]
             ]
+
+        # Populate session count (server doesn't return this yet)
+        if result.accepted > 0:
+            result.accepted_sessions = len(sessions)
 
         logger.info(
             f"Content-addressed push: {result.accepted} accepted, "
