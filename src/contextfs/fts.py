@@ -508,7 +508,31 @@ class HybridSearch:
 
     Uses FTS for fast keyword matching and RAG for semantic understanding.
     Results are merged using Reciprocal Rank Fusion (RRF).
+
+    Type Diversity:
+    To prevent indexed code memories from drowning out other types,
+    high-value types (procedural, decision, error, etc.) receive a score
+    boost, and diversity slots ensure non-code types appear in results.
     """
+
+    # Types that should be boosted in search results
+    # These are typically human-created and contain higher-value context
+    HIGH_VALUE_TYPES = {
+        MemoryType.PROCEDURAL,
+        MemoryType.DECISION,
+        MemoryType.ERROR,
+        MemoryType.FACT,
+        MemoryType.API,
+        MemoryType.DOC,
+        MemoryType.USER,
+        MemoryType.WORKFLOW,
+    }
+
+    # Boost factor for high-value types (1.5x score multiplier)
+    TYPE_BOOST_FACTOR = 1.5
+
+    # Minimum proportion of results reserved for non-code types (40%)
+    DIVERSITY_RATIO = 0.4
 
     def __init__(self, fts_backend: FTSBackend, rag_backend=None):
         """
@@ -521,6 +545,50 @@ class HybridSearch:
         self.fts = fts_backend
         self.rag = rag_backend
 
+    def _apply_diversity(
+        self,
+        results: list[SearchResult],
+        limit: int,
+    ) -> list[SearchResult]:
+        """
+        Apply type diversity to search results.
+
+        Ensures non-code types aren't drowned out by indexed code memories.
+        Only applied when type filter is not specified.
+        """
+        if not results:
+            return results
+
+        diversity_slots = int(limit * self.DIVERSITY_RATIO)
+        regular_slots = limit - diversity_slots
+
+        # Separate by type
+        non_code = [r for r in results if r.memory.type != MemoryType.CODE]
+        code = [r for r in results if r.memory.type == MemoryType.CODE]
+
+        # Apply type boost to scores for high-value types
+        for r in non_code:
+            if r.memory.type in self.HIGH_VALUE_TYPES:
+                r.score = min(1.0, r.score * self.TYPE_BOOST_FACTOR)
+
+        # Sort by boosted score
+        non_code.sort(key=lambda x: x.score, reverse=True)
+        code.sort(key=lambda x: x.score, reverse=True)
+
+        # Fill diversity slots with non-code
+        final = non_code[:diversity_slots]
+        remaining_non_code = non_code[diversity_slots:]
+
+        # Fill remaining with best of rest
+        remaining_all = remaining_non_code + code
+        remaining_all.sort(key=lambda x: x.score, reverse=True)
+        final.extend(remaining_all[:regular_slots])
+
+        # Re-sort for presentation
+        final.sort(key=lambda x: x.score, reverse=True)
+
+        return final[:limit]
+
     def search_fts_only(
         self,
         query: str,
@@ -529,17 +597,24 @@ class HybridSearch:
         tags: list[str] | None = None,
         namespace_id: str | None = None,
     ) -> list[SearchResult]:
-        """Search using FTS only, marking results with source."""
+        """Search using FTS only, with type diversity for unfiltered searches."""
+        # Over-fetch when no type filter to allow diversity selection
+        fetch_limit = limit * 2 if type is None else limit
         results = self.fts.search(
             query=query,
-            limit=limit,
+            limit=fetch_limit,
             type=type,
             tags=tags,
             namespace_id=namespace_id,
         )
         for r in results:
             r.source = "fts"
-        return results
+
+        # Apply diversity only when type not specified
+        if type is None:
+            results = self._apply_diversity(results, limit)
+
+        return results[:limit]
 
     def search_rag_only(
         self,
@@ -549,19 +624,26 @@ class HybridSearch:
         tags: list[str] | None = None,
         namespace_id: str | None = None,
     ) -> list[SearchResult]:
-        """Search using RAG only, marking results with source."""
+        """Search using RAG only, with type diversity for unfiltered searches."""
         if self.rag is None:
             return []
+        # Over-fetch when no type filter to allow diversity selection
+        fetch_limit = limit * 2 if type is None else limit
         results = self.rag.search(
             query=query,
-            limit=limit,
+            limit=fetch_limit,
             type=type,
             tags=tags,
             namespace_id=namespace_id,
         )
         for r in results:
             r.source = "rag"
-        return results
+
+        # Apply diversity only when type not specified
+        if type is None:
+            results = self._apply_diversity(results, limit)
+
+        return results[:limit]
 
     def smart_search(
         self,
@@ -713,9 +795,12 @@ class HybridSearch:
         k: int = 60,
     ) -> list[SearchResult]:
         """
-        Merge results using Reciprocal Rank Fusion.
+        Merge results using Reciprocal Rank Fusion with type diversity.
 
-        RRF score = sum(weight / (k + rank))
+        RRF score = sum(weight / (k + rank)) * type_boost
+
+        Type diversity ensures that high-value types (procedural, decision, etc.)
+        aren't drowned out by the volume of indexed code memories.
         """
         scores: dict[str, float] = {}
         memories: dict[str, Memory] = {}
@@ -743,14 +828,41 @@ class HybridSearch:
                 sources[memory_id] = set()
             sources[memory_id].add("rag")
 
-        # Sort by combined score
-        sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+        # Apply type boosting for high-value types
+        for memory_id, memory in memories.items():
+            if memory.type in self.HIGH_VALUE_TYPES:
+                scores[memory_id] *= self.TYPE_BOOST_FACTOR
+
+        # Build results with diversity guarantee
+        # Reserve slots for non-code types to prevent code memory dominance
+        diversity_slots = int(limit * self.DIVERSITY_RATIO)
+        regular_slots = limit - diversity_slots
+
+        # Separate results by type category
+        non_code_ids = [mid for mid in scores if memories[mid].type != MemoryType.CODE]
+        code_ids = [mid for mid in scores if memories[mid].type == MemoryType.CODE]
+
+        # Sort each group by score
+        non_code_ids.sort(key=lambda x: scores[x], reverse=True)
+        code_ids.sort(key=lambda x: scores[x], reverse=True)
+
+        # Fill diversity slots with non-code (up to available)
+        final_ids = non_code_ids[:diversity_slots]
+        remaining_non_code = non_code_ids[diversity_slots:]
+
+        # Fill remaining slots with best of all remaining (code + remaining non-code)
+        remaining_all = remaining_non_code + code_ids
+        remaining_all.sort(key=lambda x: scores[x], reverse=True)
+        final_ids.extend(remaining_all[:regular_slots])
+
+        # Re-sort final results by score for presentation
+        final_ids.sort(key=lambda x: scores[x], reverse=True)
 
         # Build final results
         results = []
-        for memory_id in sorted_ids[:limit]:
+        max_score = (fts_weight + rag_weight) / (k + 1) * self.TYPE_BOOST_FACTOR
+        for memory_id in final_ids[:limit]:
             # Normalize score to 0-1
-            max_score = (fts_weight + rag_weight) / (k + 1)
             normalized_score = min(1.0, scores[memory_id] / max_score)
 
             # Determine source label
