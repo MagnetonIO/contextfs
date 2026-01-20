@@ -1,7 +1,11 @@
 """Stripe Webhook Tests.
 
 Tests for /api/billing/webhook endpoint handling Stripe events.
-These tests require the service API to be available (PostgreSQL, etc.).
+These tests require the service API to be available (PostgreSQL, asyncpg, etc.).
+
+NOTE: These tests are skipped in CI because they require a full service setup
+with PostgreSQL and proper module structure. They are designed for local
+development testing only.
 """
 
 import hashlib
@@ -13,6 +17,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+
+# Skip entire module if asyncpg not available (CI environment)
+pytest.importorskip("asyncpg", reason="asyncpg required for service tests")
 
 # Check if we can import service dependencies
 try:
@@ -26,6 +33,12 @@ except ImportError:
     app = None
     AsyncClient = None
     ASGITransport = None
+
+# Skip all tests in this module if service is not available
+pytestmark = pytest.mark.skipif(
+    not SERVICE_AVAILABLE,
+    reason="Service dependencies not available",
+)
 
 
 # =============================================================================

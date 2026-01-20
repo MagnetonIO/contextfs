@@ -1,7 +1,11 @@
 """Sync Protocol API Tests.
 
 Tests for /api/sync/* endpoints including push, pull, diff, and device registration.
-These tests require the service API to be available (PostgreSQL, etc.).
+These tests require the service API to be available (PostgreSQL, asyncpg, etc.).
+
+NOTE: These tests are skipped in CI because they require a full service setup
+with PostgreSQL and proper module structure. They are designed for local
+development testing only.
 """
 
 import os
@@ -11,10 +15,14 @@ from uuid import uuid4
 
 import pytest
 
+# Skip entire module if asyncpg not available (CI environment)
+pytest.importorskip("asyncpg", reason="asyncpg required for service tests")
+
 # Check if we can import service dependencies
 try:
     from httpx import ASGITransport, AsyncClient
 
+    from service.api.auth import get_current_user  # noqa: F401 - verify it exists
     from service.api.main import app
 
     SERVICE_AVAILABLE = True
@@ -23,6 +31,12 @@ except ImportError:
     app = None
     AsyncClient = None
     ASGITransport = None
+
+# Skip all tests in this module if service is not available
+pytestmark = pytest.mark.skipif(
+    not SERVICE_AVAILABLE,
+    reason="Service dependencies not available",
+)
 
 
 # =============================================================================
