@@ -196,7 +196,7 @@ jobs:
           done
 
       - name: Run tests with coverage
-        run: pytest tests/unit tests/integration -v --cov=src/contextfs --cov-report=xml --cov-report=term -m "not slow"
+        run: pytest tests/unit tests/integration -v --cov=src/contextfs --cov-branch --cov-report=xml --cov-report=term -m "not slow"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
