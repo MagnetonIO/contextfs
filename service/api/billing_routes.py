@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextfs.auth.api_keys import APIKey, User
 from service.api.auth_middleware import require_auth
-from service.db.models import Device, SubscriptionModel, SyncedMemoryModel
+from service.db.models import Device, SubscriptionModel, SyncedMemoryModel, UserModel
 from service.db.session import get_session_dependency
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
@@ -339,6 +339,24 @@ async def stripe_webhook(
                 session.add(sub)
 
             await session.commit()
+
+            # Send payment notification
+            try:
+                from service.email_service import send_payment_notification
+
+                # Get user info for notification
+                user_result = await session.execute(
+                    select(UserModel).where(UserModel.id == user_id)
+                )
+                user = user_result.scalar_one_or_none()
+                if user:
+                    await send_payment_notification(
+                        user_email=user.email,
+                        user_name=user.name,
+                        tier=tier,
+                    )
+            except Exception as e:
+                print(f"Failed to send payment notification: {e}")
 
     elif event["type"] == "customer.subscription.deleted":
         subscription = event["data"]["object"]

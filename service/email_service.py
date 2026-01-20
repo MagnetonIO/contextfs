@@ -313,3 +313,159 @@ https://contextfs.ai
         html_content=html_content,
         text_content=text_content,
     )
+
+
+# =============================================================================
+# Admin Notification Emails
+# =============================================================================
+
+
+async def send_new_user_notification(
+    user_email: str,
+    user_name: str | None,
+    provider: str,
+) -> bool:
+    """Send notification to support when a new user signs up.
+
+    Args:
+        user_email: New user's email address
+        user_name: New user's name (or None)
+        provider: Auth provider (google, github, etc.)
+
+    Returns:
+        True if sent successfully
+    """
+    name = user_name or "Unknown"
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>New User Signup - ContextFS</title>
+</head>
+<body style="margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f4f4f5;">
+    <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        <h2 style="color: #8b5cf6; margin: 0 0 20px 0;">New User Signup</h2>
+
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <td style="padding: 8px 0; color: #71717a; width: 120px;">Email:</td>
+                <td style="padding: 8px 0; color: #18181b; font-weight: 500;">{user_email}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0; color: #71717a;">Name:</td>
+                <td style="padding: 8px 0; color: #18181b;">{name}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0; color: #71717a;">Provider:</td>
+                <td style="padding: 8px 0; color: #18181b;">{provider}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0; color: #71717a;">Time:</td>
+                <td style="padding: 8px 0; color: #18181b;">{timestamp}</td>
+            </tr>
+        </table>
+
+        <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e4e4e7; color: #71717a; font-size: 12px;">
+            ContextFS Admin Notification
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+    text_content = f"""
+New User Signup - ContextFS
+
+Email: {user_email}
+Name: {name}
+Provider: {provider}
+Time: {timestamp}
+"""
+
+    return await send_email(
+        to_email="support@contextfs.ai",
+        subject=f"New User Signup: {user_email}",
+        html_content=html_content,
+        text_content=text_content,
+    )
+
+
+async def send_payment_notification(
+    user_email: str,
+    user_name: str | None,
+    tier: str,
+    amount: str | None = None,
+) -> bool:
+    """Send notification to billing when a user makes a payment.
+
+    Args:
+        user_email: User's email address
+        user_name: User's name (or None)
+        tier: Subscription tier (pro, team)
+        amount: Payment amount (optional)
+
+    Returns:
+        True if sent successfully
+    """
+    name = user_name or "Unknown"
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    tier_display = tier.title()
+
+    html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>New Payment - ContextFS</title>
+</head>
+<body style="margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f4f4f5;">
+    <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        <h2 style="color: #10b981; margin: 0 0 20px 0;">New Payment Received</h2>
+
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <td style="padding: 8px 0; color: #71717a; width: 120px;">Email:</td>
+                <td style="padding: 8px 0; color: #18181b; font-weight: 500;">{user_email}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0; color: #71717a;">Name:</td>
+                <td style="padding: 8px 0; color: #18181b;">{name}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0; color: #71717a;">Plan:</td>
+                <td style="padding: 8px 0; color: #18181b; font-weight: 600;">{tier_display}</td>
+            </tr>
+            {f'<tr><td style="padding: 8px 0; color: #71717a;">Amount:</td><td style="padding: 8px 0; color: #18181b;">{amount}</td></tr>' if amount else ''}
+            <tr>
+                <td style="padding: 8px 0; color: #71717a;">Time:</td>
+                <td style="padding: 8px 0; color: #18181b;">{timestamp}</td>
+            </tr>
+        </table>
+
+        <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e4e4e7; color: #71717a; font-size: 12px;">
+            ContextFS Billing Notification
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+    text_content = f"""
+New Payment Received - ContextFS
+
+Email: {user_email}
+Name: {name}
+Plan: {tier_display}
+{f'Amount: {amount}' if amount else ''}
+Time: {timestamp}
+"""
+
+    return await send_email(
+        to_email="billing@contextfs.ai",
+        subject=f"New Payment: {user_email} - {tier_display}",
+        html_content=html_content,
+        text_content=text_content,
+    )

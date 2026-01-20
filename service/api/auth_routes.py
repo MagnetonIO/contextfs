@@ -621,7 +621,18 @@ async def oauth_callback(
             detail="Could not retrieve email from OAuth provider",
         )
 
-    user_id, _ = await _get_or_create_user(session, email, name, request.provider, provider_id)
+    user_id, is_new_user = await _get_or_create_user(
+        session, email, name, request.provider, provider_id
+    )
+
+    # Send notification for new signups
+    if is_new_user:
+        try:
+            from service.email_service import send_new_user_notification
+
+            await send_new_user_notification(email, name, request.provider)
+        except Exception as e:
+            print(f"Failed to send new user notification: {e}")
 
     full_key, encryption_salt = await _create_api_key(
         session, user_id, "Default Key", with_encryption=True
@@ -704,7 +715,18 @@ async def oauth_token_exchange(
             detail="Could not retrieve email from OAuth provider",
         )
 
-    user_id, _ = await _get_or_create_user(session, email, name, request.provider, provider_id)
+    user_id, is_new_user = await _get_or_create_user(
+        session, email, name, request.provider, provider_id
+    )
+
+    # Send notification for new signups
+    if is_new_user:
+        try:
+            from service.email_service import send_new_user_notification
+
+            await send_new_user_notification(email, name, request.provider)
+        except Exception as e:
+            print(f"Failed to send new user notification: {e}")
 
     # Delete old OAuth session keys for this user
     await session.execute(
