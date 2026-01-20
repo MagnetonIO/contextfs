@@ -155,6 +155,8 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     needs: [test]
+    permissions:
+      contents: write
 
     services:
       postgres:
