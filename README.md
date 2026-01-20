@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/contextfs)](https://pypi.org/project/contextfs/)
 [![CI](https://github.com/contextfs/contextfs/actions/workflows/ci.yml/badge.svg)](https://github.com/contextfs/contextfs/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/contextfs/contextfs/branch/main/graph/badge.svg)](https://codecov.io/gh/contextfs/contextfs)
+[![Coverage](https://raw.githubusercontent.com/contextfs/contextfs/main/.github/badges/coverage.svg)](https://github.com/contextfs/contextfs/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
