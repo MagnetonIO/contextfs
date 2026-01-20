@@ -22,34 +22,34 @@ classifiers = [
 
 dependencies = [
     # MCP Protocol
-    "mcp>=1.0.0",
+    "mcp>=1.25.0",
 
     # Vector Store & Embeddings
-    "chromadb>=1.0.0",
+    "chromadb>=1.4.0",
     "sentence-transformers>=3.0.0",
 
     # LLM APIs
-    "anthropic>=0.40.0",
+    "anthropic>=0.76.0",
     "openai>=1.50.0",
 
     # Data & Validation
-    "pydantic>=2.10.0",
-    "pydantic-settings>=2.6.0",
+    "pydantic>=2.12.0",
+    "pydantic-settings>=2.7.0",
 
     # Tokenization
     "tiktoken>=0.8.0",
 
     # Web/API
-    "fastapi>=0.115.0",
-    "uvicorn>=0.32.0",
+    "fastapi>=0.128.0",
+    "uvicorn>=0.40.0",
     "sse-starlette>=2.0.0",
 
     # CLI
-    "typer>=0.15.0",
-    "rich>=13.9.0",
+    "typer>=0.21.0",
+    "rich>=14.2.0",
 
     # Git integration
-    "gitpython>=3.1.43",
+    "gitpython>=3.1.46",
 
     # Utilities
     "python-dotenv>=1.0.1",
@@ -58,25 +58,25 @@ dependencies = [
     "jsonschema>=4.23.0",
 
     # Database migrations
-    "alembic>=1.14.0",
+    "alembic>=1.18.0",
 
     # Async SQLite for auth/billing
     "aiosqlite>=0.19.0",
 
     # Encryption for E2EE
-    "cryptography>=42.0.0",
+    "cryptography>=46.0.0",
 
     # Password hashing
     "bcrypt>=4.2.0",
 
     # JWT tokens
-    "pyjwt>=2.9.0",
+    "pyjwt>=2.10.0",
 ]
 
 [project.optional-dependencies]
 web = [
-    "fastapi>=0.115.0",
-    "uvicorn>=0.32.0",
+    "fastapi>=0.128.0",
+    "uvicorn>=0.40.0",
     "websockets>=14.0",
 ]
 postgres = [
@@ -92,19 +92,19 @@ gpu = [
     "fastembed-gpu>=0.4.0",
 ]
 cloud = [
-    "stripe>=8.0.0",
+    "stripe>=14.0.0",
 ]
 all = [
     "contextfs[web,postgres,fast,cloud]",
 ]
 dev = [
-    "pytest>=8.3.0",
+    "pytest>=9.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0.0",
     "mypy>=1.13.0",
-    "ruff>=0.8.0",
+    "ruff>=0.14.0",
     "pre-commit>=4.0.0",
-    "stripe>=8.0.0",  # For API route tests
+    "stripe>=14.0.0",  # For API route tests
 ]
 docs = [
     "mkdocs-material>=9.5.0",
