@@ -26,7 +26,8 @@ dependencies = [
 
     # Vector Store & Embeddings
     "chromadb>=1.4.0",
-    "sentence-transformers>=5.2.0",
+    # FastEmbed for embeddings (ONNX-based, CPU-only, fast)
+    "fastembed>=0.4.0",
 
     # LLM APIs
     "anthropic>=0.76.0",
@@ -83,11 +84,12 @@ postgres = [
     "asyncpg>=0.30.0",
     "psycopg2-binary>=2.9.10",
 ]
-# Fast embedding backend (recommended for large repos)
-fast = [
-    "fastembed>=0.4.0",
+# PyTorch-based embeddings (optional, larger install)
+# Use if fastembed doesn't work for your use case
+torch = [
+    "sentence-transformers>=5.2.0",
 ]
-# GPU acceleration (optional)
+# GPU acceleration for fastembed (optional)
 gpu = [
     "fastembed-gpu>=0.4.0",
 ]
@@ -95,7 +97,7 @@ cloud = [
     "stripe>=14.0.0",
 ]
 all = [
-    "contextfs[web,postgres,fast,cloud]",
+    "contextfs[web,postgres,cloud]",
 ]
 dev = [
     "pytest>=9.0.0",
