@@ -11,7 +11,12 @@ console = Console()
 
 def get_ctx() -> ContextFS:
     """Get ContextFS instance."""
-    return ContextFS(auto_load=True)
+    import os
+
+    # Disable auto-index in test mode (much faster)
+    auto_index = os.environ.get("CONTEXTFS_TEST_MODE", "").lower() != "true"
+
+    return ContextFS(auto_load=True, auto_index=auto_index)
 
 
 def find_git_root(start_path: Path) -> Path | None:

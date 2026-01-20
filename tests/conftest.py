@@ -13,6 +13,26 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
+@pytest.fixture(autouse=True)
+def reset_config_and_env(monkeypatch):
+    """Reset config cache and use embedded ChromaDB for tests."""
+    from contextfs.config import reset_config
+
+    # Reset config cache so new env vars are picked up
+    reset_config()
+
+    # DELETE env vars so tests use embedded ChromaDB (chroma_host=None)
+    # This ensures tests don't connect to local dev server at localhost:8000
+    monkeypatch.delenv("CONTEXTFS_CHROMA_HOST", raising=False)
+    monkeypatch.delenv("CONTEXTFS_CHROMA_AUTO_SERVER", raising=False)
+
+    # Enable test mode to disable auto-indexing (much faster tests)
+    monkeypatch.setenv("CONTEXTFS_TEST_MODE", "true")
+
+    yield
+    reset_config()
+
+
 @pytest.fixture
 def temp_dir() -> Generator[Path, None, None]:
     """Create a temporary directory for tests."""

@@ -2568,4 +2568,16 @@ class ContextFS:
         """Clean shutdown."""
         if self._current_session:
             self.end_session()
-        self.rag.close()
+        if self._fts:
+            self._fts.close()
+        if self.rag:
+            self.rag.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensure cleanup."""
+        self.close()
+        return False

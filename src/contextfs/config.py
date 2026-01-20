@@ -303,3 +303,9 @@ def set_config(config: Config) -> None:
     """Set global config instance."""
     global _config
     _config = config
+
+
+def reset_config() -> None:
+    """Reset global config instance (useful for tests)."""
+    global _config
+    _config = None

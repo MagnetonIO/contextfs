@@ -630,11 +630,14 @@ class RAGBackend:
         }
 
     def close(self) -> None:
-        """Close the backend."""
+        """Close the backend and release resources."""
+        # Release the lock file descriptor
+        if self._lock:
+            self._lock.release()
         # ChromaDB handles cleanup automatically
         self._client = None
         self._collection = None
-        self._embedding_model = None
+        self._embedder = None
 
     def reset_database(self) -> bool:
         """

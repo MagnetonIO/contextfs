@@ -19,6 +19,9 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 logger = logging.getLogger(__name__)
 
+# Global cache for embedding models (expensive to load)
+_embedder_cache: dict[str, "BaseEmbedder"] = {}
+
 
 class EmbeddingBackend(Enum):
     """Available embedding backends."""
@@ -313,6 +316,7 @@ def create_embedder(
     backend: EmbeddingBackend | str = EmbeddingBackend.AUTO,
     use_gpu: bool = False,
     parallel: int | None = None,
+    use_cache: bool = True,
 ) -> BaseEmbedder:
     """
     Create an embedder with the specified backend.
@@ -322,6 +326,7 @@ def create_embedder(
         backend: Backend to use (fastembed, sentence_transformers, or auto)
         use_gpu: Enable GPU acceleration
         parallel: Number of parallel workers (FastEmbed only)
+        use_cache: Use cached embedder if available (default True)
 
     Returns:
         Configured embedder instance
@@ -340,17 +345,33 @@ def create_embedder(
             backend = EmbeddingBackend.SENTENCE_TRANSFORMERS
             logger.info("Auto-selected SentenceTransformers backend (FastEmbed not available)")
 
+    # Create cache key
+    cache_key = f"{backend.value}:{model_name}:{use_gpu}"
+
+    # Return cached embedder if available
+    if use_cache and cache_key in _embedder_cache:
+        logger.debug(f"Using cached embedder: {cache_key}")
+        return _embedder_cache[cache_key]
+
+    # Create new embedder
     if backend == EmbeddingBackend.FASTEMBED:
-        return FastEmbedder(
+        embedder = FastEmbedder(
             model_name=model_name,
             use_gpu=use_gpu,
             parallel=parallel,
         )
     else:
-        return SentenceTransformersEmbedder(
+        embedder = SentenceTransformersEmbedder(
             model_name=model_name,
             use_gpu=use_gpu,
         )
+
+    # Cache it
+    if use_cache:
+        _embedder_cache[cache_key] = embedder
+        logger.debug(f"Cached new embedder: {cache_key}")
+
+    return embedder
 
 
 def check_gpu_available() -> dict:
