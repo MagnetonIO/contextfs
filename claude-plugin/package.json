@@ -14,13 +14,13 @@
   ],
   "author": "Matthew Long <matthew@yonedaai.com>",
   "license": "MIT",
-  "homepage": "https://github.com/magneticion/contextfs",
+  "homepage": "https://github.com/contextfs/contextfs",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/magneticion/contextfs.git"
+    "url": "git+https://github.com/contextfs/contextfs.git"
   },
   "bugs": {
-    "url": "https://github.com/magneticion/contextfs/issues"
+    "url": "https://github.com/contextfs/contextfs/issues"
   },
   "files": [
     "skills/**/*",
