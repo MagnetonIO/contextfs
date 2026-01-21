@@ -34,7 +34,7 @@ Graph Example:
     merged = lineage.merge(["mem1", "mem2"], strategy="union")
 """
 
-__version__ = "0.2.29"
+__version__ = "0.2.31"
 
 from contextfs.core import ContextFS
 from contextfs.memory_lineage import ConflictResolution, MemoryLineage, MergeStrategy
