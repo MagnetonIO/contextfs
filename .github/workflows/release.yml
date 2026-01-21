@@ -103,6 +103,7 @@ jobs:
     name: Publish to NPM
     runs-on: ubuntu-latest
     needs: [build, test]
+    environment: release
     steps:
       - uses: actions/checkout@v6
 
