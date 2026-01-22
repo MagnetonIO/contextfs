@@ -1,9 +1,40 @@
 #!/bin/bash
 set -e
 
-# ContextFS Release Script (Non-Interactive)
+# ContextFS Release Script (GitFlow)
 # Usage: ./scripts/release.sh <version>
 # Example: ./scripts/release.sh 0.1.6
+#
+# This script follows gitflow with protected main branch:
+# 1. Updates versions on develop
+# 2. Creates PR from develop to main
+# 3. After PR is merged, creates and pushes tag
+
+# Handle --tag option for creating tag after PR merge
+if [ "$1" = "--tag" ]; then
+    VERSION=$2
+    if [ -z "$VERSION" ]; then
+        echo "Usage: $0 --tag <version>"
+        exit 1
+    fi
+    TAG="v$VERSION"
+
+    echo "Creating tag $TAG after PR merge..."
+    git checkout main
+    git pull origin main
+    git tag "$TAG"
+    git push origin "$TAG"
+
+    echo ""
+    echo "✓ Tag $TAG pushed!"
+    echo ""
+    echo "GitHub Actions will automatically:"
+    echo "  • Publish CLI to PyPI"
+    echo "  • Publish plugin to npm (with provenance)"
+    echo "  • Create GitHub release"
+    echo "  • Send Slack notification"
+    exit 0
+fi
 
 VERSION=$1
 
@@ -40,6 +71,18 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
     exit 1
 fi
 
+# Ensure we're on develop branch
+CURRENT_BRANCH=$(git branch --show-current)
+if [ "$CURRENT_BRANCH" != "develop" ]; then
+    echo "Switching to develop branch..."
+    git checkout develop
+fi
+
+# Pull latest from main to ensure develop is up to date
+echo "Syncing develop with main..."
+git pull origin main --no-edit 2>/dev/null || git merge origin/main --no-edit
+
+echo ""
 echo "Releasing version $VERSION..."
 echo ""
 
@@ -71,21 +114,50 @@ git add pyproject.toml src/contextfs/__init__.py claude-plugin/package.json clau
 git commit -m "Bump version to $VERSION"
 echo "✓ Committed version bump (CLI + plugin)"
 
-# Create tag
-git tag "$TAG"
-echo "✓ Created tag $TAG"
+# Push to develop
+git push origin develop
+echo "✓ Pushed to develop"
 
-# Push to remote
-git push origin main
-git push origin "$TAG"
-echo "✓ Pushed to remote"
-
+# Create PR from develop to main
 echo ""
-echo "GitHub Actions will automatically:"
-echo "  • Publish CLI to PyPI"
-echo "  • Publish plugin to npm"
-echo "  • Create GitHub release"
-echo "  • Send Slack notification"
+echo "Creating PR from develop to main..."
+PR_URL=$(gh pr create --base main --head develop \
+    --title "Release v$VERSION" \
+    --body "## Release v$VERSION
 
+### What's Changed
+$(python scripts/generate_changelog.py --format markdown 2>/dev/null || echo 'See commit history')
+
+---
+*After merging, run \`./scripts/release.sh --tag $VERSION\` to create and push the tag.*" 2>&1)
+
+echo "✓ Created PR: $PR_URL"
 echo ""
-echo "Done! Version $VERSION released (CLI + plugin)."
+echo "Next steps:"
+echo "  1. Review and merge the PR: $PR_URL"
+echo "  2. After merge, run: ./scripts/release.sh --tag $VERSION"
+echo ""
+echo "Or merge now and tag automatically:"
+read -p "Merge PR and create tag now? [y/N] " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "Merging PR..."
+    gh pr merge --merge --delete-branch
+
+    echo "Pulling main..."
+    git checkout main
+    git pull origin main
+
+    echo "Creating and pushing tag..."
+    git tag "$TAG"
+    git push origin "$TAG"
+
+    echo ""
+    echo "✓ Released v$VERSION!"
+    echo ""
+    echo "GitHub Actions will automatically:"
+    echo "  • Publish CLI to PyPI"
+    echo "  • Publish plugin to npm (with provenance)"
+    echo "  • Create GitHub release"
+    echo "  • Send Slack notification"
+fi
