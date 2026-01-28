@@ -1,7 +1,7 @@
 """Tests for authentication race condition fixes.
 
 Tests the atomic upsert for _get_or_create_user and atomic session
-key replacement in _replace_session_key.
+key creation with limits in _create_session_key.
 """
 
 import sys
@@ -81,22 +81,26 @@ class TestGetOrCreateUserAtomic:
         assert not is_new or (datetime.now(timezone.utc) - past_time).total_seconds() < 1
 
 
-class TestReplaceSessionKey:
-    """Tests for atomic session key replacement."""
+class TestCreateSessionKey:
+    """Tests for atomic session key creation with limits."""
 
     @pytest.mark.asyncio
-    async def test_replace_session_key_uses_for_update(self):
-        """Test that _replace_session_key uses SELECT FOR UPDATE for locking."""
-        from service.api.auth_routes import _replace_session_key
+    async def test_create_session_key_uses_for_update(self):
+        """Test that _create_session_key uses SELECT FOR UPDATE for locking."""
+        from service.api.auth_routes import _create_session_key
 
         mock_session = AsyncMock()
         user_id = str(uuid4())
 
-        # Mock execute to succeed
-        mock_session.execute = AsyncMock()
+        # Mock count result (0 existing sessions)
+        mock_count_result = MagicMock()
+        mock_count_result.scalar.return_value = 0
+
+        # Mock execute to succeed - returns count result for first call
+        mock_session.execute = AsyncMock(return_value=mock_count_result)
         mock_session.add = MagicMock()
 
-        full_key, salt = await _replace_session_key(
+        full_key, salt = await _create_session_key(
             mock_session, user_id, "OAuth Session", with_encryption=True
         )
 
@@ -106,24 +110,111 @@ class TestReplaceSessionKey:
         assert salt is not None
 
         # Verify session operations
-        assert mock_session.execute.call_count >= 2  # SELECT FOR UPDATE + DELETE
+        assert mock_session.execute.call_count >= 2  # SELECT FOR UPDATE + COUNT
         assert mock_session.add.called
         assert mock_session.commit.called
 
     @pytest.mark.asyncio
-    async def test_replace_session_key_without_encryption(self):
-        """Test session key replacement without encryption."""
-        from service.api.auth_routes import _replace_session_key
+    async def test_create_session_key_without_encryption(self):
+        """Test session key creation without encryption."""
+        from service.api.auth_routes import _create_session_key
 
         mock_session = AsyncMock()
         user_id = str(uuid4())
 
-        full_key, salt = await _replace_session_key(
+        # Mock count result (0 existing sessions)
+        mock_count_result = MagicMock()
+        mock_count_result.scalar.return_value = 0
+
+        mock_session.execute = AsyncMock(return_value=mock_count_result)
+
+        full_key, salt = await _create_session_key(
             mock_session, user_id, "CLI Session", with_encryption=False
         )
 
         assert full_key is not None
         assert salt is None  # No encryption salt when disabled
+
+    @pytest.mark.asyncio
+    async def test_create_session_key_enforces_limit(self):
+        """Test that _create_session_key enforces session limits."""
+        from service.api.auth_routes import _create_session_key
+
+        mock_session = AsyncMock()
+        user_id = str(uuid4())
+
+        # Mock count result showing 3 existing sessions (at limit)
+        mock_count_result = MagicMock()
+        mock_count_result.scalar.return_value = 3
+
+        # Mock oldest keys query
+        mock_oldest_result = MagicMock()
+        mock_oldest_result.fetchall.return_value = [(str(uuid4()),)]
+
+        # Return different results for different queries
+        call_count = 0
+
+        async def mock_execute(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call: SELECT FOR UPDATE
+                return MagicMock()
+            elif call_count == 2:
+                # Second call: COUNT
+                return mock_count_result
+            elif call_count == 3:
+                # Third call: SELECT oldest keys
+                return mock_oldest_result
+            else:
+                # Fourth call: DELETE
+                return MagicMock()
+
+        mock_session.execute = mock_execute
+        mock_session.add = MagicMock()
+
+        full_key, salt = await _create_session_key(
+            mock_session, user_id, "OAuth Session", with_encryption=True, max_sessions=3
+        )
+
+        # Verify key was generated
+        assert full_key is not None
+        assert full_key.startswith("ctxfs_")
+
+        # Verify delete was called (limit enforcement)
+        assert call_count >= 4  # FOR UPDATE, COUNT, SELECT oldest, DELETE
+
+    @pytest.mark.asyncio
+    async def test_create_session_key_no_delete_under_limit(self):
+        """Test that _create_session_key doesn't delete when under limit."""
+        from service.api.auth_routes import _create_session_key
+
+        mock_session = AsyncMock()
+        user_id = str(uuid4())
+
+        # Mock count result showing 2 existing sessions (under limit of 10)
+        mock_count_result = MagicMock()
+        mock_count_result.scalar.return_value = 2
+
+        call_count = 0
+
+        async def mock_execute(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                return mock_count_result
+            return MagicMock()
+
+        mock_session.execute = mock_execute
+        mock_session.add = MagicMock()
+
+        full_key, salt = await _create_session_key(
+            mock_session, user_id, "OAuth Session", with_encryption=True
+        )
+
+        assert full_key is not None
+        # Should only be 2 calls: FOR UPDATE and COUNT (no DELETE since under limit)
+        assert call_count == 2
 
 
 class TestRetryDecorator:

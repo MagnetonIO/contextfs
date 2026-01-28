@@ -16,7 +16,7 @@ from uuid import uuid4
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,9 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # API server URL - used in config snippets
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.contextfs.ai")
+
+# Default session limit (configurable via env)
+MAX_SESSION_LIMIT = int(os.environ.get("CONTEXTFS_MAX_SESSIONS", "10"))
 
 
 # =============================================================================
@@ -218,16 +221,17 @@ async def _create_api_key(
     return full_key, encryption_salt
 
 
-async def _replace_session_key(
+async def _create_session_key(
     session: AsyncSession,
     user_id: str,
     session_type: str,
     with_encryption: bool = True,
+    max_sessions: int = MAX_SESSION_LIMIT,
 ) -> tuple[str, str | None]:
-    """Atomically replace session key using row-level locking.
+    """Create a new session key, enforcing session limits.
 
-    This prevents race conditions where concurrent logins delete
-    each other's newly created keys.
+    If user has >= max_sessions of this type, deletes the oldest
+    (least recently used) session(s) to make room.
 
     Uses SELECT ... FOR UPDATE to serialize concurrent session operations
     for the same user.
@@ -237,14 +241,38 @@ async def _replace_session_key(
     # Lock user row to serialize concurrent session operations
     await session.execute(select(UserModel).where(UserModel.id == user_id).with_for_update())
 
-    # Delete old keys and create new one atomically (within locked context)
-    await session.execute(
-        delete(APIKeyModel).where(
+    # Count existing sessions of this type
+    count_result = await session.execute(
+        select(func.count())
+        .select_from(APIKeyModel)
+        .where(
             APIKeyModel.user_id == user_id,
             APIKeyModel.name == session_type,
+            APIKeyModel.is_active == True,  # noqa: E712
         )
     )
+    current_count = count_result.scalar() or 0
 
+    # If at or over limit, delete oldest session(s) to make room for new one
+    if current_count >= max_sessions:
+        # Find oldest sessions to delete (LRU policy)
+        sessions_to_delete = current_count - max_sessions + 1  # Delete enough to fit new one
+        oldest_keys = await session.execute(
+            select(APIKeyModel.id)
+            .where(
+                APIKeyModel.user_id == user_id,
+                APIKeyModel.name == session_type,
+                APIKeyModel.is_active == True,  # noqa: E712
+            )
+            .order_by(APIKeyModel.last_used_at.asc().nullsfirst())
+            .limit(sessions_to_delete)
+        )
+        old_key_ids = [row[0] for row in oldest_keys.fetchall()]
+
+        if old_key_ids:
+            await session.execute(delete(APIKeyModel).where(APIKeyModel.id.in_(old_key_ids)))
+
+    # Create new session key
     full_key, key_prefix = generate_api_key()
     key_hash = hash_api_key(full_key)
 
@@ -373,9 +401,9 @@ async def login(
             detail="Invalid email or password",
         )
 
-    # Atomically replace session key (E2EE controlled by env var)
+    # Create session key with limit enforcement (E2EE controlled by env var)
     e2ee_enabled = os.environ.get("CONTEXTFS_E2EE_ENABLED", "false").lower() == "true"
-    full_key, encryption_salt = await _replace_session_key(
+    full_key, encryption_salt = await _create_session_key(
         session, user.id, request.session_type, with_encryption=e2ee_enabled
     )
 
@@ -489,11 +517,13 @@ async def list_api_keys(
     """List all API keys for the current user."""
     user, _ = auth
 
+    # Filter out session keys - these are auto-managed login sessions, not user-managed API keys
+    session_key_names = ["Login Session", "OAuth Session", "Web Session", "CLI Session"]
     result = await session.execute(
         select(APIKeyModel)
         .where(
             APIKeyModel.user_id == user.id,
-            APIKeyModel.name.notin_(["Login Session", "OAuth Session"]),
+            APIKeyModel.name.notin_(session_key_names),
         )
         .order_by(APIKeyModel.created_at.desc())
     )
@@ -721,8 +751,8 @@ async def oauth_callback(
         except Exception as e:
             print(f"Failed to send new user notification: {e}")
 
-    # Atomically replace OAuth session key
-    full_key, encryption_salt = await _replace_session_key(
+    # Create OAuth session key with limit enforcement
+    full_key, encryption_salt = await _create_session_key(
         session, user_id, "OAuth Session", with_encryption=True
     )
 
@@ -816,8 +846,8 @@ async def oauth_token_exchange(
         except Exception as e:
             print(f"Failed to send new user notification: {e}")
 
-    # Atomically replace OAuth session key
-    full_key, encryption_salt = await _replace_session_key(
+    # Create OAuth session key with limit enforcement
+    full_key, encryption_salt = await _create_session_key(
         session, user_id, "OAuth Session", with_encryption=True
     )
 
