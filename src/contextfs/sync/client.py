@@ -520,6 +520,7 @@ class SyncClient:
                     # Include embedding for sync to server
                     embedding=memory_embeddings.get(m.id),
                     encrypted=is_encrypted,
+                    visibility=getattr(m, "visibility", "team_read"),
                 )
             )
 
@@ -1545,6 +1546,7 @@ class SyncClient:
                     metadata=m.metadata,
                     embedding=memory_embeddings.get(m.id),
                     encrypted=is_encrypted,
+                    visibility=getattr(m, "visibility", "team_read"),
                 )
             )
 

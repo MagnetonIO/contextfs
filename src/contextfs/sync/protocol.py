@@ -131,6 +131,9 @@ class SyncedMemory(SyncableEntity):
     # E2EE encryption flag (content is encrypted with client key)
     encrypted: bool = False
 
+    # Team visibility (server uses this as a hint; overrides based on team membership)
+    visibility: str = "team_read"
+
 
 # =============================================================================
 # Synced Session
