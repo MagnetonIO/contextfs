@@ -84,8 +84,11 @@ async def search_memories(
 
     # Build ownership filter based on scope
     if scope == "mine":
-        # Only user's own memories
-        ownership_filter = Memory.user_id == user_id
+        # Only user's own memories (including orphaned pre-multi-tenant records)
+        ownership_filter = or_(
+            Memory.user_id == user_id,
+            Memory.user_id.is_(None),
+        )
     elif scope == "team":
         # Only team-shared memories (not own)
         if not user_team_ids:
@@ -97,8 +100,11 @@ async def search_memories(
             Memory.user_id != user_id,  # Exclude own memories
         )
     else:
-        # All: own + team-shared
-        ownership_conditions = [Memory.user_id == user_id]
+        # All: own + team-shared (including orphaned pre-multi-tenant records)
+        ownership_conditions = [
+            Memory.user_id == user_id,
+            Memory.user_id.is_(None),  # Orphaned pre-multi-tenant records
+        ]
         if user_team_ids:
             ownership_conditions.append(
                 and_(
@@ -189,11 +195,14 @@ async def get_memory_stats(
     user, _ = auth
     user_id = user.id
 
+    # Ownership filter: own memories + orphaned pre-multi-tenant records
+    ownership_filter = or_(Memory.user_id == user_id, Memory.user_id.is_(None))
+
     # Total count for this user
     total_result = await session.execute(
         select(func.count(Memory.id)).where(
             Memory.deleted_at.is_(None),
-            Memory.user_id == user_id,
+            ownership_filter,
         )
     )
     total = total_result.scalar() or 0
@@ -201,7 +210,7 @@ async def get_memory_stats(
     # Count by type
     type_result = await session.execute(
         select(Memory.type, func.count(Memory.id))
-        .where(Memory.deleted_at.is_(None), Memory.user_id == user_id)
+        .where(Memory.deleted_at.is_(None), ownership_filter)
         .group_by(Memory.type)
     )
     by_type = {row[0]: row[1] for row in type_result.all()}
@@ -209,7 +218,7 @@ async def get_memory_stats(
     # Count by namespace (top 10)
     ns_result = await session.execute(
         select(Memory.namespace_id, func.count(Memory.id))
-        .where(Memory.deleted_at.is_(None), Memory.user_id == user_id)
+        .where(Memory.deleted_at.is_(None), ownership_filter)
         .group_by(Memory.namespace_id)
         .order_by(func.count(Memory.id).desc())
         .limit(10)
@@ -237,7 +246,10 @@ async def get_memory(
     user_team_ids = await _get_user_team_ids(session, user_id)
 
     # SECURITY: Allow access to own memories OR team-shared memories
-    ownership_conditions = [Memory.user_id == user_id]
+    ownership_conditions = [
+        Memory.user_id == user_id,
+        Memory.user_id.is_(None),  # Orphaned pre-multi-tenant records
+    ]
     if user_team_ids:
         ownership_conditions.append(
             and_(
@@ -318,7 +330,10 @@ async def get_memory_lineage(
     user_team_ids = await _get_user_team_ids(session, user_id)
 
     # Allow access to own memories OR team-shared memories
-    ownership_conditions = [Memory.user_id == user_id]
+    ownership_conditions = [
+        Memory.user_id == user_id,
+        Memory.user_id.is_(None),  # Orphaned pre-multi-tenant records
+    ]
     if user_team_ids:
         ownership_conditions.append(
             and_(
