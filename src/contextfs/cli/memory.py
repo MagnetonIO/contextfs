@@ -1112,3 +1112,52 @@ def test_extraction(
     for ext in extractions:
         console.print(f"\n[cyan]{ext['type']}[/cyan] (pattern: {ext['pattern']})")
         console.print(ext["content"])
+
+
+@memory_app.command("cleanup-edges")
+def cleanup_edges(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show count of orphaned edges without removing"
+    ),
+    confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+):
+    """Remove orphaned edges that reference non-existent memories.
+
+    Cleans up edges in the memory_edges table where either the
+    source or target memory no longer exists.
+
+    Examples:
+        contextfs memory cleanup-edges --dry-run    # Preview count
+        contextfs memory cleanup-edges -y           # Remove without confirmation
+    """
+    ctx = get_ctx()
+
+    if dry_run:
+        # Count orphaned edges without deleting
+        import sqlite3
+
+        conn = sqlite3.connect(ctx._db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM memory_edges
+            WHERE from_id NOT IN (SELECT id FROM memories)
+               OR to_id NOT IN (SELECT id FROM memories)
+        """)
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        if count == 0:
+            console.print("[green]No orphaned edges found. All edges are valid.[/green]")
+        else:
+            console.print(f"[yellow]Found {count} orphaned edge(s) that would be removed.[/yellow]")
+        return
+
+    if not confirm and not typer.confirm("Remove all orphaned edges?"):
+        raise typer.Abort()
+
+    count = ctx._storage.cleanup_orphaned_edges()
+
+    if count == 0:
+        console.print("[green]No orphaned edges found. All edges are valid.[/green]")
+    else:
+        console.print(f"[green]Removed {count} orphaned edge(s).[/green]")

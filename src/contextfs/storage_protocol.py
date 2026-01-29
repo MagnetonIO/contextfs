@@ -68,6 +68,10 @@ class EdgeRelation(str, Enum):
     CAUSED_BY = "caused_by"  # Causal dependency
     CAUSES = "causes"  # Inverse of caused_by
 
+    # Resolution relationships
+    RESOLVES = "resolves"  # This memory resolves/fixes another
+    RESOLVED_BY = "resolved_by"  # Inverse: this memory was resolved by another
+
     # Dependency relationships (used by code analysis)
     DEPENDS_ON = "depends_on"  # This depends on another
     IMPLEMENTS = "implements"  # This implements another (interface/protocol)
@@ -92,6 +96,8 @@ class EdgeRelation(str, Enum):
             cls.CONTAINS: cls.PART_OF,
             cls.CAUSED_BY: cls.CAUSES,
             cls.CAUSES: cls.CAUSED_BY,
+            cls.RESOLVES: cls.RESOLVED_BY,
+            cls.RESOLVED_BY: cls.RESOLVES,
             cls.RELATED_TO: cls.RELATED_TO,  # Symmetric
             cls.CONTRADICTS: cls.CONTRADICTS,  # Symmetric
         }

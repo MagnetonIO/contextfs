@@ -1362,7 +1362,7 @@ class ContextFS:
         full_id = row[0]
 
         if hard_delete:
-            # Permanently delete
+            # Permanently delete memory
             cursor.execute("DELETE FROM memories WHERE id = ?", (full_id,))
             deleted = cursor.rowcount > 0
         else:
@@ -1378,6 +1378,12 @@ class ContextFS:
         conn.close()
 
         if deleted:
+            # Clean up edges after releasing the connection to avoid "database is locked"
+            if hard_delete:
+                self._storage._delete_edges_for_memory(full_id)
+            else:
+                self._storage._soft_delete_edges_for_memory(full_id)
+
             self.rag.remove_memory(full_id)
 
         return deleted
@@ -1846,21 +1852,7 @@ class ContextFS:
 
     def _get_inverse_relation(self, relation: EdgeRelation) -> EdgeRelation:
         """Get inverse relation for bidirectional links."""
-        inverses = {
-            EdgeRelation.REFERENCES: EdgeRelation.REFERENCED_BY,
-            EdgeRelation.REFERENCED_BY: EdgeRelation.REFERENCES,
-            EdgeRelation.RELATED_TO: EdgeRelation.RELATED_TO,
-            EdgeRelation.CONTRADICTS: EdgeRelation.CONTRADICTS,
-            EdgeRelation.SUPERSEDES: EdgeRelation.SUPERSEDED_BY,
-            EdgeRelation.SUPERSEDED_BY: EdgeRelation.SUPERSEDES,
-            EdgeRelation.PARENT_OF: EdgeRelation.CHILD_OF,
-            EdgeRelation.CHILD_OF: EdgeRelation.PARENT_OF,
-            EdgeRelation.PART_OF: EdgeRelation.CONTAINS,
-            EdgeRelation.CONTAINS: EdgeRelation.PART_OF,
-            EdgeRelation.CAUSED_BY: EdgeRelation.CAUSES,
-            EdgeRelation.CAUSES: EdgeRelation.CAUSED_BY,
-        }
-        return inverses.get(relation, relation)
+        return EdgeRelation.get_inverse(relation)
 
     def get_related(
         self,
