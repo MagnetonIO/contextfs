@@ -14,13 +14,15 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextfs.auth.api_keys import APIKey, User
 from service.api.auth_middleware import require_auth
 from service.db.models import (
     SubscriptionModel,
+    SyncedMemoryModel,
+    SyncedSessionModel,
     TeamInvitationModel,
     TeamMemberModel,
     TeamModel,
@@ -192,6 +194,34 @@ async def _is_team_member(session: AsyncSession, team_id: str, user_id: str) -> 
     return result.scalar_one_or_none() is not None
 
 
+async def _backfill_team_visibility(session: AsyncSession, team_id: str, user_id: str) -> None:
+    """Tag a user's memories/sessions with team_id and team_read visibility.
+
+    Called when a team is created or a member joins so that existing
+    memories become visible to all team members immediately.
+    """
+    await session.execute(
+        update(SyncedMemoryModel)
+        .where(
+            and_(
+                SyncedMemoryModel.user_id == user_id,
+                SyncedMemoryModel.team_id.is_(None),
+            )
+        )
+        .values(team_id=team_id, visibility="team_read")
+    )
+    await session.execute(
+        update(SyncedSessionModel)
+        .where(
+            and_(
+                SyncedSessionModel.user_id == user_id,
+                SyncedSessionModel.team_id.is_(None),
+            )
+        )
+        .values(team_id=team_id, visibility="team_read")
+    )
+
+
 # =============================================================================
 # Team Routes
 # =============================================================================
@@ -260,6 +290,9 @@ async def create_team(
         subscription.team_id = team_id
         subscription.seats_included = TIER_LIMITS[tier].get("seats_included", 5)
         subscription.seats_used = 1
+
+    # Backfill owner's existing memories with team visibility
+    await _backfill_team_visibility(session, team_id, user.id)
 
     await session.commit()
 
@@ -525,6 +558,18 @@ async def accept_invitation(
     if subscription:
         subscription.seats_used += 1
 
+    # Backfill new member's existing memories with team visibility
+    await _backfill_team_visibility(session, invitation.team_id, user.id)
+
+    # Also backfill ALL existing team members' memories (in case owner
+    # created the team before this backfill code existed)
+    team_members_result = await session.execute(
+        select(TeamMemberModel.user_id).where(TeamMemberModel.team_id == invitation.team_id)
+    )
+    for (member_user_id,) in team_members_result.all():
+        if member_user_id != user.id:
+            await _backfill_team_visibility(session, invitation.team_id, member_user_id)
+
     await session.commit()
 
     return {"status": "joined", "team_id": invitation.team_id}
@@ -636,6 +681,18 @@ async def accept_invitation_by_id(
     subscription = sub_result.scalar_one_or_none()
     if subscription:
         subscription.seats_used += 1
+
+    # Backfill new member's existing memories with team visibility
+    await _backfill_team_visibility(session, invitation.team_id, user.id)
+
+    # Also backfill ALL existing team members' memories (in case owner
+    # created the team before this backfill code existed)
+    team_members_result = await session.execute(
+        select(TeamMemberModel.user_id).where(TeamMemberModel.team_id == invitation.team_id)
+    )
+    for (member_user_id,) in team_members_result.all():
+        if member_user_id != user.id:
+            await _backfill_team_visibility(session, invitation.team_id, member_user_id)
 
     await session.commit()
 
@@ -832,6 +889,35 @@ async def remove_member(
     await session.commit()
 
     return {"status": "removed"}
+
+
+@router.post("/{team_id}/backfill")
+async def backfill_team_memories(
+    team_id: str,
+    auth: tuple[User, APIKey] = Depends(require_auth),
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Backfill team_id and visibility on all members' memories (admin only)."""
+    user, _ = auth
+
+    if not await _is_team_admin(session, team_id, user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only team owners and admins can trigger backfill",
+        )
+
+    # Backfill all team members' memories
+    members_result = await session.execute(
+        select(TeamMemberModel.user_id).where(TeamMemberModel.team_id == team_id)
+    )
+    backfilled = 0
+    for (member_user_id,) in members_result.all():
+        await _backfill_team_visibility(session, team_id, member_user_id)
+        backfilled += 1
+
+    await session.commit()
+
+    return {"status": "backfilled", "members_processed": backfilled}
 
 
 @router.delete("/{team_id}")
