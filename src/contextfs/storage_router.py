@@ -587,12 +587,19 @@ class StorageRouter(StorageBackend):
         """
         Delete a memory from SQLite, ChromaDB, and graph backend.
 
+        Also cleans up all edges (incoming + outgoing) for the memory.
+
         Args:
             memory_id: Memory ID (can be partial)
 
         Returns:
             True if deleted, False if not found
         """
+        # Resolve full ID before cleanup
+        full_id = self._resolve_full_id(memory_id)
+        if full_id:
+            self._delete_edges_for_memory(full_id)
+
         deleted_sqlite = self._delete_from_sqlite(memory_id)
         deleted_chromadb = self._delete_from_chromadb(memory_id)
 
@@ -604,6 +611,82 @@ class StorageRouter(StorageBackend):
                 logger.debug(f"Graph delete failed for {memory_id}: {e}")
 
         return deleted_sqlite or deleted_chromadb
+
+    def _resolve_full_id(self, memory_id: str) -> str | None:
+        """Resolve a partial memory ID to a full ID."""
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT id FROM memories WHERE id LIKE ?", (f"{memory_id}%",))
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def _delete_edges_for_memory(self, memory_id: str) -> int:
+        """Delete all edges (incoming + outgoing) for a memory.
+
+        Args:
+            memory_id: Full memory ID
+
+        Returns:
+            Number of edges deleted
+        """
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "DELETE FROM memory_edges WHERE from_id = ? OR to_id = ?",
+                (memory_id, memory_id),
+            )
+            count = cursor.rowcount
+            conn.commit()
+            return count
+        finally:
+            conn.close()
+
+    def _soft_delete_edges_for_memory(self, memory_id: str) -> int:
+        """Soft-delete all edges for a memory by setting deleted_at.
+
+        Args:
+            memory_id: Full memory ID
+
+        Returns:
+            Number of edges soft-deleted
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE memory_edges SET deleted_at = ? WHERE (from_id = ? OR to_id = ?) AND deleted_at IS NULL",
+                (now, memory_id, memory_id),
+            )
+            count = cursor.rowcount
+            conn.commit()
+            return count
+        finally:
+            conn.close()
+
+    def cleanup_orphaned_edges(self) -> int:
+        """Remove edges that reference non-existent memories.
+
+        Returns:
+            Number of orphaned edges removed
+        """
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                DELETE FROM memory_edges
+                WHERE from_id NOT IN (SELECT id FROM memories)
+                   OR to_id NOT IN (SELECT id FROM memories)
+            """)
+            count = cursor.rowcount
+            conn.commit()
+            return count
+        finally:
+            conn.close()
 
     def _delete_from_sqlite(self, memory_id: str) -> bool:
         """Delete memory from SQLite."""
@@ -1248,6 +1331,7 @@ class StorageRouter(StorageBackend):
         relation: EdgeRelation,
         weight: float = 1.0,
         metadata: dict[str, Any] | None = None,
+        validate: bool = False,
     ) -> MemoryEdge | None:
         """
         Create a relationship between two memories.
@@ -1260,10 +1344,31 @@ class StorageRouter(StorageBackend):
             relation: Type of relationship
             weight: Relationship strength (0.0-1.0)
             metadata: Additional edge properties
+            validate: If True, verify both memory IDs exist before creating edge.
+                      Defaults to False since most callers (core.link, memory_lineage)
+                      already validate via recall(). Set True for untrusted input.
 
         Returns:
-            Created MemoryEdge
+            Created MemoryEdge, or None if validation fails
         """
+        if validate:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM memories WHERE id IN (?, ?)",
+                    (from_id, to_id),
+                )
+                count = cursor.fetchone()[0]
+                if count < 2:
+                    logger.warning(
+                        f"Cannot create edge: one or both memories not found "
+                        f"(from_id={from_id[:8]}, to_id={to_id[:8]})"
+                    )
+                    return None
+            finally:
+                conn.close()
+
         # Always store in SQLite for persistence
         self._save_edge_to_sqlite(
             from_id=from_id,
