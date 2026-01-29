@@ -43,7 +43,7 @@ class SyncedMemoryModel(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True)
 
     # Owner (for multi-tenant isolation)
-    user_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
 
     # Team sharing (for Team tier)
     owner_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
@@ -122,7 +122,7 @@ class SyncedSessionModel(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True)
 
     # Owner (for multi-tenant isolation)
-    user_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
 
     # Team sharing (for Team tier)
     owner_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)

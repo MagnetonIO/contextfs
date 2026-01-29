@@ -331,6 +331,9 @@ async def _process_memory_push(
 
     if server_clock.happens_before(client_clock) or server_clock.equal_to(client_clock):
         # Server is behind or equal - accept update
+        # Claim orphaned memory (pre-multi-tenant records with NULL user_id)
+        if existing.user_id is None:
+            existing.user_id = user_id
         existing.content = memory.content
         existing.type = memory.type
         existing.tags = memory.tags
@@ -357,6 +360,9 @@ async def _process_memory_push(
         # Client is behind - normally reject (stale), but force overrides
         if force:
             # Force update - overwrite server data
+            # Claim orphaned memory (pre-multi-tenant records with NULL user_id)
+            if existing.user_id is None:
+                existing.user_id = user_id
             existing.content = memory.content
             existing.type = memory.type
             existing.tags = memory.tags
@@ -381,6 +387,9 @@ async def _process_memory_push(
         # Concurrent changes - conflict (force also resolves conflicts)
         if force:
             # Force update - overwrite server data
+            # Claim orphaned memory (pre-multi-tenant records with NULL user_id)
+            if existing.user_id is None:
+                existing.user_id = user_id
             existing.content = memory.content
             existing.type = memory.type
             existing.tags = memory.tags
@@ -459,6 +468,9 @@ async def _process_session_push(
     server_clock = VectorClock.from_dict(existing.vector_clock or {})
 
     if server_clock.happens_before(client_clock) or server_clock.equal_to(client_clock):
+        # Claim orphaned session (pre-multi-tenant records with NULL user_id)
+        if existing.user_id is None:
+            existing.user_id = user_id
         existing.label = sess.label
         existing.summary = sess.summary
         existing.ended_at = sess.ended_at
@@ -472,6 +484,9 @@ async def _process_session_push(
 
     elif client_clock.happens_before(server_clock):
         if force:
+            # Claim orphaned session (pre-multi-tenant records with NULL user_id)
+            if existing.user_id is None:
+                existing.user_id = user_id
             existing.label = sess.label
             existing.summary = sess.summary
             existing.ended_at = sess.ended_at
@@ -485,6 +500,9 @@ async def _process_session_push(
 
     else:
         if force:
+            # Claim orphaned session (pre-multi-tenant records with NULL user_id)
+            if existing.user_id is None:
+                existing.user_id = user_id
             existing.label = sess.label
             existing.summary = sess.summary
             existing.ended_at = sess.ended_at
@@ -674,7 +692,10 @@ async def _pull_memories(
 
     # SECURITY: Filter by user_id if authenticated, including team-shared memories
     if user_id:
-        ownership_conditions = [SyncedMemoryModel.user_id == user_id]
+        ownership_conditions = [
+            SyncedMemoryModel.user_id == user_id,
+            SyncedMemoryModel.user_id.is_(None),  # Orphaned pre-multi-tenant records
+        ]
         # Include team-shared memories if user belongs to any teams
         if user_team_ids:
             ownership_conditions.append(
@@ -751,7 +772,10 @@ async def _pull_sessions(
 
     # SECURITY: Filter by user_id if authenticated, including team-shared sessions
     if user_id:
-        ownership_conditions = [SyncedSessionModel.user_id == user_id]
+        ownership_conditions = [
+            SyncedSessionModel.user_id == user_id,
+            SyncedSessionModel.user_id.is_(None),  # Orphaned pre-multi-tenant records
+        ]
         # Include team-shared sessions if user belongs to any teams
         if user_team_ids:
             ownership_conditions.append(
@@ -949,7 +973,10 @@ async def compute_diff(
     memory_conditions = []
     # SECURITY: Filter by user_id and team-shared memories
     if user_id:
-        ownership_conditions = [SyncedMemoryModel.user_id == user_id]
+        ownership_conditions = [
+            SyncedMemoryModel.user_id == user_id,
+            SyncedMemoryModel.user_id.is_(None),  # Orphaned pre-multi-tenant records
+        ]
         if user_team_ids:
             ownership_conditions.append(
                 and_(
@@ -1000,7 +1027,10 @@ async def compute_diff(
     session_conditions = []
     # SECURITY: Filter by user_id and team-shared sessions
     if user_id:
-        ownership_conditions = [SyncedSessionModel.user_id == user_id]
+        ownership_conditions = [
+            SyncedSessionModel.user_id == user_id,
+            SyncedSessionModel.user_id.is_(None),  # Orphaned pre-multi-tenant records
+        ]
         if user_team_ids:
             ownership_conditions.append(
                 and_(
