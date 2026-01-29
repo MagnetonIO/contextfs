@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main]   # Deploy-only jobs (docker); tests already ran on PR
   pull_request:
-    branches: [main]
+    branches: [main]   # Full CI: lint, test, build
 
 env:
   PYTHON_VERSION: "3.11"
@@ -13,6 +13,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v6
 
@@ -35,6 +36,7 @@ jobs:
   typecheck:
     name: Type Check
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     continue-on-error: true  # Non-blocking until types are fixed
     steps:
       - uses: actions/checkout@v6
@@ -55,6 +57,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
 
     services:
       chromadb:
@@ -117,6 +120,7 @@ jobs:
   test-rag:
     name: RAG & Indexing Tests
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     needs: [lint, test]
 
     services:
@@ -154,6 +158,7 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     needs: [test]
 
     services:
@@ -209,6 +214,7 @@ jobs:
   migration-check:
     name: Migration Validation
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v6
 
@@ -262,6 +268,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     needs: [lint, typecheck, test, migration-check]
     steps:
       - uses: actions/checkout@v6
@@ -288,7 +295,6 @@ jobs:
   docker:
     name: Build & Push Docker
     runs-on: ubuntu-latest
-    needs: [lint, test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: actions/checkout@v6
@@ -351,7 +357,7 @@ jobs:
   notify:
     name: Slack Notification
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, test-rag, coverage, migration-check, build]
+    needs: [lint, typecheck, test, test-rag, coverage, migration-check, build, docker]
     if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
     steps:
       - name: Determine status
