@@ -349,6 +349,13 @@ echo "y" | python -m contextfs.cli rebuild-chroma
 # Then reconnect MCP via /mcp command
 ```
 
+### MCP Tool Debugging with Inspector
+When MCP tools return errors or fail silently, use MCP Inspector to test tools directly:
+```bash
+npx @modelcontextprotocol/inspector
+```
+Opens at http://localhost:6274. Connect to the contextfs MCP server, call tools, and view full JSON-RPC request/response including exception details.
+
 ### Testing Best Practices
 - Always use `python -m contextfs.cli` for testing (not `contextfs` or `uv run contextfs`)
 - This ensures you're testing the local code, not an installed version

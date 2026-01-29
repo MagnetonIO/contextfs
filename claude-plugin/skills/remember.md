@@ -2,6 +2,12 @@
 
 Extract and save important information from this conversation to ContextFS long-term memory.
 
+## Tool Priority (MANDATORY)
+
+**ALWAYS use MCP tools for saving memories. Do NOT use CLI commands.**
+
+Use MCP tools (`contextfs_save`, `contextfs_evolve`, `contextfs_link`, `contextfs_search`) — never use `python -m contextfs.cli` or `contextfs` CLI for memory operations.
+
 ## TYPE-SAFE Memory Operations
 
 **CRITICAL: Some types REQUIRE structured_data with specific fields.**
