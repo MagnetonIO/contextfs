@@ -172,6 +172,9 @@ async def push_changes(
     # Get user_id for multi-tenant isolation
     user_id = auth[0].id
 
+    # Look up user's team memberships once for all memories
+    user_team_ids = await _get_user_team_ids(session, user_id)
+
     accepted = 0
     rejected = 0
     accepted_memories = 0
@@ -183,7 +186,13 @@ async def push_changes(
     force = getattr(request, "force", False)
     for memory in request.memories:
         result = await _process_memory_push(
-            session, memory, request.device_id, conflicts, user_id, force=force
+            session,
+            memory,
+            request.device_id,
+            conflicts,
+            user_id,
+            force=force,
+            user_team_ids=user_team_ids,
         )
         if result == "accepted":
             accepted += 1
@@ -192,6 +201,22 @@ async def push_changes(
             rejected += 1
             rejected_memories += 1
         # conflicts are added directly to the list
+
+    # Auto-backfill: if user has a team, update their existing memories
+    # that have no team_id yet (pre-team-join memories)
+    if user_team_ids:
+        from sqlalchemy import update
+
+        await session.execute(
+            update(SyncedMemoryModel)
+            .where(
+                and_(
+                    SyncedMemoryModel.user_id == user_id,
+                    SyncedMemoryModel.team_id.is_(None),
+                )
+            )
+            .values(team_id=user_team_ids[0], visibility="team_read")
+        )
 
     # Process sessions (metadata - not counted in user-facing stats)
     for sess in request.sessions:
@@ -249,11 +274,13 @@ async def _process_memory_push(
     conflicts: list[ConflictInfo],
     user_id: str | None = None,
     force: bool = False,
+    user_team_ids: list[str] | None = None,
 ) -> str:
     """Process a single memory push. Returns 'accepted', 'rejected', or 'conflict'.
 
     Args:
         force: If True, overwrite server data regardless of vector clock state.
+        user_team_ids: Team IDs the user belongs to (for team visibility).
     """
     # First check if memory exists at all (any user)
     result = await session.execute(
@@ -265,9 +292,14 @@ async def _process_memory_push(
 
     if existing is None:
         # New memory - accept
+        # Server-side team assignment: set team_id and visibility based on user's teams
+        team_id = user_team_ids[0] if user_team_ids else None
+        visibility = memory.visibility if user_team_ids else "private"
         new_memory = SyncedMemoryModel(
             id=memory.id,
             user_id=user_id,  # Multi-tenant isolation
+            team_id=team_id,
+            visibility=visibility,
             content=memory.content,
             type=memory.type,
             tags=memory.tags,
@@ -313,6 +345,9 @@ async def _process_memory_push(
         existing.deleted_at = memory.deleted_at
         existing.last_modified_by = device_id
         existing.metadata = memory.metadata
+        # Update visibility from client hint (keep original team_id)
+        if user_team_ids:
+            existing.visibility = memory.visibility
         # Update embedding if provided
         if hasattr(existing, "embedding") and memory.embedding:
             existing.embedding = memory.embedding
@@ -335,6 +370,8 @@ async def _process_memory_push(
             existing.deleted_at = memory.deleted_at
             existing.last_modified_by = device_id
             existing.metadata = memory.metadata
+            if user_team_ids:
+                existing.visibility = memory.visibility
             if hasattr(existing, "embedding") and memory.embedding:
                 existing.embedding = memory.embedding
             return "accepted"
@@ -357,6 +394,8 @@ async def _process_memory_push(
             existing.deleted_at = memory.deleted_at
             existing.last_modified_by = device_id
             existing.metadata = memory.metadata
+            if user_team_ids:
+                existing.visibility = memory.visibility
             if hasattr(existing, "embedding") and memory.embedding:
                 existing.embedding = memory.embedding
             return "accepted"
