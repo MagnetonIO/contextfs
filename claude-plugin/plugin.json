@@ -1,6 +1,6 @@
 {
   "name": "contextfs",
-  "version": "0.2.33",
+  "version": "0.2.34",
   "description": "Persistent memory management for Claude Code - save, search, and recall context across sessions",
   "author": "Matthew Long",
   "homepage": "https://github.com/contextfs/contextfs",
