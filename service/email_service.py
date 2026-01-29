@@ -469,3 +469,115 @@ Time: {timestamp}
         html_content=html_content,
         text_content=text_content,
     )
+
+
+# =============================================================================
+# Team Invitation Emails
+# =============================================================================
+
+
+async def send_team_invitation_email(
+    to_email: str,
+    team_name: str,
+    inviter_name: str,
+    role: str,
+    token: str,
+) -> bool:
+    """Send team invitation email with accept link.
+
+    Args:
+        to_email: Invitee's email address
+        team_name: Name of the team
+        inviter_name: Name or email of the person who sent the invite
+        role: Role being offered (member, admin)
+        token: Raw invitation token (for accept URL)
+
+    Returns:
+        True if sent successfully
+    """
+    accept_url = f"{APP_BASE_URL}/teams/accept?token={token}"
+    role_display = role.title()
+
+    html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Team Invitation - ContextFS</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #09090b; color: #fafafa;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <!-- Logo/Header -->
+        <div style="text-align: center; margin-bottom: 40px;">
+            <h1 style="color: #8b5cf6; font-size: 32px; margin: 0;">ContextFS</h1>
+            <p style="color: #a1a1aa; margin-top: 8px;">AI Memory That Follows You</p>
+        </div>
+
+        <!-- Main Content -->
+        <div style="background-color: #18181b; border-radius: 12px; padding: 32px; border: 1px solid #27272a;">
+            <h2 style="color: #fafafa; font-size: 24px; margin: 0 0 16px 0;">You&rsquo;re Invited!</h2>
+
+            <p style="color: #a1a1aa; font-size: 16px; line-height: 1.6; margin: 0 0 24px 0;">
+                <strong style="color: #fafafa;">{inviter_name}</strong> has invited you to join
+                the team <strong style="color: #fafafa;">{team_name}</strong> as a
+                <strong style="color: #8b5cf6;">{role_display}</strong> on ContextFS.
+            </p>
+
+            <!-- CTA Button -->
+            <div style="text-align: center; margin: 32px 0;">
+                <a href="{accept_url}"
+                   style="display: inline-block; padding: 14px 32px; background: linear-gradient(to right, #8b5cf6, #7c3aed); color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">
+                    Accept Invitation
+                </a>
+            </div>
+
+            <p style="color: #71717a; font-size: 14px; line-height: 1.6; margin: 24px 0 0 0;">
+                This invitation expires in 7 days. If you didn&rsquo;t expect this invitation, you can safely ignore this email.
+            </p>
+        </div>
+
+        <!-- What is ContextFS -->
+        <div style="margin-top: 32px; padding: 24px; background-color: #18181b; border-radius: 12px; border: 1px solid #27272a;">
+            <h3 style="color: #fafafa; font-size: 18px; margin: 0 0 16px 0;">What is ContextFS?</h3>
+            <p style="color: #a1a1aa; font-size: 14px; line-height: 1.6; margin: 0;">
+                ContextFS gives AI coding agents persistent memory that syncs across your devices and team.
+                As a team member, you&rsquo;ll be able to share and access memories collaboratively.
+            </p>
+        </div>
+
+        <!-- Footer -->
+        <div style="text-align: center; margin-top: 40px; padding-top: 24px; border-top: 1px solid #27272a;">
+            <p style="color: #71717a; font-size: 12px; margin: 0;">
+                &copy; 2024 ContextFS. All rights reserved.<br>
+                <a href="{APP_BASE_URL}" style="color: #8b5cf6; text-decoration: none;">contextfs.ai</a>
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+    text_content = f"""
+You're Invited to Join a Team on ContextFS!
+
+{inviter_name} has invited you to join the team "{team_name}" as a {role_display}.
+
+Accept the invitation by visiting:
+{accept_url}
+
+This invitation expires in 7 days.
+
+If you didn't expect this invitation, you can safely ignore this email.
+
+---
+ContextFS - AI Memory That Follows You
+https://contextfs.ai
+"""
+
+    return await send_email(
+        to_email=to_email,
+        subject=f"You're invited to join {team_name} on ContextFS",
+        html_content=html_content,
+        text_content=text_content,
+    )

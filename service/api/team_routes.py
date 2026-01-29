@@ -455,7 +455,20 @@ async def invite_member(
     session.add(invitation)
     await session.commit()
 
-    # TODO: Send invitation email with token
+    # Send invitation email (non-blocking - don't fail if email fails)
+    try:
+        from service.email_service import send_team_invitation_email
+
+        inviter_name = user.name or user.email
+        await send_team_invitation_email(
+            to_email=request.email,
+            team_name=team.name,
+            inviter_name=inviter_name,
+            role=request.role,
+            token=token,
+        )
+    except Exception as e:
+        print(f"Failed to send invitation email to {request.email}: {e}")
 
     return InviteMemberResponse(
         invitation_id=invitation.id,
@@ -565,6 +578,153 @@ async def get_pending_invitations(
         )
 
     return invitations
+
+
+class TeamSentInvitationResponse(BaseModel):
+    """Sent invitation info for admin view."""
+
+    id: str
+    email: str
+    role: str
+    invited_by_email: str
+    expires_at: str
+    created_at: str
+    status: str  # "pending" or "expired"
+
+
+@router.post("/invitations/{invitation_id}/accept")
+async def accept_invitation_by_id(
+    invitation_id: str,
+    auth: tuple[User, APIKey] = Depends(require_auth),
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Accept a team invitation by invitation ID (for dashboard flow)."""
+    user, _ = auth
+
+    result = await session.execute(
+        select(TeamInvitationModel).where(
+            TeamInvitationModel.id == invitation_id,
+            TeamInvitationModel.email == user.email,
+            TeamInvitationModel.accepted_at.is_(None),
+            TeamInvitationModel.expires_at > datetime.now(timezone.utc),
+        )
+    )
+    invitation = result.scalar_one_or_none()
+
+    if not invitation:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired invitation",
+        )
+
+    # Add user to team
+    member = TeamMemberModel(
+        team_id=invitation.team_id,
+        user_id=user.id,
+        role=invitation.role,
+        invited_by=invitation.invited_by,
+    )
+    session.add(member)
+
+    # Mark invitation as accepted
+    invitation.accepted_at = datetime.now(timezone.utc)
+
+    # Update seat count
+    sub_result = await session.execute(
+        select(SubscriptionModel).where(SubscriptionModel.team_id == invitation.team_id)
+    )
+    subscription = sub_result.scalar_one_or_none()
+    if subscription:
+        subscription.seats_used += 1
+
+    await session.commit()
+
+    return {"status": "joined", "team_id": invitation.team_id}
+
+
+@router.get("/{team_id}/invitations", response_model=list[TeamSentInvitationResponse])
+async def get_team_invitations(
+    team_id: str,
+    auth: tuple[User, APIKey] = Depends(require_auth),
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Get sent invitations for a team (admin only). Includes pending and recently expired."""
+    user, _ = auth
+
+    if not await _is_team_admin(session, team_id, user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only team owners and admins can view invitations",
+        )
+
+    # Get non-accepted invitations from last 30 days
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    result = await session.execute(
+        select(TeamInvitationModel, UserModel)
+        .join(UserModel, TeamInvitationModel.invited_by == UserModel.id)
+        .where(
+            TeamInvitationModel.team_id == team_id,
+            TeamInvitationModel.accepted_at.is_(None),
+            TeamInvitationModel.created_at > cutoff,
+        )
+        .order_by(TeamInvitationModel.created_at.desc())
+    )
+
+    now = datetime.now(timezone.utc)
+    invitations = []
+    for invitation, invited_by_user in result.all():
+        inv_status = "pending" if invitation.expires_at > now else "expired"
+        invitations.append(
+            TeamSentInvitationResponse(
+                id=invitation.id,
+                email=invitation.email,
+                role=invitation.role,
+                invited_by_email=invited_by_user.email,
+                expires_at=invitation.expires_at.isoformat(),
+                created_at=invitation.created_at.isoformat(),
+                status=inv_status,
+            )
+        )
+
+    return invitations
+
+
+@router.delete("/{team_id}/invitations/{invitation_id}")
+async def cancel_invitation(
+    team_id: str,
+    invitation_id: str,
+    auth: tuple[User, APIKey] = Depends(require_auth),
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Cancel a pending invitation (admin only)."""
+    user, _ = auth
+
+    if not await _is_team_admin(session, team_id, user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only team owners and admins can cancel invitations",
+        )
+
+    result = await session.execute(
+        select(TeamInvitationModel).where(
+            TeamInvitationModel.id == invitation_id,
+            TeamInvitationModel.team_id == team_id,
+        )
+    )
+    invitation = result.scalar_one_or_none()
+
+    if not invitation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invitation not found",
+        )
+
+    await session.execute(
+        delete(TeamInvitationModel).where(TeamInvitationModel.id == invitation_id)
+    )
+    await session.commit()
+
+    return {"status": "cancelled"}
 
 
 @router.put("/{team_id}/members/{user_id}/role")
