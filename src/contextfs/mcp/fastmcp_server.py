@@ -780,7 +780,9 @@ async def contextfs_sync(
                 return "\n".join(output)
     except Exception as e:
         logger.exception("Sync failed")
-        return f"Sync failed: {e}"
+        error_type = type(e).__name__
+        error_msg = str(e) or "(no message)"
+        return f"Sync failed [{error_type}]: {error_msg}"
 
 
 def run_mcp_server(host: str | None = None, port: int | None = None) -> None:

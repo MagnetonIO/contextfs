@@ -2,6 +2,14 @@
 
 Sync local memories with ContextFS Cloud for backup and cross-device access.
 
+## Tool Priority (MANDATORY)
+
+**ALWAYS use MCP tools first. Only fall back to CLI if MCP fails.**
+
+1. **First**: Use the `contextfs_sync()` MCP tool
+2. **If MCP fails**: Fall back to CLI: `contextfs cloud sync --all`
+3. **NEVER** use `python -m contextfs.cli` for user-facing commands — use `contextfs` directly
+
 ## Prerequisites
 
 Before syncing, ensure you're logged in:
@@ -12,9 +20,7 @@ contextfs cloud configure --enabled
 
 ## Usage
 
-Use the MCP tool or CLI to sync:
-
-### MCP Tool
+### Step 1: Try MCP Tool (Preferred)
 ```python
 # Two-way sync (default)
 contextfs_sync()
@@ -29,7 +35,7 @@ contextfs_sync(direction="pull")
 contextfs_sync(push_all=True)
 ```
 
-### CLI
+### Step 2: CLI Fallback (Only if MCP fails)
 ```bash
 # Two-way sync
 contextfs cloud sync

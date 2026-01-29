@@ -2,6 +2,12 @@
 
 Search ContextFS memory for relevant context based on the current task or query.
 
+## Tool Priority (MANDATORY)
+
+**ALWAYS use MCP tools for recall. Do NOT use CLI commands.**
+
+Use the MCP tools listed below — never use `python -m contextfs.cli` or `contextfs` CLI for recall operations.
+
 ## Available Tools
 
 | Tool | Purpose |
