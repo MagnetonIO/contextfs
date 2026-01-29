@@ -891,35 +891,6 @@ async def remove_member(
     return {"status": "removed"}
 
 
-@router.post("/{team_id}/backfill")
-async def backfill_team_memories(
-    team_id: str,
-    auth: tuple[User, APIKey] = Depends(require_auth),
-    session: AsyncSession = Depends(get_session_dependency),
-):
-    """Backfill team_id and visibility on all members' memories (admin only)."""
-    user, _ = auth
-
-    if not await _is_team_admin(session, team_id, user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only team owners and admins can trigger backfill",
-        )
-
-    # Backfill all team members' memories
-    members_result = await session.execute(
-        select(TeamMemberModel.user_id).where(TeamMemberModel.team_id == team_id)
-    )
-    backfilled = 0
-    for (member_user_id,) in members_result.all():
-        await _backfill_team_visibility(session, team_id, member_user_id)
-        backfilled += 1
-
-    await session.commit()
-
-    return {"status": "backfilled", "members_processed": backfilled}
-
-
 @router.delete("/{team_id}")
 async def delete_team(
     team_id: str,
