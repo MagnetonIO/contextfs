@@ -27,6 +27,61 @@ async def _get_user_team_ids(session: AsyncSession, user_id: str) -> list[str]:
     return [row[0] for row in result.all()]
 
 
+async def _check_edge_based_access(
+    session: AsyncSession, memory_id: str, user_id: str, user_team_ids: list[str]
+) -> bool:
+    """Check if a user can access a memory via edge-based relationships.
+
+    If the memory itself fails the ownership check, we check whether any
+    memory connected to it (via edges) is owned by the user or their team.
+    This grants read access to linked memories visible through lineage.
+    """
+    # Find all memory IDs connected to this memory via edges
+    edge_result = await session.execute(
+        select(Edge.from_id, Edge.to_id).where(
+            or_(Edge.from_id == memory_id, Edge.to_id == memory_id),
+            Edge.deleted_at.is_(None),
+        )
+    )
+    edges = edge_result.all()
+    if not edges:
+        return False
+
+    # Collect the "other side" memory IDs
+    connected_ids = set()
+    for from_id, to_id in edges:
+        if from_id == memory_id:
+            connected_ids.add(to_id)
+        else:
+            connected_ids.add(from_id)
+
+    if not connected_ids:
+        return False
+
+    # Check if user owns or has team access to any connected memory
+    ownership_conditions = [
+        Memory.user_id == user_id,
+    ]
+    if user_team_ids:
+        ownership_conditions.append(
+            and_(
+                Memory.team_id.in_(user_team_ids),
+                Memory.visibility.in_(["team_read", "team_write"]),
+            )
+        )
+
+    accessible = await session.execute(
+        select(Memory.id)
+        .where(
+            Memory.id.in_(connected_ids),
+            Memory.deleted_at.is_(None),
+            or_(*ownership_conditions),
+        )
+        .limit(1)
+    )
+    return accessible.scalar_one_or_none() is not None
+
+
 class MemoryResponse(BaseModel):
     """Memory data for frontend."""
 
@@ -258,6 +313,7 @@ async def get_memory(
             )
         )
 
+    # Fast path: direct ownership check
     result = await session.execute(
         select(Memory).where(
             Memory.id == memory_id,
@@ -267,10 +323,21 @@ async def get_memory(
     )
     memory = result.scalar_one_or_none()
 
+    # Fallback: edge-based access for linked memories
     if not memory:
-        from fastapi import HTTPException
+        unfiltered = await session.execute(
+            select(Memory).where(
+                Memory.id == memory_id,
+                Memory.deleted_at.is_(None),
+            )
+        )
+        memory = unfiltered.scalar_one_or_none()
+        if not memory or not await _check_edge_based_access(
+            session, memory_id, user_id, user_team_ids
+        ):
+            from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="Memory not found")
+            raise HTTPException(status_code=404, detail="Memory not found")
 
     return MemoryResponse(
         id=memory.id,
@@ -351,24 +418,41 @@ async def get_memory_lineage(
         )
     )
     if not memory_result.scalar_one_or_none():
-        from fastapi import HTTPException
+        # Fallback: edge-based access for linked memories
+        exists_result = await session.execute(
+            select(Memory.id).where(
+                Memory.id == memory_id,
+                Memory.deleted_at.is_(None),
+            )
+        )
+        if not exists_result.scalar_one_or_none() or not await _check_edge_based_access(
+            session, memory_id, user_id, user_team_ids
+        ):
+            from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="Memory not found")
+            raise HTTPException(status_code=404, detail="Memory not found")
 
     # Get edges where this memory is the source (descendants - evolved_into, etc.)
+    # Join with memories to exclude orphan edges (referencing non-existent memories)
     descendants_result = await session.execute(
-        select(Edge).where(
+        select(Edge)
+        .join(Memory, Edge.to_id == Memory.id)
+        .where(
             Edge.from_id == memory_id,
             Edge.deleted_at.is_(None),
+            Memory.deleted_at.is_(None),
         )
     )
     descendants = descendants_result.scalars().all()
 
     # Get edges where this memory is the target (ancestors - evolved_from, etc.)
     ancestors_result = await session.execute(
-        select(Edge).where(
+        select(Edge)
+        .join(Memory, Edge.from_id == Memory.id)
+        .where(
             Edge.to_id == memory_id,
             Edge.deleted_at.is_(None),
+            Memory.deleted_at.is_(None),
         )
     )
     ancestors = ancestors_result.scalars().all()
