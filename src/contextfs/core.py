@@ -1831,11 +1831,13 @@ class ContextFS:
             return False
 
         # Use storage router directly (has SQLite fallback)
+        # validate=False because we already confirmed both memories exist via recall()
         edge = self._storage.add_edge(
             from_id=from_mem.id,
             to_id=to_mem.id,
             relation=relation,
             weight=weight,
+            validate=False,
         )
 
         # Create bidirectional edge if requested
@@ -1846,6 +1848,7 @@ class ContextFS:
                 to_id=from_mem.id,
                 relation=inverse_relation,
                 weight=weight,
+                validate=False,
             )
 
         return edge is not None

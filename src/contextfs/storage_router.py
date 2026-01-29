@@ -1331,7 +1331,7 @@ class StorageRouter(StorageBackend):
         relation: EdgeRelation,
         weight: float = 1.0,
         metadata: dict[str, Any] | None = None,
-        validate: bool = True,
+        validate: bool = False,
     ) -> MemoryEdge | None:
         """
         Create a relationship between two memories.
@@ -1345,8 +1345,8 @@ class StorageRouter(StorageBackend):
             weight: Relationship strength (0.0-1.0)
             metadata: Additional edge properties
             validate: If True, verify both memory IDs exist before creating edge.
-                      Internal callers (e.g. memory_lineage) can pass False when
-                      they know the memories exist.
+                      Defaults to False since most callers (core.link, memory_lineage)
+                      already validate via recall(). Set True for untrusted input.
 
         Returns:
             Created MemoryEdge, or None if validation fails
